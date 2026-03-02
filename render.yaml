@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: agem-platform
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: HOST
+        value: "0.0.0.0"
+    disk:
+      name: agem-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 10

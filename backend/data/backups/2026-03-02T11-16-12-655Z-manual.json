@@ -1,0 +1,188 @@
+{
+  "meta": {
+    "version": 2,
+    "createdAt": "2026-03-02T11:16:12.372Z",
+    "lastWriteAt": "2026-03-02T11:16:12.649Z"
+  },
+  "users": [
+    {
+      "id": "USR-1772450172372-e42f95",
+      "username": "admin",
+      "name": "Platform Administrator",
+      "role": "admin",
+      "status": "active",
+      "password": {
+        "salt": "d52ff1fb1511056db588f47cef8df1af",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "c18d694164c3e959debc9e71520a103003a233ab2d340dd990136469d91f63b5243dd4ad30af50c7aed84e7a289822493d05c9f7b498e6cbeaa50d0c6357e40a"
+      },
+      "createdAt": "2026-03-02T11:16:12.405Z"
+    },
+    {
+      "id": "USR-1772450172405-8729f4",
+      "username": "agent",
+      "name": "Field Agent",
+      "role": "agent",
+      "status": "active",
+      "password": {
+        "salt": "ea4dce1ca47c7d04415a4ac449270861",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "76e4a9488f4b0d9cbd460e7b904c6962b5d40a97d19f8c4b2b7042713c6c41b61e4823ca5e108db48da4c6ae49be37b51310730468b18f1cb7677665e956dc44"
+      },
+      "createdAt": "2026-03-02T11:16:12.439Z"
+    },
+    {
+      "id": "USR-1772450172439-9fccc7",
+      "username": "farmer",
+      "name": "Registered Farmer",
+      "role": "farmer",
+      "status": "active",
+      "password": {
+        "salt": "22a2ce261879c412cb94577597822748",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "7a4e465badf28f7dd14da74460e3bc7bfba28f59ca305b138aed4a4c13c062ca5014a81db71d2e3e0413b5c69431c40b3b01644576a41e8a77bb48eb37e3669b"
+      },
+      "createdAt": "2026-03-02T11:16:12.472Z"
+    }
+  ],
+  "farmers": [
+    {
+      "id": "F-1772450172642-4a7554",
+      "name": "Grace Njoki",
+      "phone": "254711223344",
+      "location": "Kiambu",
+      "trees": 44,
+      "notes": "Integration test farmer",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:16:12.642Z",
+      "updatedAt": "2026-03-02T11:16:12.642Z"
+    }
+  ],
+  "produce": [
+    {
+      "id": "P-1772450172645-6c9c74",
+      "farmerId": "F-1772450172642-4a7554",
+      "farmerName": "Grace Njoki",
+      "kgs": 128.5,
+      "quality": "A",
+      "agent": "Agent Jane",
+      "notes": "Morning collection",
+      "createdBy": "agent",
+      "createdAt": "2026-03-02T11:16:12.645Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "TX-1772450172648-1f7406",
+      "farmerId": "F-1772450172642-4a7554",
+      "farmerName": "Grace Njoki",
+      "amount": 5400,
+      "ref": "ADMOK001",
+      "status": "Received",
+      "method": "M-PESA",
+      "notes": "Approved payment",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:16:12.648Z",
+      "updatedAt": "2026-03-02T11:16:12.648Z"
+    }
+  ],
+  "smsLogs": [
+    {
+      "id": "SMS-1772450172649-db8222",
+      "farmerId": "F-1772450172642-4a7554",
+      "farmerName": "Grace Njoki",
+      "phone": "254711223344",
+      "message": "Your avocado payment has been processed.",
+      "provider": "AfricaTalking(Mock)",
+      "status": "Sent",
+      "createdBy": "agent",
+      "createdAt": "2026-03-02T11:16:12.649Z"
+    }
+  ],
+  "activityLogs": [
+    {
+      "id": "ACT-1772450172649-4d5d4f",
+      "at": "2026-03-02T11:16:12.649Z",
+      "actor": "agent",
+      "role": "agent",
+      "action": "sms.send",
+      "entity": "sms",
+      "entityId": "SMS-1772450172649-db8222",
+      "details": "Sent SMS to 254711223344"
+    },
+    {
+      "id": "ACT-1772450172648-c151cf",
+      "at": "2026-03-02T11:16:12.648Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "payment.create",
+      "entity": "payment",
+      "entityId": "TX-1772450172648-1f7406",
+      "details": "Logged payment ADMOK001 for Grace Njoki"
+    },
+    {
+      "id": "ACT-1772450172645-2878db",
+      "at": "2026-03-02T11:16:12.645Z",
+      "actor": "agent",
+      "role": "agent",
+      "action": "produce.create",
+      "entity": "produce",
+      "entityId": "P-1772450172645-6c9c74",
+      "details": "Logged 128.5kg for Grace Njoki"
+    },
+    {
+      "id": "ACT-1772450172642-35d80a",
+      "at": "2026-03-02T11:16:12.642Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "farmer.create",
+      "entity": "farmer",
+      "entityId": "F-1772450172642-4a7554",
+      "details": "Created farmer Grace Njoki"
+    },
+    {
+      "id": "ACT-1772450172640-91424c",
+      "at": "2026-03-02T11:16:12.640Z",
+      "actor": "agent",
+      "role": "agent",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User agent signed in"
+    },
+    {
+      "id": "ACT-1772450172604-85db27",
+      "at": "2026-03-02T11:16:12.604Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User admin signed in"
+    }
+  ],
+  "sessions": {
+    "7e739c89dbfaa8e057745530902104c24a3b5143c706979c": {
+      "userId": "USR-1772450172372-e42f95",
+      "username": "admin",
+      "role": "admin",
+      "name": "Platform Administrator",
+      "createdAt": "2026-03-02T11:16:12.604Z",
+      "expiresAt": "2026-03-02T23:16:12.604Z"
+    },
+    "4ff33c3159ce2c02ae33fc66386fe6178e871af7cf404f46": {
+      "userId": "USR-1772450172405-8729f4",
+      "username": "agent",
+      "role": "agent",
+      "name": "Field Agent",
+      "createdAt": "2026-03-02T11:16:12.640Z",
+      "expiresAt": "2026-03-02T23:16:12.640Z"
+    }
+  }
+}

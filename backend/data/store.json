@@ -1,0 +1,200 @@
+{
+  "meta": {
+    "createdAt": "2026-03-02T11:14:58.790Z",
+    "version": 2,
+    "lastWriteAt": "2026-03-02T11:34:30.661Z"
+  },
+  "users": [
+    {
+      "id": "USR-1772450098790-320193",
+      "username": "admin",
+      "name": "Platform Administrator",
+      "role": "admin",
+      "status": "active",
+      "password": {
+        "salt": "27ce49a319ecc579ae4ed37c6e9d8dfb",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "acbe7858abfa865fa8bea780976c520bc0328d1a49a854516afc27bf69c4fdfefc74f84f9b846f25529ae5881ee1083086a0a77a0238d1bfcdd12f6451243ddd"
+      },
+      "createdAt": "2026-03-02T11:14:58.825Z"
+    },
+    {
+      "id": "USR-1772450098825-649410",
+      "username": "agent",
+      "name": "Field Agent",
+      "role": "agent",
+      "status": "active",
+      "password": {
+        "salt": "d345b3cfd6be46b90e9ce9962c8a60a3",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "c15c5f3b4c9484617c6471fa8ffbde12a65f1d1b4427f7ba0c37463b691754817d3d9ea4861d8fdafd5f089ccffe1ca7fce690dd203eb3a8d5f8516c98416f75"
+      },
+      "createdAt": "2026-03-02T11:14:58.859Z"
+    },
+    {
+      "id": "USR-1772450098859-43015c",
+      "username": "farmer",
+      "name": "Registered Farmer",
+      "role": "farmer",
+      "status": "active",
+      "password": {
+        "salt": "80176f760ab616f45a602d09450ef348",
+        "iterations": 120000,
+        "keylen": 64,
+        "digest": "sha512",
+        "hash": "ab2ae9179def02f96706685a280f9e0502c50414f6d35dd6165c800a3895e775f9af44f8117b8844bbb2aada71bc6f1d8d657e9c034f2cceda1c49648d8f9a0e"
+      },
+      "createdAt": "2026-03-02T11:14:58.893Z"
+    }
+  ],
+  "farmers": [
+    {
+      "id": "F-1772450731714-f859c9",
+      "name": "Mercy Achieng",
+      "phone": "254712330001",
+      "location": "Muranga",
+      "trees": 48,
+      "notes": "Group A",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:25:31.714Z",
+      "updatedAt": "2026-03-02T11:25:31.714Z"
+    },
+    {
+      "id": "F-1772450731714-8f28da",
+      "name": "David Mwangi",
+      "phone": "254712330002",
+      "location": "Nyeri",
+      "trees": 62,
+      "notes": "Organic",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:25:31.714Z",
+      "updatedAt": "2026-03-02T11:25:31.714Z"
+    }
+  ],
+  "produce": [
+    {
+      "id": "P-1772450731714-af5923",
+      "farmerId": "F-1772450731714-f859c9",
+      "farmerName": "Mercy Achieng",
+      "kgs": 320.4,
+      "quality": "A",
+      "agent": "Agent Njoroge",
+      "notes": "First harvest batch",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:25:31.714Z"
+    }
+  ],
+  "payments": [
+    {
+      "id": "TX-1772450731714-22bf70",
+      "farmerId": "F-1772450731714-f859c9",
+      "farmerName": "Mercy Achieng",
+      "amount": 45800,
+      "ref": "MP5073171411",
+      "status": "Received",
+      "method": "M-PESA(Mock)",
+      "notes": "Seed sample payment",
+      "createdBy": "admin",
+      "createdAt": "2026-03-02T11:25:31.714Z",
+      "updatedAt": "2026-03-02T11:25:31.714Z"
+    }
+  ],
+  "smsLogs": [],
+  "activityLogs": [
+    {
+      "id": "ACT-1772451270661-13fba5",
+      "at": "2026-03-02T11:34:30.661Z",
+      "actor": "farmer",
+      "role": "farmer",
+      "action": "auth.logout",
+      "entity": "session",
+      "entityId": "",
+      "details": "User farmer signed out"
+    },
+    {
+      "id": "ACT-1772450974623-ef8b78",
+      "at": "2026-03-02T11:29:34.623Z",
+      "actor": "farmer",
+      "role": "farmer",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User farmer signed in"
+    },
+    {
+      "id": "ACT-1772450832329-869097",
+      "at": "2026-03-02T11:27:12.329Z",
+      "actor": "agent",
+      "role": "agent",
+      "action": "auth.logout",
+      "entity": "session",
+      "entityId": "",
+      "details": "User agent signed out"
+    },
+    {
+      "id": "ACT-1772450775612-8296ff",
+      "at": "2026-03-02T11:26:15.612Z",
+      "actor": "agent",
+      "role": "agent",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User agent signed in"
+    },
+    {
+      "id": "ACT-1772450765725-ce5537",
+      "at": "2026-03-02T11:26:05.725Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "auth.logout",
+      "entity": "session",
+      "entityId": "",
+      "details": "User admin signed out"
+    },
+    {
+      "id": "ACT-1772450731714-88be22",
+      "at": "2026-03-02T11:25:31.714Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "seed.load",
+      "entity": "system",
+      "entityId": "",
+      "details": "Loaded starter data"
+    },
+    {
+      "id": "ACT-1772450720391-96b981",
+      "at": "2026-03-02T11:25:20.391Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User admin signed in"
+    },
+    {
+      "id": "ACT-1772450683768-332f61",
+      "at": "2026-03-02T11:24:43.768Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "auth.logout",
+      "entity": "session",
+      "entityId": "",
+      "details": "User admin signed out"
+    },
+    {
+      "id": "ACT-1772450447817-c0c944",
+      "at": "2026-03-02T11:20:47.817Z",
+      "actor": "admin",
+      "role": "admin",
+      "action": "auth.login",
+      "entity": "session",
+      "entityId": "",
+      "details": "User admin signed in"
+    }
+  ],
+  "sessions": {}
+}

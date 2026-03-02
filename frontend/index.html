@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agem Avocado Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Merriweather:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">Agem Platform</div>
+      <div class="sub" id="roleHint">Avocado operations command center.</div>
+
+      <section class="auth-card">
+        <h3 class="auth-title">Account</h3>
+        <p class="auth-state" id="authState">Not signed in</p>
+
+        <form id="loginForm" class="auth-form">
+          <input required id="loginUsername" placeholder="Username" autocomplete="username">
+          <input required id="loginPassword" type="password" placeholder="Password" autocomplete="current-password">
+          <button class="primary" type="submit">Sign In</button>
+        </form>
+
+        <button class="secondary full" type="button" id="logoutBtn" hidden>Sign Out</button>
+        <p class="auth-help">Demo: admin/admin123, agent/agent123, farmer/farmer123</p>
+        <div class="success" id="authMsg"></div>
+      </section>
+
+      <div class="role">
+        <label for="roleSelect">Role (Offline Mode)</label>
+        <select id="roleSelect">
+          <option value="admin">Administrator</option>
+          <option value="agent">Agent</option>
+          <option value="farmer">Farmer</option>
+        </select>
+      </div>
+
+      <nav class="nav" id="tabs">
+        <button class="active" data-pane="overview">Overview</button>
+        <button data-pane="farmers">Farmers</button>
+        <button data-pane="produce">Produce</button>
+        <button data-pane="payments">Payments</button>
+        <button data-pane="sms">SMS</button>
+        <button data-pane="reports">Reports</button>
+        <button data-pane="exports">Exports</button>
+        <button data-pane="roadmap">Roadmap</button>
+      </nav>
+
+      <p class="footer-note">Hybrid mode: live backend API when reachable, local browser storage as fallback.</p>
+    </aside>
+
+    <main>
+      <section class="pane active" id="overview">
+        <div class="top">
+          <div>
+            <h1>Agem Avocado Platform</h1>
+            <p class="meta">Farmer onboarding, produce tracking, payment operations, SMS outreach, and reporting in one operational workspace.</p>
+          </div>
+          <div class="top-actions">
+            <button class="secondary" id="seedBtn">Load Sample Data</button>
+            <p class="meta" id="syncStatus">Checking backend connectivity...</p>
+          </div>
+        </div>
+
+        <div class="kpis" id="kpiGrid"></div>
+
+        <div class="grid">
+          <article class="card">
+            <span class="tag">USSD Snapshot</span>
+            <h3>*483# Main Menu</h3>
+            <p class="meta">1. Register Farmer 2. Check Payment 3. Produce Log 4. Help</p>
+            <p class="meta">Status: <strong class="ok">Core registration and transaction flow ready.</strong></p>
+          </article>
+
+          <article class="card">
+            <span class="tag">Launch Gate</span>
+            <p class="meta">Soft launch requires farmer registration, M-PESA flow, USSD baseline, security checks, and reporting.</p>
+            <p class="meta" id="launchCheck"></p>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="farmers">
+        <h2>Farmer Management</h2>
+        <div class="grid">
+          <article class="card">
+            <form id="farmerForm">
+              <input type="hidden" id="farmerId">
+              <div class="row">
+                <input required id="farmerName" placeholder="Farmer full name">
+                <input required id="farmerPhone" placeholder="Phone (e.g. 2547xxxxxxx)">
+              </div>
+              <div class="row">
+                <input required id="farmerLocation" placeholder="Location / Ward">
+                <input required id="treeCount" type="number" min="0" step="1" placeholder="Tree count">
+              </div>
+              <textarea id="farmerNotes" rows="3" placeholder="Farm details / notes"></textarea>
+              <div class="inline-actions">
+                <button class="primary" id="farmerSubmitBtn" type="submit">Register Farmer</button>
+                <button class="secondary" id="farmerCancelEditBtn" type="button" hidden>Cancel Edit</button>
+              </div>
+              <div class="success" id="farmerMsg"></div>
+            </form>
+          </article>
+
+          <article class="card">
+            <h3>Registered Farmers</h3>
+            <div id="farmerTableWrap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="produce">
+        <h2>Produce Collection</h2>
+        <div class="grid">
+          <article class="card">
+            <form id="produceForm">
+              <div class="row">
+                <select required id="produceFarmer"></select>
+                <input required id="produceKgs" type="number" min="0.1" step="0.1" placeholder="Weight (kg)">
+              </div>
+              <div class="row">
+                <input required id="quality" placeholder="Quality grade (A/B/C)">
+                <input required id="collector" placeholder="Agent name">
+              </div>
+              <textarea id="produceNotes" rows="3" placeholder="Collection notes"></textarea>
+              <button class="primary" type="submit">Record Produce</button>
+              <div class="success" id="produceMsg"></div>
+            </form>
+          </article>
+
+          <article class="card">
+            <h3>Recent Produce Entries</h3>
+            <div id="produceTableWrap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="payments">
+        <h2>Payments & M-PESA</h2>
+        <div class="grid">
+          <article class="card">
+            <form id="paymentForm">
+              <div class="row">
+                <select required id="paymentFarmer"></select>
+                <input required id="amount" type="number" min="1" step="1" placeholder="Amount (KES)">
+              </div>
+              <div class="row">
+                <input required id="mpesaRef" placeholder="M-PESA Reference">
+                <select id="paymentStatus">
+                  <option>Received</option>
+                  <option>Pending</option>
+                  <option>Failed</option>
+                </select>
+              </div>
+              <textarea id="paymentNotes" rows="3" placeholder="Payment notes"></textarea>
+              <div class="inline-actions">
+                <button class="primary" type="submit">Log Payment</button>
+                <button class="secondary" id="mpesaDisburseBtn" type="button">Simulate M-PESA Disbursement</button>
+              </div>
+              <div class="success" id="paymentMsg"></div>
+            </form>
+          </article>
+
+          <article class="card">
+            <h3>Payment Transactions</h3>
+            <div id="paymentTableWrap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="sms">
+        <h2>SMS Communications</h2>
+        <div class="grid">
+          <article class="card">
+            <form id="smsForm">
+              <div class="row">
+                <select id="smsFarmer"></select>
+                <input id="smsPhone" placeholder="Phone (optional if farmer selected)">
+              </div>
+              <textarea id="smsMessage" rows="4" placeholder="Message"></textarea>
+              <button class="primary" type="submit">Send SMS</button>
+              <div class="success" id="smsMsg"></div>
+            </form>
+          </article>
+
+          <article class="card">
+            <h3>SMS Log</h3>
+            <div id="smsTableWrap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="reports">
+        <h2>Operational Reports</h2>
+        <div class="kpis" id="reportMetrics"></div>
+
+        <div class="grid">
+          <article class="card">
+            <h3>Readiness Narrative</h3>
+            <p class="meta" id="reportNarrative"></p>
+          </article>
+
+          <article class="card">
+            <h3>Agent Performance</h3>
+            <div id="agentStatsWrap"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="pane" id="exports">
+        <h2>Exports & Admin Tools</h2>
+
+        <article class="card">
+          <h3>CSV Exports</h3>
+          <div class="inline-actions wrap">
+            <button class="secondary export-btn" data-export="farmers">Export Farmers CSV</button>
+            <button class="secondary export-btn" data-export="produce">Export Produce CSV</button>
+            <button class="secondary export-btn" data-export="payments">Export Payments CSV</button>
+            <button class="secondary export-btn" data-export="activity">Export Activity CSV</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>Admin Actions</h3>
+          <div class="inline-actions wrap">
+            <button class="secondary" id="backupBtn" type="button">Create Backup Snapshot</button>
+            <button class="secondary" id="listBackupsBtn" type="button">List Backups</button>
+            <button class="danger-btn" id="resetBtn" type="button">Reset Platform Data</button>
+          </div>
+          <div class="success" id="exportsMsg"></div>
+          <div id="backupListWrap"></div>
+        </article>
+      </section>
+
+      <section class="pane" id="roadmap">
+        <h2>Roadmap</h2>
+        <div class="timeline">
+          <article class="milestone">
+            <div class="status">NOW</div>
+            <strong>Core infrastructure, farmer registration, role-based security, and initial M-PESA + USSD workflows.</strong>
+          </article>
+          <article class="milestone next">
+            <div class="status">NEXT</div>
+            <strong>Agent portal, admin dashboard growth, expanded integrations, and richer analytics.</strong>
+          </article>
+          <article class="milestone later">
+            <div class="status">LATER</div>
+            <strong>Offline sync engine, advanced forecasting, bulk campaign tooling, and hardware integrations.</strong>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

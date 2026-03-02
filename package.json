@@ -1,0 +1,11 @@
+{
+  "name": "agem-platform-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agem Avocado Platform MVP backend and web prototype",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js",
+    "test": "node scripts/test.js"
+  }
+}
