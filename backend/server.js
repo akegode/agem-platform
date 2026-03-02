@@ -30,6 +30,10 @@ const ALLOW_DEMO_USERS =
   (!RUNNING_ON_RENDER && envValue('ALLOW_DEMO_USERS') !== 'false');
 const ALLOW_FARMER_REGISTRATION = envValue('ALLOW_FARMER_REGISTRATION') !== 'false';
 const SYNC_PASSWORDS_FROM_ENV = envValue('SYNC_PASSWORDS_FROM_ENV') === 'true';
+const USSD_ENABLED = envValue('USSD_ENABLED') !== 'false';
+const USSD_CODE = envValue('USSD_CODE') || '*483#';
+const USSD_HELP_PHONE = envValue('USSD_HELP_PHONE') || '+254700000000';
+const USSD_SHARED_SECRET = process.env.USSD_SHARED_SECRET || '';
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
@@ -432,6 +436,20 @@ function readBody(req, maxBytes = 1_000_000) {
   });
 }
 
+function readTextBody(req, maxBytes = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > maxBytes) reject(new Error('Request too large'));
+    });
+    req.on('end', () => {
+      resolve(body);
+    });
+    req.on('error', reject);
+  });
+}
+
 function extractToken(req) {
   const authHeader = (req.headers.authorization || '').toString().trim();
   if (authHeader.toLowerCase().startsWith('bearer ')) {
@@ -491,6 +509,15 @@ function requireSession(req, store, allowedRoles) {
 
 function clean(value) {
   return String(value || '').trim();
+}
+
+function normalizePhone(value) {
+  const digits = clean(value).replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `254${digits}`;
+  return digits;
 }
 
 function isTruthy(value) {
@@ -684,6 +711,12 @@ function findFarmerByPhone(list, phone, excludeId = '') {
   const target = clean(phone);
   if (!target) return null;
   return list.find((row) => clean(row.phone) === target && row.id !== excludeId) || null;
+}
+
+function findFarmerByPhoneNormalized(list, phone) {
+  const target = normalizePhone(phone);
+  if (!target) return null;
+  return list.find((row) => normalizePhone(row.phone) === target) || null;
 }
 
 function normalizedNationalId(value) {
@@ -984,6 +1017,101 @@ function parseDateBound(raw, isEnd) {
 
   const ms = new Date(value).getTime();
   return Number.isFinite(ms) ? ms : null;
+}
+
+function dateShort(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function formatKes(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return '0';
+  return Math.round(num).toLocaleString('en-US');
+}
+
+function ussdReply(res, textBody, closeSession = false) {
+  const prefix = closeSession ? 'END ' : 'CON ';
+  text(res, 200, `${prefix}${textBody}`);
+}
+
+function ussdMainMenu() {
+  return [
+    'Agem Portal',
+    '1. Payment Status',
+    '2. Latest Produce QC',
+    '3. My Profile',
+    '4. Help'
+  ].join('\n');
+}
+
+function ussdPaymentMessage(store, farmer) {
+  const purchases = store.producePurchases.filter((row) => row.farmerId === farmer.id);
+  if (!purchases.length) {
+    return 'No produce purchases found yet. Contact your AGEM agent for assistance.';
+  }
+
+  const totalPurchasedKes = purchases.reduce((sum, row) => sum + valueFromPurchase(row), 0);
+  const totalPaidKes = store.payments
+    .filter((row) => row.farmerId === farmer.id && normalizePaymentStatus(row.status) === 'Received')
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const balanceKes = Math.max(0, totalPurchasedKes - totalPaidKes);
+
+  const lastPayment = [...store.payments]
+    .filter((row) => row.farmerId === farmer.id)
+    .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))[0];
+
+  const lines = [
+    `Farmer: ${farmer.name}`,
+    `Total Purchased: KES ${formatKes(totalPurchasedKes)}`,
+    `Total Paid: KES ${formatKes(totalPaidKes)}`,
+    `Balance: KES ${formatKes(balanceKes)}`
+  ];
+
+  if (lastPayment) {
+    lines.push(
+      `Last Payment: ${clean(lastPayment.ref) || '-'} (${normalizePaymentStatus(lastPayment.status)}) ${dateShort(lastPayment.createdAt)}`
+    );
+  }
+  return lines.join('\n');
+}
+
+function ussdQcMessage(store, farmer) {
+  const latestQc = [...store.produce]
+    .filter((row) => row.farmerId === farmer.id)
+    .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))[0];
+
+  if (!latestQc) {
+    return 'No farm-gate QC entry found yet. Your next delivery will appear here after inspection.';
+  }
+
+  const dryMatter = clean(latestQc.dryMatterPct) ? `${latestQc.dryMatterPct}%` : 'N/A';
+  const firmness = clean(latestQc.firmnessValue) ? `${latestQc.firmnessValue} ${latestQc.firmnessUnit || ''}`.trim() : 'N/A';
+  return [
+    `Farmer: ${farmer.name}`,
+    `Variety: ${clean(latestQc.variety) || 'N/A'}`,
+    `Visual: ${clean(latestQc.visualGrade) || 'N/A'}`,
+    `Dry Matter: ${dryMatter}`,
+    `Firmness: ${firmness}`,
+    `Decision: ${clean(latestQc.qcDecision) || 'N/A'}`,
+    `Date: ${dateShort(latestQc.createdAt)}`
+  ].join('\n');
+}
+
+function ussdProfileMessage(farmer) {
+  const acres = Number(farmer.hectares || 0) / HECTARES_PER_ACRE;
+  const avocadoAcres = Number(farmer.avocadoHectares || 0) / HECTARES_PER_ACRE;
+  return [
+    `Name: ${clean(farmer.name) || '-'}`,
+    `Phone: ${clean(farmer.phone) || '-'}`,
+    `National ID: ${clean(farmer.nationalId) || '-'}`,
+    `Location: ${clean(farmer.location) || '-'}`,
+    `Farm Size: ${Number(farmer.hectares || 0).toFixed(3)} ha (${acres.toFixed(2)} acres)`,
+    `Avocado Area: ${Number(farmer.avocadoHectares || 0).toFixed(3)} ha (${avocadoAcres.toFixed(2)} acres)`,
+    `Trees: ${Number(farmer.trees || 0).toFixed(0)}`
+  ].join('\n');
 }
 
 function endOfDayUtc(now) {
@@ -1311,6 +1439,101 @@ const server = http.createServer(async (req, res) => {
       status: 'ok',
       now: nowIso()
     });
+    return;
+  }
+
+  if (pathname === '/api/ussd/callback' && (req.method === 'POST' || req.method === 'GET')) {
+    if (!USSD_ENABLED) {
+      ussdReply(res, 'USSD service is not active yet. Please try again later.', true);
+      return;
+    }
+
+    if (USSD_SHARED_SECRET) {
+      const secretHeader = clean(req.headers['x-ussd-secret']);
+      if (!secureEquals(secretHeader, USSD_SHARED_SECRET)) {
+        text(res, 403, 'END Unauthorized USSD request');
+        return;
+      }
+    }
+
+    try {
+      let payload = {};
+      if (req.method === 'GET') {
+        payload = Object.fromEntries(reqUrl.searchParams.entries());
+      } else {
+        const contentType = clean(req.headers['content-type']).toLowerCase();
+        if (contentType.includes('application/json')) {
+          payload = await readBody(req, 120_000);
+        } else {
+          const rawBody = await readTextBody(req, 120_000);
+          if (!clean(rawBody)) {
+            payload = {};
+          } else if (contentType.includes('application/x-www-form-urlencoded')) {
+            payload = Object.fromEntries(new URLSearchParams(rawBody).entries());
+          } else {
+            try {
+              payload = JSON.parse(rawBody);
+            } catch {
+              payload = Object.fromEntries(new URLSearchParams(rawBody).entries());
+            }
+          }
+        }
+      }
+
+      const phoneNumber = clean(payload.phoneNumber || payload.phonenumber || payload.msisdn);
+      const inputText = clean(payload.text || payload.input || payload.ussdText);
+      if (!phoneNumber) {
+        ussdReply(res, 'Phone number is missing from the request.', true);
+        return;
+      }
+
+      const store = readStore();
+      const farmer = findFarmerByPhoneNormalized(store.farmers, phoneNumber);
+      if (!farmer) {
+        ussdReply(
+          res,
+          `Your number is not yet registered on Agem Portal.\nPlease contact AGEM support: ${USSD_HELP_PHONE}`,
+          true
+        );
+        return;
+      }
+
+      const parts = inputText
+        .split('*')
+        .map((part) => clean(part))
+        .filter(Boolean);
+      const option = parts[0] || '';
+
+      if (!option) {
+        ussdReply(res, ussdMainMenu(), false);
+        return;
+      }
+
+      if (option === '1') {
+        ussdReply(res, ussdPaymentMessage(store, farmer), true);
+        return;
+      }
+      if (option === '2') {
+        ussdReply(res, ussdQcMessage(store, farmer), true);
+        return;
+      }
+      if (option === '3') {
+        ussdReply(res, ussdProfileMessage(farmer), true);
+        return;
+      }
+      if (option === '4') {
+        ussdReply(
+          res,
+          `Agem Portal Help\nUse ${USSD_CODE} to check payment, QC status, and profile.\nSupport: ${USSD_HELP_PHONE}`,
+          true
+        );
+        return;
+      }
+
+      ussdReply(res, `Invalid option.\n${ussdMainMenu()}`, false);
+    } catch (error) {
+      ussdReply(res, `USSD processing failed: ${error.message}`, true);
+    }
     return;
   }
 

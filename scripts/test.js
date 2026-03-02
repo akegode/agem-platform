@@ -23,14 +23,21 @@ async function waitForServer(baseUrl, timeoutMs = 12000) {
 }
 
 async function request(baseUrl, route, options = {}) {
-  const headers = {};
+  const headers = {
+    ...(options.headers || {})
+  };
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
-  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (options.body !== undefined && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
 
   const response = await fetch(`${baseUrl}${route}`, {
     method: options.method || 'GET',
     headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+    body:
+      options.bodyRaw !== undefined
+        ? options.bodyRaw
+        : options.body !== undefined
+          ? JSON.stringify(options.body)
+          : undefined
   });
 
   if (options.expectStatus !== undefined) {
@@ -71,6 +78,8 @@ async function run() {
   const agentRecoveryCode = 'AgentRecovery#2026';
   const farmerSelfUsername = 'grower01';
   const farmerSelfPassword = 'GrowerPass#2026!';
+  const ussdSecret = 'UssdSecret#2026';
+  const ussdCode = '*483#';
 
   const server = spawn('node', ['backend/server.js'], {
     cwd: root,
@@ -85,7 +94,11 @@ async function run() {
       AGENT_USERNAME: agentUsername,
       AGENT_PASSWORD: agentPassword,
       ADMIN_RECOVERY_CODE: adminRecoveryCode,
-      AGENT_RECOVERY_CODE: agentRecoveryCode
+      AGENT_RECOVERY_CODE: agentRecoveryCode,
+      USSD_ENABLED: 'true',
+      USSD_CODE: ussdCode,
+      USSD_HELP_PHONE: '+254700111999',
+      USSD_SHARED_SECRET: ussdSecret
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -627,6 +640,116 @@ async function run() {
     assert.strictEqual(summary.data.smsSent, 8);
     assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
     assert.ok(Number(summary.data.totalOwedKes || 0) < 0.01, 'Expected owed balance to be settled');
+
+    const ussdUnauthorized = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unauth',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: ''
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 403
+    });
+    assert.ok(
+      ussdUnauthorized.startsWith('END Unauthorized'),
+      'USSD callback should reject requests without shared secret header'
+    );
+
+    const ussdMenu = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-menu',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: ''
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdMenu.startsWith('CON '), 'USSD menu should keep session open');
+    assert.ok(ussdMenu.includes('1. Payment Status'), 'USSD menu missing payment option');
+
+    const ussdPaymentStatus = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-pay',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: '1'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdPaymentStatus.startsWith('END '), 'USSD payment lookup should end session');
+    assert.ok(ussdPaymentStatus.includes('Balance: KES'), 'USSD payment response missing balance');
+
+    const ussdQcStatus = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-qc',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: '2'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdQcStatus.startsWith('END '), 'USSD QC lookup should end session');
+    assert.ok(ussdQcStatus.includes('Decision:'), 'USSD QC response missing decision');
+
+    const ussdProfile = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-profile',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: '3'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdProfile.startsWith('END '), 'USSD profile lookup should end session');
+    assert.ok(ussdProfile.includes('Name: Grace Njoki'), 'USSD profile response missing farmer name');
+
+    const ussdUnknownFarmer = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: ''
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownFarmer.startsWith('END '), 'Unregistered USSD number should end session');
+    assert.ok(
+      ussdUnknownFarmer.includes('not yet registered'),
+      'USSD unknown number response should explain registration status'
+    );
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
       token: adminToken,
