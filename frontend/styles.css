@@ -361,6 +361,10 @@ body.dashboard-open {
   padding: 8px;
 }
 
+.logout-main {
+  margin-bottom: 10px;
+}
+
 .nav {
   display: grid;
   gap: 8px;
