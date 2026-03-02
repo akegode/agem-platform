@@ -39,10 +39,17 @@
             <input id="registerPhone" placeholder="Phone (e.g. 2547xxxxxxx)">
             <input id="registerNationalId" placeholder="National ID number">
             <input id="registerLocation" placeholder="Location / Ward">
+            <p class="meta compact">Total farm size</p>
             <div class="area-grid">
               <input id="registerAreaHectares" type="number" min="0.01" step="0.01" placeholder="Hectares">
               <input id="registerAreaAcres" type="number" min="0.01" step="0.01" placeholder="Acres">
               <input id="registerAreaSquareFeet" type="number" min="1" step="1" placeholder="Square feet">
+            </div>
+            <p class="meta compact">Area under avocado</p>
+            <div class="area-grid">
+              <input id="registerAvocadoAreaHectares" type="number" min="0.01" step="0.01" placeholder="Avocado hectares">
+              <input id="registerAvocadoAreaAcres" type="number" min="0.01" step="0.01" placeholder="Avocado acres">
+              <input id="registerAvocadoAreaSquareFeet" type="number" min="1" step="1" placeholder="Avocado square feet">
             </div>
             <input id="registerUsername" placeholder="Choose username">
             <input id="registerPassword" type="password" placeholder="Choose password">
@@ -206,9 +213,14 @@
                 </div>
                 <input required id="treeCount" type="number" min="0" step="1" placeholder="Tree count">
                 <div class="area-grid">
-                  <input required id="farmerAreaHectares" type="number" min="0.01" step="0.01" placeholder="Hectares">
+                  <input id="farmerAreaHectares" type="number" min="0.01" step="0.01" placeholder="Hectares">
                   <input id="farmerAreaAcres" type="number" min="0.01" step="0.01" placeholder="Acres">
                   <input id="farmerAreaSquareFeet" type="number" min="1" step="1" placeholder="Square feet">
+                </div>
+                <div class="area-grid">
+                  <input id="farmerAvocadoAreaHectares" type="number" min="0.01" step="0.01" placeholder="Avocado hectares">
+                  <input id="farmerAvocadoAreaAcres" type="number" min="0.01" step="0.01" placeholder="Avocado acres">
+                  <input id="farmerAvocadoAreaSquareFeet" type="number" min="1" step="1" placeholder="Avocado square feet">
                 </div>
                 <textarea id="farmerNotes" rows="3" placeholder="Farm details / notes"></textarea>
                 <div class="inline-actions">
@@ -226,7 +238,7 @@
                 <form id="farmerImportForm">
                   <input id="farmerImportFile" type="file" accept=".csv,.xlsx,.xls">
                   <p class="meta compact">
-                    Required fields: name, phone, national ID, location, and area (hectares/acres/square feet). Optional: trees, notes. Extra columns are ignored automatically.
+                    Required fields: name, phone, national ID, location, total area, and area under avocado (all accept hectares/acres/square feet). Optional: trees, notes. Extra columns are ignored automatically.
                   </p>
                   <div class="inline-actions">
                     <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>

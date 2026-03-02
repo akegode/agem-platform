@@ -178,6 +178,7 @@ async function run() {
         nationalId: '11223344',
         location: 'Muranga',
         hectares: 1.2,
+        avocadoHectares: 0.8,
         username: farmerSelfUsername,
         password: farmerSelfPassword,
         confirmPassword: farmerSelfPassword
@@ -195,6 +196,7 @@ async function run() {
         nationalId: '55443322',
         location: 'Muranga',
         hectares: 1.1,
+        avocadoHectares: 0.6,
         username: 'grower02',
         password: farmerSelfPassword,
         confirmPassword: farmerSelfPassword
@@ -223,6 +225,7 @@ async function run() {
         nationalId: '87654321',
         location: 'Kiambu',
         hectares: 2.35,
+        avocadoHectares: 1.5,
         trees: 44,
         notes: 'Integration test farmer'
       },
@@ -241,6 +244,7 @@ async function run() {
         nationalId: '87654321',
         location: 'Kiambu',
         hectares: 1.2,
+        avocadoHectares: 0.9,
         trees: 10
       },
       expectStatus: 409
@@ -250,11 +254,16 @@ async function run() {
       method: 'PATCH',
       token: adminToken,
       body: {
-        squareFeet: 107639.1
+        squareFeet: 107639.1,
+        avocadoSquareFeet: 53819.55
       },
       expectStatus: 200
     });
     assert.ok(Math.abs(Number(farmerPatchedArea.data.hectares) - 1.0) < 0.02, 'Square feet update should convert to hectares');
+    assert.ok(
+      Math.abs(Number(farmerPatchedArea.data.avocadoHectares) - 0.5) < 0.02,
+      'Avocado square feet update should convert to hectares'
+    );
 
     await request(baseUrl, '/api/farmers/import', {
       method: 'POST',
@@ -266,7 +275,8 @@ async function run() {
             phone: '254700000001',
             nationalId: '10000111',
             location: 'Nakuru',
-            hectares: 1.4
+            hectares: 1.4,
+            avocadoHectares: 1.0
           }
         ]
       },
@@ -284,6 +294,7 @@ async function run() {
             'National ID Number': '23597146',
             Ward: 'Kirinyaga',
             acreage: '4.5',
+            'Area Under Avocado (Acres)': '2.0',
             'Tree Count': '30',
             'Random Extra Column': 'ignore this'
           },
@@ -293,6 +304,7 @@ async function run() {
             nationalId: '87654321',
             location: 'Kiambu',
             hectares: 1.1,
+            avocadoHectares: 0.5,
             trees: 55
           },
           {
@@ -307,6 +319,7 @@ async function run() {
             'ID No': '30011223',
             County: 'Nyeri',
             'Square Feet': '107639.1',
+            'Area Under Avocado (Square Feet)': '53819.55',
             'Number of Trees': '14',
             Remarks: 'Excel alias columns'
           }
@@ -334,8 +347,12 @@ async function run() {
     const alice = farmersByPhone.get('254733445566');
     assert.ok(peter && Number.isFinite(Number(peter.hectares)), 'Expected hectares for Peter');
     assert.ok(alice && Number.isFinite(Number(alice.hectares)), 'Expected hectares for Alice');
+    assert.ok(peter && Number.isFinite(Number(peter.avocadoHectares)), 'Expected avocado hectares for Peter');
+    assert.ok(alice && Number.isFinite(Number(alice.avocadoHectares)), 'Expected avocado hectares for Alice');
     assert.ok(Math.abs(Number(peter.hectares) - 1.821) < 0.02, 'Acreage to hectares conversion should be applied');
     assert.ok(Math.abs(Number(alice.hectares) - 1.0) < 0.02, 'Square-feet to hectares conversion should be applied');
+    assert.ok(Math.abs(Number(peter.avocadoHectares) - 0.809) < 0.02, 'Avocado acreage to hectares conversion should be applied');
+    assert.ok(Math.abs(Number(alice.avocadoHectares) - 0.5) < 0.02, 'Avocado square-feet to hectares conversion should be applied');
 
     const overwriteImport = await request(baseUrl, '/api/farmers/import', {
       method: 'POST',
@@ -349,6 +366,7 @@ async function run() {
             nationalId: '23597146',
             location: 'Embu',
             hectares: 2.2,
+            avocadoHectares: 1.7,
             trees: 33,
             notes: 'Updated from import'
           }
@@ -370,6 +388,7 @@ async function run() {
     assert.strictEqual(updatedPeter.phone, '254700999999');
     assert.strictEqual(updatedPeter.location, 'Embu');
     assert.ok(Math.abs(Number(updatedPeter.hectares) - 2.2) < 0.01);
+    assert.ok(Math.abs(Number(updatedPeter.avocadoHectares) - 1.7) < 0.01);
 
     await request(baseUrl, '/api/produce', {
       method: 'POST',
@@ -473,7 +492,10 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(farmersCsv.includes('name,phone,nationalId,location,hectares,acres,squareFeet'), 'Farmers CSV header missing');
+    assert.ok(
+      farmersCsv.includes('name,phone,nationalId,location,hectares,acres,squareFeet,avocadoHectares,avocadoAcres,avocadoSquareFeet'),
+      'Farmers CSV header missing'
+    );
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
 
     await request(baseUrl, '/api/admin/backup', {

@@ -295,6 +295,19 @@ function normalizeStore(raw) {
     store.users = ALLOW_DEMO_USERS ? seededDemoUsers() : [];
   }
 
+  for (const farmer of store.farmers) {
+    if (!farmer || typeof farmer !== 'object') continue;
+    const totalHectares = Number(farmer.hectares);
+    if (!Number.isFinite(totalHectares) || totalHectares <= 0) continue;
+
+    const avocadoHectares = Number(farmer.avocadoHectares);
+    if (!Number.isFinite(avocadoHectares) || avocadoHectares <= 0 || avocadoHectares > totalHectares) {
+      farmer.avocadoHectares = Number(totalHectares.toFixed(3));
+    } else {
+      farmer.avocadoHectares = Number(avocadoHectares.toFixed(3));
+    }
+  }
+
   applyUserPolicy(store);
   pruneExpiredSessions(store);
   return store;
@@ -498,11 +511,7 @@ function parseArea(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-function resolveHectares(payload) {
-  const hectaresRaw = payload?.hectares;
-  const acresRaw = payload?.acres;
-  const squareFeetRaw =
-    payload?.squareFeet ?? payload?.squarefeet ?? payload?.square_feet ?? payload?.sqft ?? payload?.squareFt;
+function resolveHectaresFromValues(hectaresRaw, acresRaw, squareFeetRaw) {
   const hasHectares = clean(hectaresRaw) !== '';
   const hasAcres = clean(acresRaw) !== '';
   const hasSquareFeet = clean(squareFeetRaw) !== '';
@@ -519,6 +528,40 @@ function resolveHectares(payload) {
     return squareFeet / SQFT_PER_HECTARE;
   }
   return NaN;
+}
+
+function resolveHectares(payload) {
+  const hectaresRaw = payload?.hectares;
+  const acresRaw = payload?.acres;
+  const squareFeetRaw =
+    payload?.squareFeet ?? payload?.squarefeet ?? payload?.square_feet ?? payload?.sqft ?? payload?.squareFt;
+  return resolveHectaresFromValues(hectaresRaw, acresRaw, squareFeetRaw);
+}
+
+function resolveAvocadoHectares(payload) {
+  const hectaresRaw =
+    payload?.avocadoHectares ??
+    payload?.avocadohectares ??
+    payload?.areaUnderAvocadoHectares ??
+    payload?.areaunderavocadohectares;
+  const acresRaw =
+    payload?.avocadoAcres ??
+    payload?.avocadoacres ??
+    payload?.areaUnderAvocadoAcres ??
+    payload?.areaunderavocadoacres ??
+    payload?.avocadoAcreage ??
+    payload?.avocadoacreage;
+  const squareFeetRaw =
+    payload?.avocadoSquareFeet ??
+    payload?.avocadosquarefeet ??
+    payload?.avocado_square_feet ??
+    payload?.avocadoSqft ??
+    payload?.avocadosqft ??
+    payload?.areaUnderAvocadoSquareFeet ??
+    payload?.areaunderavocadosquarefeet ??
+    payload?.areaUnderAvocadoSqft ??
+    payload?.areaunderavocadosqft;
+  return resolveHectaresFromValues(hectaresRaw, acresRaw, squareFeetRaw);
 }
 
 function findById(list, entityId) {
@@ -580,8 +623,12 @@ function validateFarmer(payload) {
   if (!clean(payload.location)) return 'location is required';
   if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
   const hectares = resolveHectares(payload);
+  const avocadoHectares = resolveAvocadoHectares(payload);
   if (!Number.isFinite(hectares)) return 'hectares/acres/square feet is required';
+  if (!Number.isFinite(avocadoHectares)) return 'avocadoHectares/avocadoAcres/avocadoSquareFeet is required';
   if (hectares <= 0) return 'hectares must be greater than 0';
+  if (avocadoHectares <= 0) return 'area under avocado must be greater than 0';
+  if (avocadoHectares > hectares) return 'area under avocado cannot be greater than total farm size';
   return '';
 }
 
@@ -668,7 +715,32 @@ function mapFarmerImportRecord(raw) {
     flat.farmsizesquarefeet,
     flat.landsizesquarefeet
   ]);
+  const avocadoHectaresRaw = firstNonEmpty([
+    flat.avocadohectares,
+    flat.areaunderavocadohectares,
+    flat.avocadoareahectares,
+    flat.avocadoplothectares
+  ]);
+  const avocadoAcresRaw = firstNonEmpty([
+    flat.avocadoacres,
+    flat.avocadoacreage,
+    flat.areaunderavocadoacres,
+    flat.avocadoareaacres,
+    flat.avocadoplotacres
+  ]);
+  const avocadoSquareFeetRaw = firstNonEmpty([
+    flat.avocadosquarefeet,
+    flat.avocadosquarefoot,
+    flat.avocadosqft,
+    flat.areaunderavocadosquarefeet,
+    flat.areaunderavocadosqft
+  ]);
   const hectares = resolveHectares({ hectares: hectaresRaw, acres: acresRaw, squareFeet: squareFeetRaw });
+  const avocadoHectares = resolveAvocadoHectares({
+    avocadoHectares: avocadoHectaresRaw,
+    avocadoAcres: avocadoAcresRaw,
+    avocadoSquareFeet: avocadoSquareFeetRaw
+  });
 
   return {
     name,
@@ -677,6 +749,7 @@ function mapFarmerImportRecord(raw) {
     location,
     trees,
     hectares,
+    avocadoHectares,
     notes
   };
 }
@@ -904,9 +977,10 @@ const server = http.createServer(async (req, res) => {
       const treesValue = payload.trees === undefined ? 0 : parseTrees(payload.trees);
       const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
       const hectares = resolveHectares(payload);
+      const avocadoHectares = resolveAvocadoHectares(payload);
 
       if (!name || !phone || !nationalId || !location || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, phone, nationalId, location, hectares/acres/square feet, username, password, and confirmPassword are required.' });
+        json(res, 422, { error: 'name, phone, nationalId, location, total area, area under avocado, username, password, and confirmPassword are required.' });
         return;
       }
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
@@ -923,6 +997,14 @@ const server = http.createServer(async (req, res) => {
       }
       if (!Number.isFinite(hectares) || hectares <= 0) {
         json(res, 422, { error: 'hectares/acres/square feet must be a number greater than 0.' });
+        return;
+      }
+      if (!Number.isFinite(avocadoHectares) || avocadoHectares <= 0) {
+        json(res, 422, { error: 'avocadoHectares/avocadoAcres/avocadoSquareFeet must be a number greater than 0.' });
+        return;
+      }
+      if (avocadoHectares > hectares) {
+        json(res, 422, { error: 'area under avocado cannot be greater than total farm size.' });
         return;
       }
 
@@ -966,6 +1048,7 @@ const server = http.createServer(async (req, res) => {
         location,
         trees,
         hectares: Number(hectares.toFixed(3)),
+        avocadoHectares: Number(avocadoHectares.toFixed(3)),
         notes,
         createdBy: user.username,
         createdAt: nowIso(),
@@ -1306,6 +1389,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      const hectares = resolveHectares(payload);
+      const avocadoHectares = resolveAvocadoHectares(payload);
       const record = {
         id: id('F'),
         name: clean(payload.name),
@@ -1313,7 +1398,8 @@ const server = http.createServer(async (req, res) => {
         nationalId: cleanNationalId(payload.nationalId),
         location: clean(payload.location),
         trees: Number(parseTrees(payload.trees).toFixed(2)),
-        hectares: Number(resolveHectares(payload).toFixed(3)),
+        hectares: Number(hectares.toFixed(3)),
+        avocadoHectares: Number(avocadoHectares.toFixed(3)),
         notes: clean(payload.notes),
         createdBy: auth.session.username,
         createdAt: nowIso(),
@@ -1416,6 +1502,7 @@ const server = http.createServer(async (req, res) => {
             existing.location = clean(mapped.location);
             existing.trees = Number(parseTrees(mapped.trees).toFixed(2));
             existing.hectares = Number(resolveHectares(mapped).toFixed(3));
+            existing.avocadoHectares = Number(resolveAvocadoHectares(mapped).toFixed(3));
             existing.notes = clean(mapped.notes);
             existing.updatedAt = nowIso();
 
@@ -1436,6 +1523,7 @@ const server = http.createServer(async (req, res) => {
           location: clean(mapped.location),
           trees: Number(parseTrees(mapped.trees).toFixed(2)),
           hectares: Number(resolveHectares(mapped).toFixed(3)),
+          avocadoHectares: Number(resolveAvocadoHectares(mapped).toFixed(3)),
           notes: clean(mapped.notes),
           createdBy: auth.session.username,
           createdAt: nowIso(),
@@ -1564,22 +1652,59 @@ const server = http.createServer(async (req, res) => {
         json(res, 409, { error: 'A farmer with this National ID already exists.' });
         return;
       }
-      if (
+      const hasFarmAreaUpdate =
         payload.hectares !== undefined ||
         payload.acres !== undefined ||
         payload.squareFeet !== undefined ||
         payload.squarefeet !== undefined ||
         payload.square_feet !== undefined ||
         payload.sqft !== undefined ||
-        payload.squareFt !== undefined
-      ) {
-        const hectares = resolveHectares(payload);
-        if (!Number.isFinite(hectares) || hectares <= 0) {
-          json(res, 422, { error: 'hectares/acres/square feet must be greater than 0' });
-          return;
-        }
-        farmer.hectares = Number(hectares.toFixed(3));
+        payload.squareFt !== undefined;
+      const hasAvocadoAreaUpdate =
+        payload.avocadoHectares !== undefined ||
+        payload.avocadohectares !== undefined ||
+        payload.areaUnderAvocadoHectares !== undefined ||
+        payload.areaunderavocadohectares !== undefined ||
+        payload.avocadoAcres !== undefined ||
+        payload.avocadoacres !== undefined ||
+        payload.areaUnderAvocadoAcres !== undefined ||
+        payload.areaunderavocadoacres !== undefined ||
+        payload.avocadoAcreage !== undefined ||
+        payload.avocadoacreage !== undefined ||
+        payload.avocadoSquareFeet !== undefined ||
+        payload.avocadosquarefeet !== undefined ||
+        payload.avocado_square_feet !== undefined ||
+        payload.avocadoSqft !== undefined ||
+        payload.avocadosqft !== undefined ||
+        payload.areaUnderAvocadoSquareFeet !== undefined ||
+        payload.areaunderavocadosquarefeet !== undefined ||
+        payload.areaUnderAvocadoSqft !== undefined ||
+        payload.areaunderavocadosqft !== undefined;
+
+      const currentHectares = Number(farmer.hectares);
+      const currentAvocadoHectares = Number(farmer.avocadoHectares);
+      const nextHectares = hasFarmAreaUpdate ? resolveHectares(payload) : currentHectares;
+      const nextAvocadoHectares = hasAvocadoAreaUpdate
+        ? resolveAvocadoHectares(payload)
+        : Number.isFinite(currentAvocadoHectares) && currentAvocadoHectares > 0
+          ? currentAvocadoHectares
+          : currentHectares;
+
+      if (!Number.isFinite(nextHectares) || nextHectares <= 0) {
+        json(res, 422, { error: 'hectares/acres/square feet must be greater than 0' });
+        return;
       }
+      if (!Number.isFinite(nextAvocadoHectares) || nextAvocadoHectares <= 0) {
+        json(res, 422, { error: 'avocadoHectares/avocadoAcres/avocadoSquareFeet must be greater than 0' });
+        return;
+      }
+      if (nextAvocadoHectares > nextHectares) {
+        json(res, 422, { error: 'area under avocado cannot be greater than total farm size' });
+        return;
+      }
+
+      farmer.hectares = Number(nextHectares.toFixed(3));
+      farmer.avocadoHectares = Number(nextAvocadoHectares.toFixed(3));
       farmer.name = nextName;
       farmer.phone = nextPhone;
       farmer.nationalId = nextNationalId;
@@ -2153,13 +2278,18 @@ const server = http.createServer(async (req, res) => {
 
     const farmerRows = store.farmers.map((row) => {
       const hectares = Number(row.hectares || 0);
+      const avocadoHectares = Number(row.avocadoHectares || 0);
       const acres = Number.isFinite(hectares) ? hectares / HECTARES_PER_ACRE : 0;
       const squareFeet = Number.isFinite(hectares) ? hectares * SQFT_PER_HECTARE : 0;
+      const avocadoAcres = Number.isFinite(avocadoHectares) ? avocadoHectares / HECTARES_PER_ACRE : 0;
+      const avocadoSquareFeet = Number.isFinite(avocadoHectares) ? avocadoHectares * SQFT_PER_HECTARE : 0;
 
       return {
         ...row,
         acres: Number(acres.toFixed(3)),
-        squareFeet: Number(squareFeet.toFixed(2))
+        squareFeet: Number(squareFeet.toFixed(2)),
+        avocadoAcres: Number(avocadoAcres.toFixed(3)),
+        avocadoSquareFeet: Number(avocadoSquareFeet.toFixed(2))
       };
     });
 
@@ -2172,6 +2302,9 @@ const server = http.createServer(async (req, res) => {
       { key: 'hectares', label: 'hectares' },
       { key: 'acres', label: 'acres' },
       { key: 'squareFeet', label: 'squareFeet' },
+      { key: 'avocadoHectares', label: 'avocadoHectares' },
+      { key: 'avocadoAcres', label: 'avocadoAcres' },
+      { key: 'avocadoSquareFeet', label: 'avocadoSquareFeet' },
       { key: 'trees', label: 'trees' },
       { key: 'notes', label: 'notes' },
       { key: 'createdBy', label: 'createdBy' },
@@ -2370,6 +2503,7 @@ const server = http.createServer(async (req, res) => {
       nationalId: '28643197',
       location: 'Muranga',
       hectares: 1.9,
+      avocadoHectares: 1.2,
       trees: 48,
       notes: 'Group A',
       createdBy: auth.session.username,
@@ -2383,6 +2517,7 @@ const server = http.createServer(async (req, res) => {
       nationalId: '30984522',
       location: 'Nyeri',
       hectares: 2.4,
+      avocadoHectares: 1.6,
       trees: 62,
       notes: 'Organic',
       createdBy: auth.session.username,

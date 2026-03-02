@@ -49,6 +49,9 @@ const elements = {
   registerAreaHectares: document.getElementById('registerAreaHectares'),
   registerAreaAcres: document.getElementById('registerAreaAcres'),
   registerAreaSquareFeet: document.getElementById('registerAreaSquareFeet'),
+  registerAvocadoAreaHectares: document.getElementById('registerAvocadoAreaHectares'),
+  registerAvocadoAreaAcres: document.getElementById('registerAvocadoAreaAcres'),
+  registerAvocadoAreaSquareFeet: document.getElementById('registerAvocadoAreaSquareFeet'),
   registerUsername: document.getElementById('registerUsername'),
   registerPassword: document.getElementById('registerPassword'),
   registerConfirmPassword: document.getElementById('registerConfirmPassword'),
@@ -89,6 +92,9 @@ const elements = {
   farmerAreaHectares: document.getElementById('farmerAreaHectares'),
   farmerAreaAcres: document.getElementById('farmerAreaAcres'),
   farmerAreaSquareFeet: document.getElementById('farmerAreaSquareFeet'),
+  farmerAvocadoAreaHectares: document.getElementById('farmerAvocadoAreaHectares'),
+  farmerAvocadoAreaAcres: document.getElementById('farmerAvocadoAreaAcres'),
+  farmerAvocadoAreaSquareFeet: document.getElementById('farmerAvocadoAreaSquareFeet'),
   farmerNotes: document.getElementById('farmerNotes'),
   farmerSubmitBtn: document.getElementById('farmerSubmitBtn'),
   farmerCancelEditBtn: document.getElementById('farmerCancelEditBtn'),
@@ -215,9 +221,19 @@ function bindAreaConverters() {
     squareFeetInput: elements.registerAreaSquareFeet
   });
   setupAreaConverterGroup({
+    hectaresInput: elements.registerAvocadoAreaHectares,
+    acresInput: elements.registerAvocadoAreaAcres,
+    squareFeetInput: elements.registerAvocadoAreaSquareFeet
+  });
+  setupAreaConverterGroup({
     hectaresInput: elements.farmerAreaHectares,
     acresInput: elements.farmerAreaAcres,
     squareFeetInput: elements.farmerAreaSquareFeet
+  });
+  setupAreaConverterGroup({
+    hectaresInput: elements.farmerAvocadoAreaHectares,
+    acresInput: elements.farmerAvocadoAreaAcres,
+    squareFeetInput: elements.farmerAvocadoAreaSquareFeet
   });
 }
 
@@ -433,9 +449,17 @@ function bindAuth() {
     const areaHectares = elements.registerAreaHectares.value.trim();
     const areaAcres = elements.registerAreaAcres.value.trim();
     const areaSquareFeet = elements.registerAreaSquareFeet.value.trim();
+    const avocadoAreaHectares = elements.registerAvocadoAreaHectares.value.trim();
+    const avocadoAreaAcres = elements.registerAvocadoAreaAcres.value.trim();
+    const avocadoAreaSquareFeet = elements.registerAvocadoAreaSquareFeet.value.trim();
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const confirmPassword = elements.registerConfirmPassword.value;
+
+    const totalAreaPayload = buildAreaPayload(areaHectares, areaAcres, areaSquareFeet);
+    const avocadoAreaPayload = buildAreaPayload(avocadoAreaHectares, avocadoAreaAcres, avocadoAreaSquareFeet);
+    const totalHectares = Number(totalAreaPayload.hectares);
+    const avocadoHectares = Number(avocadoAreaPayload.hectares);
 
     if (
       !name ||
@@ -443,11 +467,24 @@ function bindAuth() {
       !nationalId ||
       !location ||
       (!areaHectares && !areaAcres && !areaSquareFeet) ||
+      (!avocadoAreaHectares && !avocadoAreaAcres && !avocadoAreaSquareFeet) ||
       !username ||
       !password ||
       !confirmPassword
     ) {
       elements.registerMsg.textContent = 'All registration fields are required.';
+      return;
+    }
+    if (!Number.isFinite(totalHectares) || totalHectares <= 0) {
+      elements.registerMsg.textContent = 'Total farm area must be greater than 0.';
+      return;
+    }
+    if (!Number.isFinite(avocadoHectares) || avocadoHectares <= 0) {
+      elements.registerMsg.textContent = 'Area under avocado must be greater than 0.';
+      return;
+    }
+    if (avocadoHectares > totalHectares) {
+      elements.registerMsg.textContent = 'Area under avocado cannot be greater than total farm size.';
       return;
     }
 
@@ -460,7 +497,10 @@ function bindAuth() {
           phone,
           nationalId,
           location,
-          ...buildAreaPayload(areaHectares, areaAcres, areaSquareFeet),
+          ...totalAreaPayload,
+          avocadoHectares: avocadoAreaPayload.hectares,
+          avocadoAcres: avocadoAreaPayload.acres,
+          avocadoSquareFeet: avocadoAreaPayload.squareFeet,
           username,
           password,
           confirmPassword
@@ -675,19 +715,44 @@ function bindFarmers() {
       return;
     }
 
+    const totalAreaPayload = buildAreaPayload(
+      elements.farmerAreaHectares.value.trim(),
+      elements.farmerAreaAcres.value.trim(),
+      elements.farmerAreaSquareFeet.value.trim()
+    );
+    const avocadoAreaPayload = buildAreaPayload(
+      elements.farmerAvocadoAreaHectares.value.trim(),
+      elements.farmerAvocadoAreaAcres.value.trim(),
+      elements.farmerAvocadoAreaSquareFeet.value.trim()
+    );
+    const totalHectares = Number(totalAreaPayload.hectares);
+    const avocadoHectares = Number(avocadoAreaPayload.hectares);
+
     const payload = {
       name: elements.farmerName.value.trim(),
       phone: elements.farmerPhone.value.trim(),
       nationalId: cleanNationalIdClient(elements.farmerNationalId.value),
       location: elements.farmerLocation.value.trim(),
       trees: Number(elements.treeCount.value || 0),
-      ...buildAreaPayload(
-        elements.farmerAreaHectares.value.trim(),
-        elements.farmerAreaAcres.value.trim(),
-        elements.farmerAreaSquareFeet.value.trim()
-      ),
+      ...totalAreaPayload,
+      avocadoHectares: avocadoAreaPayload.hectares,
+      avocadoAcres: avocadoAreaPayload.acres,
+      avocadoSquareFeet: avocadoAreaPayload.squareFeet,
       notes: elements.farmerNotes.value.trim()
     };
+
+    if (!Number.isFinite(totalHectares) || totalHectares <= 0) {
+      elements.farmerMsg.textContent = 'Total farm area must be greater than 0.';
+      return;
+    }
+    if (!Number.isFinite(avocadoHectares) || avocadoHectares <= 0) {
+      elements.farmerMsg.textContent = 'Area under avocado must be greater than 0.';
+      return;
+    }
+    if (avocadoHectares > totalHectares) {
+      elements.farmerMsg.textContent = 'Area under avocado cannot be greater than total farm size.';
+      return;
+    }
 
     try {
       if (API.enabled) {
@@ -843,6 +908,14 @@ function bindFarmers() {
           squareFeetInput: elements.farmerAreaSquareFeet
         },
         farmer.hectares
+      );
+      fillAreaInputsFromHectares(
+        {
+          hectaresInput: elements.farmerAvocadoAreaHectares,
+          acresInput: elements.farmerAvocadoAreaAcres,
+          squareFeetInput: elements.farmerAvocadoAreaSquareFeet
+        },
+        farmer.avocadoHectares
       );
       elements.farmerNotes.value = farmer.notes || '';
 
@@ -1917,6 +1990,9 @@ function renderFarmers() {
           <td>${escapeHtml(formatHectares(farmer.hectares))}</td>
           <td>${escapeHtml(formatAcres(farmer.hectares))}</td>
           <td>${escapeHtml(formatSquareFeet(farmer.hectares))}</td>
+          <td>${escapeHtml(formatHectares(farmer.avocadoHectares))}</td>
+          <td>${escapeHtml(formatAcres(farmer.avocadoHectares))}</td>
+          <td>${escapeHtml(formatSquareFeet(farmer.avocadoHectares))}</td>
           <td>${escapeHtml(String(farmer.trees ?? '0'))}</td>
           <td>${escapeHtml(dateShort(farmer.updatedAt || farmer.createdAt))}</td>
           <td class="actions">${actions}</td>
@@ -1937,6 +2013,9 @@ function renderFarmers() {
           <th>Hectares</th>
           <th>Acres</th>
           <th>Square Feet</th>
+          <th>Avocado Hectares</th>
+          <th>Avocado Acres</th>
+          <th>Avocado Sq Ft</th>
           <th>Trees</th>
           <th>Updated</th>
           <th>Actions</th>
@@ -2364,6 +2443,26 @@ function mapFarmerImportRecordClient(raw) {
     flat.farmsizesquarefeet,
     flat.landsizesquarefeet
   ]);
+  const avocadoHectaresRaw = firstNonEmptyClient([
+    flat.avocadohectares,
+    flat.areaunderavocadohectares,
+    flat.avocadoareahectares,
+    flat.avocadoplothectares
+  ]);
+  const avocadoAcresRaw = firstNonEmptyClient([
+    flat.avocadoacres,
+    flat.avocadoacreage,
+    flat.areaunderavocadoacres,
+    flat.avocadoareaacres,
+    flat.avocadoplotacres
+  ]);
+  const avocadoSquareFeetRaw = firstNonEmptyClient([
+    flat.avocadosquarefeet,
+    flat.avocadosquarefoot,
+    flat.avocadosqft,
+    flat.areaunderavocadosquarefeet,
+    flat.areaunderavocadosqft
+  ]);
 
   return {
     name,
@@ -2371,6 +2470,7 @@ function mapFarmerImportRecordClient(raw) {
     nationalId: cleanNationalIdClient(nationalId),
     location,
     hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw, squareFeetRaw),
+    avocadoHectares: toHectaresFromInputsClient(avocadoHectaresRaw, avocadoAcresRaw, avocadoSquareFeetRaw),
     trees: parseTreeCountClient(treesRaw),
     notes
   };
@@ -2382,7 +2482,10 @@ function validateImportedFarmer(mapped) {
   if (!mapped.nationalId) return 'nationalId is required';
   if (!mapped.location) return 'location is required';
   if (!Number.isFinite(mapped.hectares)) return 'hectares/acres/square feet is required';
+  if (!Number.isFinite(mapped.avocadoHectares)) return 'avocadoHectares/avocadoAcres/avocadoSquareFeet is required';
   if (mapped.hectares <= 0) return 'hectares must be greater than 0';
+  if (mapped.avocadoHectares <= 0) return 'area under avocado must be greater than 0';
+  if (mapped.avocadoHectares > mapped.hectares) return 'area under avocado cannot be greater than total farm size';
   if (Number.isNaN(mapped.trees)) return 'trees must be a number';
   return '';
 }
@@ -2516,6 +2619,7 @@ function importFarmersLocal(records, options = {}) {
         existing.nationalId = nationalId;
         existing.location = mapped.location;
         existing.hectares = Number(mapped.hectares.toFixed(3));
+        existing.avocadoHectares = Number(mapped.avocadoHectares.toFixed(3));
         existing.trees = Number(mapped.trees.toFixed(2));
         existing.notes = mapped.notes;
         existing.updatedAt = new Date().toISOString();
@@ -2536,6 +2640,7 @@ function importFarmersLocal(records, options = {}) {
       nationalId,
       location: mapped.location,
       hectares: Number(mapped.hectares.toFixed(3)),
+      avocadoHectares: Number(mapped.avocadoHectares.toFixed(3)),
       trees: Number(mapped.trees.toFixed(2)),
       notes: mapped.notes,
       createdBy: 'local',
@@ -2734,6 +2839,7 @@ function seedLocalData() {
     nationalId: '28643197',
     location: 'Muranga',
     hectares: 1.9,
+    avocadoHectares: 1.2,
     trees: 48,
     notes: 'Group A',
     createdBy: 'local',
@@ -2748,6 +2854,7 @@ function seedLocalData() {
     nationalId: '30984522',
     location: 'Nyeri',
     hectares: 2.4,
+    avocadoHectares: 1.6,
     trees: 62,
     notes: 'Organic',
     createdBy: 'local',
@@ -2971,6 +3078,22 @@ function dateShort(value) {
   return date.toLocaleString();
 }
 
+function normalizeLocalFarmerRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const normalized = { ...row };
+  const hectares = Number(normalized.hectares);
+  if (Number.isFinite(hectares) && hectares > 0) {
+    normalized.hectares = Number(hectares.toFixed(3));
+    const avocadoHectares = Number(normalized.avocadoHectares);
+    if (!Number.isFinite(avocadoHectares) || avocadoHectares <= 0 || avocadoHectares > hectares) {
+      normalized.avocadoHectares = Number(hectares.toFixed(3));
+    } else {
+      normalized.avocadoHectares = Number(avocadoHectares.toFixed(3));
+    }
+  }
+  return normalized;
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -2984,7 +3107,7 @@ function loadState() {
         user: parsed.auth?.user || null,
         expiresAt: parsed.auth?.expiresAt || ''
       },
-      farmers: Array.isArray(parsed.farmers) ? parsed.farmers : [],
+      farmers: Array.isArray(parsed.farmers) ? parsed.farmers.map(normalizeLocalFarmerRow) : [],
       produce: Array.isArray(parsed.produce) ? parsed.produce : [],
       payments: Array.isArray(parsed.payments) ? parsed.payments : [],
       smsLogs: Array.isArray(parsed.smsLogs) ? parsed.smsLogs : [],
