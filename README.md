@@ -8,6 +8,7 @@ This project is now a full working web application with authentication, role-bas
 - Signed-in password change flow
 - Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards)
+- Bulk farmer import (CSV/Excel) for admin; required fields are mapped, extra columns ignored
 - Produce collection tracking
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint
@@ -83,6 +84,7 @@ Your current website stays as-is, and this app runs as a portal under a subdomai
 - Data is stored locally in `backend/data/store.json`.
 - Backups are saved in `backend/data/backups/`.
 - This is implemented with Node.js built-ins only (no external packages).
+- Excel import parsing is handled in-browser via the `xlsx` CDN script; CSV import works without it.
 - Default demo credentials are disabled when `ALLOW_DEMO_USERS=false` (recommended for production).
 - Farmer self-registration can be turned off by setting `ALLOW_FARMER_REGISTRATION=false`.
 - If you later install PHP/Composer/MySQL/Redis, this can be migrated to Laravel + React/Inertia exactly as planned.

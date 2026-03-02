@@ -459,6 +459,12 @@ h3,
   line-height: 1.5;
 }
 
+.meta.compact {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .kpis {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -703,6 +709,27 @@ button.table-btn.danger {
   color: var(--ink-muted);
   background: #fafaf8;
   font-size: 0.9rem;
+}
+
+.import-errors {
+  margin-top: 6px;
+  border: 1px dashed #d7d7d2;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #fafaf8;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 0.8rem;
+  color: #494949;
+}
+
+.import-errors ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.import-errors li {
+  margin: 0 0 4px;
 }
 
 #farmerTableWrap,

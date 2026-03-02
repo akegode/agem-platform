@@ -226,6 +226,69 @@ async function run() {
     const farmerId = farmer.data.id;
     assert.ok(farmerId, 'Farmer ID missing after create');
 
+    await request(baseUrl, '/api/farmers/import', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        records: [
+          {
+            name: 'Agent Attempt',
+            phone: '254700000001',
+            location: 'Nakuru'
+          }
+        ]
+      },
+      expectStatus: 403
+    });
+
+    const importResponse = await request(baseUrl, '/api/farmers/import', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        records: [
+          {
+            'Farmer Name': 'Peter Mwangi',
+            'Mobile Number': '254700123456',
+            Ward: 'Kirinyaga',
+            'Tree Count': '30',
+            'Random Extra Column': 'ignore this'
+          },
+          {
+            name: 'Duplicate Grace',
+            phone: '254711223344',
+            location: 'Kiambu',
+            trees: 55
+          },
+          {
+            Name: '',
+            Phone: '254722000001',
+            Location: 'Nyandarua'
+          },
+          {
+            'Full Name': 'Alice Otieno',
+            MSISDN: '254733445566',
+            County: 'Nyeri',
+            'Number of Trees': '14',
+            Remarks: 'Excel alias columns'
+          }
+        ]
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(importResponse.data.totalRows, 4);
+    assert.strictEqual(importResponse.data.imported, 2);
+    assert.strictEqual(importResponse.data.skipped, 2);
+    assert.ok(Array.isArray(importResponse.data.errors), 'Expected row errors array');
+    assert.ok(importResponse.data.errors.length >= 2, 'Expected duplicate and validation row errors');
+
+    const farmersAfterImport = await request(baseUrl, '/api/farmers?limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const farmerPhones = new Set((farmersAfterImport.data || []).map((row) => row.phone));
+    assert.ok(farmerPhones.has('254700123456'), 'Imported CSV row missing');
+    assert.ok(farmerPhones.has('254733445566'), 'Imported alias row missing');
+
     await request(baseUrl, '/api/produce', {
       method: 'POST',
       token: agentToken,
@@ -312,16 +375,16 @@ async function run() {
       },
       expectStatus: 201
     });
-    assert.strictEqual(bulkAll.data.sentCount, 2);
+    assert.strictEqual(bulkAll.data.sentCount, 4);
 
     const summary = await request(baseUrl, '/api/reports/summary', {
       token: adminToken,
       expectStatus: 200
     });
-    assert.strictEqual(summary.data.farmers, 2);
+    assert.strictEqual(summary.data.farmers, 4);
     assert.strictEqual(summary.data.produceRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 1);
-    assert.strictEqual(summary.data.smsSent, 4);
+    assert.strictEqual(summary.data.smsSent, 6);
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
       token: adminToken,

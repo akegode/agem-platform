@@ -375,12 +375,12 @@ function csv(res, filename, data) {
   res.end(data);
 }
 
-function readBody(req) {
+function readBody(req, maxBytes = 1_000_000) {
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) reject(new Error('Request too large'));
+      if (body.length > maxBytes) reject(new Error('Request too large'));
     });
     req.on('end', () => {
       if (!body) {
@@ -472,6 +472,13 @@ function parseNumber(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
+function parseTrees(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const num = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(num) ? num : NaN;
+}
+
 function findById(list, entityId) {
   return list.find((row) => row.id === entityId);
 }
@@ -506,7 +513,7 @@ function validateFarmer(payload) {
   if (!clean(payload.name)) return 'name is required';
   if (!clean(payload.phone)) return 'phone is required';
   if (!clean(payload.location)) return 'location is required';
-  if (Number.isNaN(parseNumber(payload.trees || 0))) return 'trees must be a number';
+  if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
   return '';
 }
 
@@ -524,6 +531,62 @@ function validatePayment(payload) {
   if (!clean(payload.ref)) return 'ref is required';
   if (!clean(payload.status)) return 'status is required';
   return '';
+}
+
+function normalizeImportHeader(value) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function firstNonEmpty(values) {
+  for (const value of values) {
+    const cleaned = clean(value);
+    if (cleaned) return cleaned;
+  }
+  return '';
+}
+
+function mapFarmerImportRecord(raw) {
+  const flat = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    flat[normalizeImportHeader(key)] = value;
+  }
+
+  const name = firstNonEmpty([
+    flat.name,
+    flat.farmername,
+    flat.fullname,
+    flat.farmerfullname,
+    flat.growername
+  ]);
+  const phone = firstNonEmpty([
+    flat.phone,
+    flat.phonenumber,
+    flat.mobile,
+    flat.mobilenumber,
+    flat.msisdn,
+    flat.contactnumber
+  ]);
+  const location = firstNonEmpty([
+    flat.location,
+    flat.area,
+    flat.ward,
+    flat.county,
+    flat.village,
+    flat.region
+  ]);
+  const notes = firstNonEmpty([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
+  const treesRaw = firstNonEmpty([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
+  const trees = parseTrees(treesRaw);
+
+  return {
+    name,
+    phone,
+    location,
+    trees,
+    notes
+  };
 }
 
 function normalizePaymentStatus(status) {
@@ -745,7 +808,7 @@ const server = http.createServer(async (req, res) => {
       const password = String(payload.password || '');
       const confirmPassword = String(payload.confirmPassword || '');
       const notes = clean(payload.notes);
-      const treesValue = payload.trees === undefined ? 0 : parseNumber(payload.trees);
+      const treesValue = payload.trees === undefined ? 0 : parseTrees(payload.trees);
       const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
 
       if (!name || !phone || !location || !username || !password || !confirmPassword) {
@@ -1132,7 +1195,7 @@ const server = http.createServer(async (req, res) => {
         name: clean(payload.name),
         phone: clean(payload.phone),
         location: clean(payload.location),
-        trees: Number(parseNumber(payload.trees || 0).toFixed(2)),
+        trees: Number(parseTrees(payload.trees).toFixed(2)),
         notes: clean(payload.notes),
         createdBy: auth.session.username,
         createdAt: nowIso(),
@@ -1150,6 +1213,87 @@ const server = http.createServer(async (req, res) => {
       });
       writeStore(store);
       json(res, 201, { data: record });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/farmers/import' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 10_000_000);
+      const records = Array.isArray(payload.records) ? payload.records : [];
+      if (!records.length) {
+        json(res, 422, { error: 'records array is required' });
+        return;
+      }
+
+      const existingPhones = new Set(store.farmers.map((row) => clean(row.phone)).filter(Boolean));
+      const created = [];
+      const errors = [];
+
+      records.forEach((raw, idx) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          errors.push({ row: idx + 1, error: 'Row is not a valid object' });
+          return;
+        }
+
+        const mapped = mapFarmerImportRecord(raw);
+        const invalid = validateFarmer(mapped);
+        if (invalid) {
+          errors.push({ row: idx + 1, error: invalid });
+          return;
+        }
+
+        const phone = clean(mapped.phone);
+        if (existingPhones.has(phone)) {
+          errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+          return;
+        }
+
+        const record = {
+          id: id('F'),
+          name: clean(mapped.name),
+          phone,
+          location: clean(mapped.location),
+          trees: Number(parseTrees(mapped.trees).toFixed(2)),
+          notes: clean(mapped.notes),
+          createdBy: auth.session.username,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        };
+
+        existingPhones.add(phone);
+        created.push(record);
+      });
+
+      if (created.length) {
+        store.farmers = created.reverse().concat(store.farmers);
+        addActivity(store, {
+          actor: auth.session.username,
+          role: auth.session.role,
+          action: 'farmer.import',
+          entity: 'farmer',
+          details: `Imported ${created.length} farmers (skipped ${records.length - created.length})`
+        });
+        writeStore(store);
+      }
+
+      json(res, 200, {
+        data: {
+          totalRows: records.length,
+          imported: created.length,
+          skipped: records.length - created.length,
+          errors: errors.slice(0, 250)
+        }
+      });
     } catch (error) {
       json(res, 400, { error: error.message });
     }
@@ -1206,7 +1350,7 @@ const server = http.createServer(async (req, res) => {
       if (payload.location !== undefined) farmer.location = clean(payload.location);
       if (payload.notes !== undefined) farmer.notes = clean(payload.notes);
       if (payload.trees !== undefined) {
-        const trees = parseNumber(payload.trees);
+        const trees = parseTrees(payload.trees);
         if (!Number.isFinite(trees)) {
           json(res, 422, { error: 'trees must be a number' });
           return;

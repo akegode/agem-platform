@@ -209,6 +209,24 @@
             </details>
 
             <details class="dropdown-card">
+              <summary>Bulk Import (CSV / Excel)</summary>
+              <div class="dropdown-body">
+                <form id="farmerImportForm">
+                  <input id="farmerImportFile" type="file" accept=".csv,.xlsx,.xls">
+                  <p class="meta compact">
+                    Required fields: name, phone, location. Optional: trees, notes. Extra columns are ignored automatically.
+                  </p>
+                  <div class="inline-actions">
+                    <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>
+                  </div>
+                  <div class="success" id="farmerImportMsg"></div>
+                  <p class="meta compact" id="farmerImportSummary"></p>
+                  <div id="farmerImportErrors"></div>
+                </form>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
               <summary>Registered Farmers</summary>
               <div class="dropdown-body">
                 <div id="farmerTableWrap"></div>
@@ -412,6 +430,7 @@
   </div>
   <button id="scrollTopBtn" class="scroll-top" type="button" hidden>Top</button>
 
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

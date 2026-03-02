@@ -82,6 +82,12 @@ const elements = {
   farmerSubmitBtn: document.getElementById('farmerSubmitBtn'),
   farmerCancelEditBtn: document.getElementById('farmerCancelEditBtn'),
   farmerMsg: document.getElementById('farmerMsg'),
+  farmerImportForm: document.getElementById('farmerImportForm'),
+  farmerImportFile: document.getElementById('farmerImportFile'),
+  farmerImportBtn: document.getElementById('farmerImportBtn'),
+  farmerImportMsg: document.getElementById('farmerImportMsg'),
+  farmerImportSummary: document.getElementById('farmerImportSummary'),
+  farmerImportErrors: document.getElementById('farmerImportErrors'),
   farmerTableWrap: document.getElementById('farmerTableWrap'),
 
   produceForm: document.getElementById('produceForm'),
@@ -628,6 +634,59 @@ function bindFarmers() {
   elements.farmerCancelEditBtn.addEventListener('click', () => {
     resetFarmerForm();
     clearMessages();
+  });
+
+  elements.farmerImportForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+    clearFarmerImportResult();
+
+    const role = currentRole();
+    if (role !== 'admin') {
+      elements.farmerImportMsg.textContent = 'Only administrators can import farmer files.';
+      return;
+    }
+
+    const [file] = elements.farmerImportFile.files || [];
+    if (!file) {
+      elements.farmerImportMsg.textContent = 'Choose a CSV or Excel file first.';
+      return;
+    }
+
+    try {
+      elements.farmerImportMsg.textContent = 'Reading file...';
+      const records = await parseFarmerImportFile(file);
+
+      if (!records.length) {
+        elements.farmerImportMsg.textContent = 'No data rows found in this file.';
+        return;
+      }
+
+      let result = null;
+      if (API.enabled) {
+        if (!isAuthenticated()) {
+          elements.farmerImportMsg.textContent = 'Sign in first to import farmers.';
+          return;
+        }
+
+        const response = await apiRequest('/api/farmers/import', {
+          method: 'POST',
+          body: { records }
+        });
+        result = response.data || {};
+        await fetchAllData();
+      } else {
+        result = importFarmersLocal(records);
+        hydrateFarmerSelectors();
+        renderAll();
+        persist();
+      }
+
+      renderFarmerImportResult(result);
+      elements.farmerImportFile.value = '';
+    } catch (error) {
+      elements.farmerImportMsg.textContent = error.message || 'Import failed.';
+    }
   });
 
   elements.farmerTableWrap.addEventListener('click', async (event) => {
@@ -1607,9 +1666,12 @@ function updatePermissionUi() {
   const paymentAllowed = backendAuthReady && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const adminAllowed = backendAuthReady && role === 'admin';
+  const importAllowed = backendAuthReady && role === 'admin';
 
   elements.farmerSubmitBtn.disabled = !farmersAllowed;
   elements.farmerCancelEditBtn.disabled = !farmersAllowed;
+  elements.farmerImportBtn.disabled = !importAllowed;
+  elements.farmerImportFile.disabled = !importAllowed;
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
 
@@ -1971,6 +2033,295 @@ function renderBackups() {
   `;
 }
 
+function clearFarmerImportResult() {
+  elements.farmerImportSummary.textContent = '';
+  elements.farmerImportErrors.innerHTML = '';
+  elements.farmerImportErrors.classList.remove('import-errors');
+}
+
+function renderFarmerImportResult(result) {
+  const totalRows = Number(result?.totalRows || 0);
+  const imported = Number(result?.imported || 0);
+  const skipped = Number(result?.skipped || 0);
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+
+  elements.farmerImportMsg.textContent = imported
+    ? `Import complete. ${imported} farmers added.`
+    : 'Import completed with no new farmers added.';
+  elements.farmerImportSummary.textContent = `Rows processed: ${totalRows}. Imported: ${imported}. Skipped: ${skipped}.`;
+
+  if (!errors.length) {
+    elements.farmerImportErrors.innerHTML = '';
+    elements.farmerImportErrors.classList.remove('import-errors');
+    return;
+  }
+
+  const maxShown = 25;
+  const listItems = errors
+    .slice(0, maxShown)
+    .map((entry) => `<li>Row ${escapeHtml(String(entry.row || '?'))}: ${escapeHtml(entry.error || 'Invalid row')}</li>`)
+    .join('');
+  const remaining = errors.length - maxShown;
+  const more = remaining > 0 ? `<li>...and ${escapeHtml(String(remaining))} more row errors.</li>` : '';
+
+  elements.farmerImportErrors.classList.add('import-errors');
+  elements.farmerImportErrors.innerHTML = `<ul>${listItems}${more}</ul>`;
+}
+
+function normalizeImportHeaderClient(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function firstNonEmptyClient(values) {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function parseTreeCountClient(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return 0;
+  const num = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(num) ? num : NaN;
+}
+
+function mapFarmerImportRecordClient(raw) {
+  const flat = {};
+  Object.entries(raw || {}).forEach(([key, value]) => {
+    flat[normalizeImportHeaderClient(key)] = value;
+  });
+
+  const name = firstNonEmptyClient([flat.name, flat.farmername, flat.fullname, flat.farmerfullname, flat.growername]);
+  const phone = firstNonEmptyClient([
+    flat.phone,
+    flat.phonenumber,
+    flat.mobile,
+    flat.mobilenumber,
+    flat.msisdn,
+    flat.contactnumber
+  ]);
+  const location = firstNonEmptyClient([flat.location, flat.area, flat.ward, flat.county, flat.village, flat.region]);
+  const notes = firstNonEmptyClient([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
+  const treesRaw = firstNonEmptyClient([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
+
+  return {
+    name,
+    phone,
+    location,
+    trees: parseTreeCountClient(treesRaw),
+    notes
+  };
+}
+
+function validateImportedFarmer(mapped) {
+  if (!mapped.name) return 'name is required';
+  if (!mapped.phone) return 'phone is required';
+  if (!mapped.location) return 'location is required';
+  if (Number.isNaN(mapped.trees)) return 'trees must be a number';
+  return '';
+}
+
+function importFarmersLocal(records) {
+  const existingPhones = new Set(
+    state.farmers
+      .map((row) => String(row.phone || '').trim())
+      .filter(Boolean)
+  );
+  const created = [];
+  const errors = [];
+  const now = Date.now();
+
+  records.forEach((raw, idx) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push({ row: idx + 1, error: 'Row is not a valid object' });
+      return;
+    }
+
+    const mapped = mapFarmerImportRecordClient(raw);
+    const invalid = validateImportedFarmer(mapped);
+    if (invalid) {
+      errors.push({ row: idx + 1, error: invalid });
+      return;
+    }
+
+    const phone = String(mapped.phone || '').trim();
+    if (existingPhones.has(phone)) {
+      errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+      return;
+    }
+
+    existingPhones.add(phone);
+    created.push({
+      id: `F-${now}-${idx + 1}`,
+      name: mapped.name,
+      phone,
+      location: mapped.location,
+      trees: Number(mapped.trees.toFixed(2)),
+      notes: mapped.notes,
+      createdBy: 'local',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+  });
+
+  if (created.length) {
+    state.farmers = created.reverse().concat(state.farmers);
+  }
+
+  return {
+    totalRows: records.length,
+    imported: created.length,
+    skipped: records.length - created.length,
+    errors: errors.slice(0, 250)
+  };
+}
+
+async function parseFarmerImportFile(file) {
+  const ext = String(file.name || '')
+    .split('.')
+    .pop()
+    .toLowerCase();
+  const type = String(file.type || '').toLowerCase();
+  const isCsv = ext === 'csv' || type.includes('csv') || type === 'text/plain';
+  const isExcel =
+    ext === 'xlsx' ||
+    ext === 'xls' ||
+    type.includes('spreadsheetml') ||
+    type.includes('ms-excel') ||
+    type.includes('excel');
+
+  if (isCsv) {
+    const content = await readFileAsText(file);
+    return parseCsvRecords(content);
+  }
+
+  if (isExcel) {
+    if (!window.XLSX || typeof window.XLSX.read !== 'function') {
+      throw new Error('Excel support is still loading. Wait a few seconds and try again, or use CSV.');
+    }
+
+    const buffer = await readFileAsArrayBuffer(file);
+    const workbook = window.XLSX.read(buffer, { type: 'array' });
+    const firstSheetName = workbook.SheetNames?.[0];
+    if (!firstSheetName) return [];
+
+    const sheet = workbook.Sheets[firstSheetName];
+    const rows = window.XLSX.utils.sheet_to_json(sheet, {
+      defval: '',
+      raw: false,
+      blankrows: false
+    });
+
+    return rows.filter(
+      (row) =>
+        row &&
+        typeof row === 'object' &&
+        !Array.isArray(row) &&
+        Object.values(row).some((value) => String(value ?? '').trim())
+    );
+  }
+
+  throw new Error('Unsupported file type. Use .csv, .xlsx, or .xls.');
+}
+
+function parseCsvRecords(content) {
+  const rows = parseCsvRows(String(content || ''));
+  if (!rows.length) return [];
+
+  const headerIndex = rows.findIndex((row) => row.some((cell) => String(cell ?? '').trim()));
+  if (headerIndex < 0) return [];
+
+  const headerRow = rows[headerIndex];
+  const headerCounts = {};
+  const headers = headerRow.map((cell, idx) => {
+    const base = String(cell ?? '').trim() || `Column_${idx + 1}`;
+    const used = headerCounts[base] || 0;
+    headerCounts[base] = used + 1;
+    return used ? `${base}_${used + 1}` : base;
+  });
+
+  const records = [];
+  for (let i = headerIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    if (!row || !row.some((cell) => String(cell ?? '').trim())) continue;
+
+    const record = {};
+    headers.forEach((header, idx) => {
+      record[header] = row[idx] ?? '';
+    });
+    records.push(record);
+  }
+
+  return records;
+}
+
+function parseCsvRows(content) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < content.length; i += 1) {
+    const char = content[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (content[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ',') {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+
+    if (char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+
+    if (char === '\r') {
+      if (content[i + 1] === '\n') i += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell);
+  if (row.length > 1 || String(row[0] ?? '').trim()) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 function resetFarmerForm() {
   state.editingFarmerId = '';
   elements.farmerId.value = '';
@@ -2169,6 +2520,24 @@ async function readFileAsDataUrl(file) {
   });
 }
 
+async function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+async function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 function notifySync(message) {
   elements.syncStatus.textContent = message;
 }
@@ -2179,6 +2548,10 @@ function clearMessages() {
   elements.changePasswordMsg.textContent = '';
   elements.recoveryMsg.textContent = '';
   elements.farmerMsg.textContent = '';
+  elements.farmerImportMsg.textContent = '';
+  elements.farmerImportSummary.textContent = '';
+  elements.farmerImportErrors.innerHTML = '';
+  elements.farmerImportErrors.classList.remove('import-errors');
   elements.produceMsg.textContent = '';
   elements.paymentMsg.textContent = '';
   elements.smsMsg.textContent = '';
