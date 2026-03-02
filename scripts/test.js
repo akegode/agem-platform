@@ -190,10 +190,10 @@ async function run() {
       method: 'POST',
       body: {
         name: 'Duplicate Grower',
-        phone: '254799000111',
+        phone: '254700111222',
         location: 'Muranga',
         hectares: 1.1,
-        username: farmerSelfUsername,
+        username: 'grower02',
         password: farmerSelfPassword,
         confirmPassword: farmerSelfPassword
       },
@@ -228,6 +228,19 @@ async function run() {
 
     const farmerId = farmer.data.id;
     assert.ok(farmerId, 'Farmer ID missing after create');
+
+    await request(baseUrl, '/api/farmers', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Grace Duplicate',
+        phone: '254711223344',
+        location: 'Kiambu',
+        hectares: 1.2,
+        trees: 10
+      },
+      expectStatus: 409
+    });
 
     const farmerPatchedArea = await request(baseUrl, `/api/farmers/${encodeURIComponent(farmerId)}`, {
       method: 'PATCH',
@@ -294,6 +307,7 @@ async function run() {
     });
     assert.strictEqual(importResponse.data.totalRows, 4);
     assert.strictEqual(importResponse.data.imported, 2);
+    assert.strictEqual(importResponse.data.updated || 0, 0);
     assert.strictEqual(importResponse.data.skipped, 2);
     assert.ok(Array.isArray(importResponse.data.errors), 'Expected row errors array');
     assert.ok(importResponse.data.errors.length >= 2, 'Expected duplicate and validation row errors');
@@ -313,6 +327,38 @@ async function run() {
     assert.ok(alice && Number.isFinite(Number(alice.hectares)), 'Expected hectares for Alice');
     assert.ok(Math.abs(Number(peter.hectares) - 1.821) < 0.02, 'Acreage to hectares conversion should be applied');
     assert.ok(Math.abs(Number(alice.hectares) - 1.0) < 0.02, 'Square-feet to hectares conversion should be applied');
+
+    const overwriteImport = await request(baseUrl, '/api/farmers/import', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        onDuplicate: 'overwrite',
+        records: [
+          {
+            name: 'Peter Mwangi Updated',
+            phone: '254700123456',
+            location: 'Embu',
+            hectares: 2.2,
+            trees: 33,
+            notes: 'Updated from import'
+          }
+        ]
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(overwriteImport.data.imported, 0);
+    assert.strictEqual(overwriteImport.data.updated, 1);
+    assert.strictEqual(overwriteImport.data.skipped, 0);
+    assert.strictEqual(overwriteImport.data.duplicateMode, 'overwrite');
+
+    const farmersAfterOverwrite = await request(baseUrl, '/api/farmers?limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const updatedPeter = (farmersAfterOverwrite.data || []).find((row) => row.phone === '254700123456');
+    assert.ok(updatedPeter, 'Expected updated farmer by phone');
+    assert.strictEqual(updatedPeter.location, 'Embu');
+    assert.ok(Math.abs(Number(updatedPeter.hectares) - 2.2) < 0.01);
 
     await request(baseUrl, '/api/produce', {
       method: 'POST',

@@ -9,6 +9,8 @@ This project is now a full working web application with authentication, role-bas
 - Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards), including farm size with auto-conversion across hectares, acres, and square feet
 - Bulk farmer import (CSV/Excel) for admin; required fields are mapped, extra columns ignored, and acreage/square-feet values are converted to hectares
+- Duplicate protection for admin/agent/farmer accounts and farmer phone records (no double registration)
+- Import duplicate handling: choose to keep existing farmer data or overwrite with incoming file data
 - Produce collection tracking
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint

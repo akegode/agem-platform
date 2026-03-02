@@ -701,6 +701,11 @@ function bindFarmers() {
         return;
       }
 
+      if (hasFarmerPhoneConflict(payload.phone, state.editingFarmerId)) {
+        elements.farmerMsg.textContent = 'A farmer with this phone number already exists.';
+        return;
+      }
+
       if (state.editingFarmerId) {
         const existing = state.farmers.find((row) => row.id === state.editingFarmerId);
         if (existing) {
@@ -758,6 +763,17 @@ function bindFarmers() {
         return;
       }
 
+      const duplicatePhones = findImportDuplicatePhones(records);
+      let duplicateMode = 'skip';
+      if (duplicatePhones.length) {
+        const overwrite = confirm(
+          `${duplicatePhones.length} farmer(s) from this file already exist in the database.\n\n` +
+          'Click OK to overwrite old farmer info with new file info.\n' +
+          'Click Cancel to keep old info and skip duplicates.'
+        );
+        duplicateMode = overwrite ? 'overwrite' : 'skip';
+      }
+
       let result = null;
       if (API.enabled) {
         if (!isAuthenticated()) {
@@ -767,12 +783,12 @@ function bindFarmers() {
 
         const response = await apiRequest('/api/farmers/import', {
           method: 'POST',
-          body: { records }
+          body: { records, onDuplicate: duplicateMode }
         });
         result = response.data || {};
         await fetchAllData();
       } else {
-        result = importFarmersLocal(records);
+        result = importFarmersLocal(records, { onDuplicate: duplicateMode });
         hydrateFarmerSelectors();
         renderAll();
         persist();
@@ -2152,13 +2168,19 @@ function clearFarmerImportResult() {
 function renderFarmerImportResult(result) {
   const totalRows = Number(result?.totalRows || 0);
   const imported = Number(result?.imported || 0);
+  const updated = Number(result?.updated || 0);
   const skipped = Number(result?.skipped || 0);
+  const duplicateMode = result?.duplicateMode || 'skip';
   const errors = Array.isArray(result?.errors) ? result.errors : [];
 
-  elements.farmerImportMsg.textContent = imported
-    ? `Import complete. ${imported} farmers added.`
-    : 'Import completed with no new farmers added.';
-  elements.farmerImportSummary.textContent = `Rows processed: ${totalRows}. Imported: ${imported}. Skipped: ${skipped}.`;
+  if (imported || updated) {
+    elements.farmerImportMsg.textContent = `Import complete. Added ${imported}, updated ${updated}.`;
+  } else {
+    elements.farmerImportMsg.textContent = 'Import completed with no new farmers added.';
+  }
+  elements.farmerImportSummary.textContent =
+    `Rows processed: ${totalRows}. Imported: ${imported}. Updated: ${updated}. Skipped: ${skipped}. ` +
+    `Duplicate mode: ${duplicateMode}.`;
 
   if (!errors.length) {
     elements.farmerImportErrors.innerHTML = '';
@@ -2331,13 +2353,40 @@ function validateImportedFarmer(mapped) {
   return '';
 }
 
-function importFarmersLocal(records) {
-  const existingPhones = new Set(
+function cleanPhone(value) {
+  return String(value ?? '').trim();
+}
+
+function hasFarmerPhoneConflict(phone, excludeId = '') {
+  const target = cleanPhone(phone);
+  if (!target) return false;
+  return state.farmers.some((row) => cleanPhone(row.phone) === target && row.id !== excludeId);
+}
+
+function findImportDuplicatePhones(records) {
+  const existingPhones = new Set(state.farmers.map((row) => cleanPhone(row.phone)).filter(Boolean));
+  const duplicates = new Set();
+
+  records.forEach((raw) => {
+    const mapped = mapFarmerImportRecordClient(raw);
+    const phone = cleanPhone(mapped.phone);
+    if (phone && existingPhones.has(phone)) {
+      duplicates.add(phone);
+    }
+  });
+
+  return [...duplicates];
+}
+
+function importFarmersLocal(records, options = {}) {
+  const onDuplicate = options.onDuplicate === 'overwrite' ? 'overwrite' : 'skip';
+  const farmersByPhone = new Map(
     state.farmers
-      .map((row) => String(row.phone || '').trim())
-      .filter(Boolean)
+      .map((row) => [cleanPhone(row.phone), row])
+      .filter(([phone]) => Boolean(phone))
   );
   const created = [];
+  const updated = [];
   const errors = [];
   const now = Date.now();
 
@@ -2354,14 +2403,25 @@ function importFarmersLocal(records) {
       return;
     }
 
-    const phone = String(mapped.phone || '').trim();
-    if (existingPhones.has(phone)) {
-      errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+    const phone = cleanPhone(mapped.phone);
+    const existing = farmersByPhone.get(phone);
+    if (existing) {
+      if (onDuplicate === 'overwrite') {
+        existing.name = mapped.name;
+        existing.phone = phone;
+        existing.location = mapped.location;
+        existing.hectares = Number(mapped.hectares.toFixed(3));
+        existing.trees = Number(mapped.trees.toFixed(2));
+        existing.notes = mapped.notes;
+        existing.updatedAt = new Date().toISOString();
+        updated.push(existing.id);
+      } else {
+        errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+      }
       return;
     }
 
-    existingPhones.add(phone);
-    created.push({
+    const record = {
       id: `F-${now}-${idx + 1}`,
       name: mapped.name,
       phone,
@@ -2372,7 +2432,9 @@ function importFarmersLocal(records) {
       createdBy: 'local',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    });
+    };
+    farmersByPhone.set(phone, record);
+    created.push(record);
   });
 
   if (created.length) {
@@ -2382,7 +2444,9 @@ function importFarmersLocal(records) {
   return {
     totalRows: records.length,
     imported: created.length,
-    skipped: records.length - created.length,
+    updated: updated.length,
+    skipped: records.length - created.length - updated.length,
+    duplicateMode: onDuplicate,
     errors: errors.slice(0, 250)
   };
 }

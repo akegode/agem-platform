@@ -174,7 +174,8 @@ function upsertConfiguredStaffUsers(store) {
   let changed = false;
 
   for (const account of accounts) {
-    const existing = store.users.find((row) => row.username === account.username);
+    const accountKey = normalizedUsername(account.username);
+    const existing = store.users.find((row) => normalizedUsername(row.username) === accountKey);
     if (!existing) {
       store.users.push({
         id: id('USR'),
@@ -206,6 +207,15 @@ function upsertConfiguredStaffUsers(store) {
         existing.password = hashPassword(account.password);
       }
       existing.updatedAt = nowIso();
+      changed = true;
+    }
+
+    for (const user of store.users) {
+      if (!user || user.id === existing.id) continue;
+      if (user.role !== account.role) continue;
+      if (user.status !== 'active') continue;
+      user.status = 'disabled';
+      user.updatedAt = nowIso();
       changed = true;
     }
   }
@@ -513,6 +523,12 @@ function resolveHectares(payload) {
 
 function findById(list, entityId) {
   return list.find((row) => row.id === entityId);
+}
+
+function findFarmerByPhone(list, phone, excludeId = '') {
+  const target = clean(phone);
+  if (!target) return null;
+  return list.find((row) => clean(row.phone) === target && row.id !== excludeId) || null;
 }
 
 function safeQueryInt(searchParams, key, fallback, max = 1000) {
@@ -893,6 +909,10 @@ const server = http.createServer(async (req, res) => {
         json(res, 409, { error: 'Username is already taken.' });
         return;
       }
+      if (findFarmerByPhone(store.farmers, phone)) {
+        json(res, 409, { error: 'A farmer with this phone number already exists.' });
+        return;
+      }
 
       const user = {
         id: id('USR'),
@@ -1244,6 +1264,10 @@ const server = http.createServer(async (req, res) => {
         json(res, 422, { error: invalid });
         return;
       }
+      if (findFarmerByPhone(store.farmers, payload.phone)) {
+        json(res, 409, { error: 'A farmer with this phone number already exists.' });
+        return;
+      }
 
       const record = {
         id: id('F'),
@@ -1291,8 +1315,14 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const existingPhones = new Set(store.farmers.map((row) => clean(row.phone)).filter(Boolean));
+      const onDuplicate = clean(payload.onDuplicate).toLowerCase() === 'overwrite' ? 'overwrite' : 'skip';
+      const farmersByPhone = new Map(
+        store.farmers
+          .map((row) => [clean(row.phone), row])
+          .filter(([phone]) => Boolean(phone))
+      );
       const created = [];
+      const updated = [];
       const errors = [];
 
       records.forEach((raw, idx) => {
@@ -1309,8 +1339,20 @@ const server = http.createServer(async (req, res) => {
         }
 
         const phone = clean(mapped.phone);
-        if (existingPhones.has(phone)) {
-          errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+        const existing = farmersByPhone.get(phone);
+        if (existing) {
+          if (onDuplicate === 'overwrite') {
+            existing.name = clean(mapped.name);
+            existing.phone = phone;
+            existing.location = clean(mapped.location);
+            existing.trees = Number(parseTrees(mapped.trees).toFixed(2));
+            existing.hectares = Number(resolveHectares(mapped).toFixed(3));
+            existing.notes = clean(mapped.notes);
+            existing.updatedAt = nowIso();
+            updated.push(existing.id);
+          } else {
+            errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+          }
           return;
         }
 
@@ -1327,18 +1369,20 @@ const server = http.createServer(async (req, res) => {
           updatedAt: nowIso()
         };
 
-        existingPhones.add(phone);
+        farmersByPhone.set(phone, record);
         created.push(record);
       });
 
-      if (created.length) {
+      if (created.length || updated.length) {
         store.farmers = created.reverse().concat(store.farmers);
         addActivity(store, {
           actor: auth.session.username,
           role: auth.session.role,
           action: 'farmer.import',
           entity: 'farmer',
-          details: `Imported ${created.length} farmers (skipped ${records.length - created.length})`
+          details:
+            `Imported ${created.length}, updated ${updated.length}, skipped ${records.length - created.length - updated.length}` +
+            ` (duplicate mode: ${onDuplicate})`
         });
         writeStore(store);
       }
@@ -1347,7 +1391,9 @@ const server = http.createServer(async (req, res) => {
         data: {
           totalRows: records.length,
           imported: created.length,
-          skipped: records.length - created.length,
+          updated: updated.length,
+          skipped: records.length - created.length - updated.length,
+          duplicateMode: onDuplicate,
           errors: errors.slice(0, 250)
         }
       });
@@ -1413,6 +1459,13 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         farmer.trees = Number(trees.toFixed(2));
+      }
+      if (payload.phone !== undefined) {
+        const duplicate = findFarmerByPhone(store.farmers, payload.phone, farmer.id);
+        if (duplicate) {
+          json(res, 409, { error: 'A farmer with this phone number already exists.' });
+          return;
+        }
       }
       if (
         payload.hectares !== undefined ||
