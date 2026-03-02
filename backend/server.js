@@ -14,6 +14,21 @@ const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const ACTIVITY_CAP = 1000;
 
+function envValue(key) {
+  return String(process.env[key] || '').trim();
+}
+
+const RUNNING_ON_RENDER = Boolean(envValue('RENDER'));
+const ALLOW_DEMO_USERS =
+  envValue('ALLOW_DEMO_USERS') === 'true' ||
+  (!RUNNING_ON_RENDER && envValue('ALLOW_DEMO_USERS') !== 'false');
+
+const INSECURE_DEMO_ACCOUNTS = [
+  { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
+  { username: 'agent', password: 'agent123', role: 'agent', name: 'Field Agent' },
+  { username: 'farmer', password: 'farmer123', role: 'farmer', name: 'Registered Farmer' }
+];
+
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -60,14 +75,8 @@ function verifyPassword(plain, saved) {
   return crypto.timingSafeEqual(left, right);
 }
 
-function seededUsers() {
-  const defaults = [
-    { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
-    { username: 'agent', password: 'agent123', role: 'agent', name: 'Field Agent' },
-    { username: 'farmer', password: 'farmer123', role: 'farmer', name: 'Registered Farmer' }
-  ];
-
-  return defaults.map((user) => ({
+function seededDemoUsers() {
+  return INSECURE_DEMO_ACCOUNTS.map((user) => ({
     id: id('USR'),
     username: user.username,
     name: user.name,
@@ -78,14 +87,124 @@ function seededUsers() {
   }));
 }
 
+function configuredStaffAccounts() {
+  const accounts = [];
+  const adminUsername = envValue('ADMIN_USERNAME');
+  const adminPassword = process.env.ADMIN_PASSWORD || '';
+  const adminName = envValue('ADMIN_NAME') || 'Platform Administrator';
+
+  if (adminUsername && adminPassword) {
+    accounts.push({
+      username: adminUsername,
+      password: adminPassword,
+      role: 'admin',
+      name: adminName
+    });
+  }
+
+  const agentUsername = envValue('AGENT_USERNAME');
+  const agentPassword = process.env.AGENT_PASSWORD || '';
+  const agentName = envValue('AGENT_NAME') || 'Field Agent';
+
+  if (agentUsername && agentPassword) {
+    accounts.push({
+      username: agentUsername,
+      password: agentPassword,
+      role: 'agent',
+      name: agentName
+    });
+  }
+
+  return accounts;
+}
+
+function isInsecureDemoUser(user) {
+  const matchedDemo = INSECURE_DEMO_ACCOUNTS.find(
+    (demo) => demo.username === user.username && demo.role === user.role
+  );
+  if (!matchedDemo) return false;
+  return verifyPassword(matchedDemo.password, user.password);
+}
+
+function disableInsecureDemoUsers(store) {
+  let changed = false;
+
+  for (const user of store.users) {
+    if (!user || !user.password || !user.password.hash) continue;
+    if (!isInsecureDemoUser(user)) continue;
+    if (user.status === 'disabled') continue;
+
+    user.status = 'disabled';
+    user.updatedAt = nowIso();
+    changed = true;
+  }
+
+  return changed;
+}
+
+function upsertConfiguredStaffUsers(store) {
+  const accounts = configuredStaffAccounts();
+  let changed = false;
+
+  for (const account of accounts) {
+    const existing = store.users.find((row) => row.username === account.username);
+    if (!existing) {
+      store.users.push({
+        id: id('USR'),
+        username: account.username,
+        name: account.name,
+        role: account.role,
+        status: 'active',
+        password: hashPassword(account.password),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      });
+      changed = true;
+      continue;
+    }
+
+    const roleChanged = existing.role !== account.role;
+    const nameChanged = existing.name !== account.name;
+    const statusChanged = existing.status !== 'active';
+    const passwordChanged = !verifyPassword(account.password, existing.password);
+
+    if (roleChanged || nameChanged || statusChanged || passwordChanged) {
+      existing.role = account.role;
+      existing.name = account.name;
+      existing.status = 'active';
+      existing.password = hashPassword(account.password);
+      existing.updatedAt = nowIso();
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+function activeUserCount(store) {
+  return store.users.filter((u) => u && u.status === 'active' && u.password && u.password.hash).length;
+}
+
+function applyUserPolicy(store) {
+  let changed = false;
+
+  if (!ALLOW_DEMO_USERS) {
+    changed = disableInsecureDemoUsers(store) || changed;
+  }
+
+  changed = upsertConfiguredStaffUsers(store) || changed;
+  return changed;
+}
+
 function freshStore() {
   return {
     meta: {
       version: 2,
       createdAt: nowIso(),
-      lastWriteAt: nowIso()
+      lastWriteAt: nowIso(),
+      authMode: ALLOW_DEMO_USERS ? 'demo' : 'private'
     },
-    users: seededUsers(),
+    users: ALLOW_DEMO_USERS ? seededDemoUsers() : [],
     farmers: [],
     produce: [],
     payments: [],
@@ -109,12 +228,14 @@ function normalizeStore(raw) {
 
   if (!store.meta.createdAt) store.meta.createdAt = nowIso();
   store.meta.version = 2;
+  store.meta.authMode = ALLOW_DEMO_USERS ? 'demo' : 'private';
 
   const usersValid = store.users.some((u) => u && u.username && u.password && u.password.hash);
   if (!usersValid) {
-    store.users = seededUsers();
+    store.users = ALLOW_DEMO_USERS ? seededDemoUsers() : [];
   }
 
+  applyUserPolicy(store);
   pruneExpiredSessions(store);
   return store;
 }
@@ -253,12 +374,20 @@ function currentSession(req, store) {
   const session = store.sessions[token];
   if (!session) return null;
 
+  const currentUser = store.users.find(
+    (user) => user && user.status === 'active' && (user.id === session.userId || user.username === session.username)
+  );
+  if (!currentUser) {
+    delete store.sessions[token];
+    return null;
+  }
+
   return {
     token,
-    userId: session.userId,
-    username: session.username,
-    name: session.name,
-    role: session.role,
+    userId: currentUser.id,
+    username: currentUser.username,
+    name: currentUser.name,
+    role: currentUser.role,
     createdAt: session.createdAt,
     expiresAt: session.expiresAt
   };
@@ -477,6 +606,14 @@ const server = http.createServer(async (req, res) => {
       const username = clean(payload.username);
       const password = String(payload.password || '');
       const store = readStore();
+
+      if (activeUserCount(store) === 0) {
+        json(res, 503, {
+          error:
+            'No active staff accounts configured. Set ADMIN_USERNAME and ADMIN_PASSWORD in environment variables, then redeploy.'
+        });
+        return;
+      }
 
       const user = store.users.find((row) => row.username === username && row.status === 'active');
       if (!user || !verifyPassword(password, user.password)) {

@@ -60,6 +60,10 @@ async function run() {
   const storePath = path.join(tempDir, 'store.json');
   const port = 19000 + Math.floor(Math.random() * 1000);
   const baseUrl = `http://127.0.0.1:${port}`;
+  const adminUsername = 'opsadmin';
+  const adminPassword = 'OpsAdmin#2026!';
+  const agentUsername = 'fieldagent';
+  const agentPassword = 'FieldAgent#2026!';
 
   const server = spawn('node', ['backend/server.js'], {
     cwd: root,
@@ -67,7 +71,12 @@ async function run() {
       ...process.env,
       HOST: '127.0.0.1',
       PORT: String(port),
-      STORE_PATH: storePath
+      STORE_PATH: storePath,
+      ALLOW_DEMO_USERS: 'false',
+      ADMIN_USERNAME: adminUsername,
+      ADMIN_PASSWORD: adminPassword,
+      AGENT_USERNAME: agentUsername,
+      AGENT_PASSWORD: agentPassword
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -84,7 +93,7 @@ async function run() {
 
     const adminLogin = await request(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { username: 'admin', password: 'admin123' },
+      body: { username: adminUsername, password: adminPassword },
       expectStatus: 200
     });
     const adminToken = adminLogin.data.token;
@@ -92,7 +101,7 @@ async function run() {
 
     const agentLogin = await request(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { username: 'agent', password: 'agent123' },
+      body: { username: agentUsername, password: agentPassword },
       expectStatus: 200
     });
     const agentToken = agentLogin.data.token;
