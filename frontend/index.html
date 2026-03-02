@@ -270,16 +270,13 @@
                 <form id="agentForm">
                   <div class="row">
                     <input required id="agentName" placeholder="Agent full name">
-                    <input required id="agentUsername" placeholder="Agent username">
-                  </div>
-                  <div class="row">
-                    <input required id="agentPassword" type="password" placeholder="Temporary password">
-                    <input required id="agentConfirmPassword" type="password" placeholder="Confirm password">
+                    <input required id="agentEmail" type="email" placeholder="Agent email">
                   </div>
                   <button class="primary" type="submit">Create Agent</button>
                   <div class="success" id="agentMsg"></div>
+                  <div id="agentCredentials" class="empty" hidden></div>
                 </form>
-                <p class="meta compact">Agents created here can sign in immediately and then update their own password.</p>
+                <p class="meta compact">The portal auto-generates a temporary username and password. Share it securely with the agent.</p>
               </div>
             </details>
 
@@ -287,7 +284,7 @@
               <summary>Registered Agents</summary>
               <div class="dropdown-body">
                 <div class="row">
-                  <input id="agentSearch" placeholder="Search by name, username, or status">
+                  <input id="agentSearch" placeholder="Search by name, username, email, or status">
                   <button class="secondary" id="agentRefreshBtn" type="button">Search</button>
                 </div>
                 <div id="agentTableWrap"></div>

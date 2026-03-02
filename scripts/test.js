@@ -67,8 +67,7 @@ async function run() {
   const agentUsername = 'fieldagent';
   const agentPassword = 'FieldAgent#2026!';
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
-  const additionalAgentUsername = 'fieldagent2';
-  const additionalAgentPassword = 'FieldAgent2#2026!';
+  const additionalAgentEmail = 'mary.wanjiku@agemlimited.com';
   const agentRecoveryCode = 'AgentRecovery#2026';
   const farmerSelfUsername = 'grower01';
   const farmerSelfPassword = 'GrowerPass#2026!';
@@ -182,23 +181,24 @@ async function run() {
       token: adminToken,
       body: {
         name: 'Mary Wanjiku',
-        username: additionalAgentUsername,
-        password: additionalAgentPassword,
-        confirmPassword: additionalAgentPassword
+        email: additionalAgentEmail
       },
       expectStatus: 201
     });
     assert.strictEqual(createAgent.data.role, 'agent');
-    assert.strictEqual(createAgent.data.username, additionalAgentUsername);
+    assert.strictEqual(createAgent.data.email, additionalAgentEmail);
+    assert.ok(/^[a-z0-9._-]{3,32}$/.test(createAgent.data.username), 'Expected generated username format');
+    assert.ok(
+      typeof createAgent.data.temporaryPassword === 'string' && createAgent.data.temporaryPassword.length >= 10,
+      'Expected generated temporary password'
+    );
 
     await request(baseUrl, '/api/agents', {
       method: 'POST',
       token: adminToken,
       body: {
         name: 'Duplicate Agent',
-        username: additionalAgentUsername,
-        password: additionalAgentPassword,
-        confirmPassword: additionalAgentPassword
+        email: additionalAgentEmail
       },
       expectStatus: 409
     });
@@ -209,12 +209,13 @@ async function run() {
     });
     assert.ok(Array.isArray(agentsList.data), 'Expected list of agents');
     const agentUsernames = new Set((agentsList.data || []).map((row) => row.username));
+    const agentEmails = new Set((agentsList.data || []).map((row) => row.email).filter(Boolean));
     assert.ok(agentUsernames.has(agentUsername), 'Expected env agent in list');
-    assert.ok(agentUsernames.has(additionalAgentUsername), 'Expected created agent in list');
+    assert.ok(agentEmails.has(additionalAgentEmail), 'Expected created agent email in list');
 
     await request(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { username: additionalAgentUsername, password: additionalAgentPassword },
+      body: { username: createAgent.data.username, password: createAgent.data.temporaryPassword },
       expectStatus: 200
     });
 

@@ -5,7 +5,7 @@ This project is now a full working web application with authentication, role-bas
 ## What is implemented
 - Secure sign-in sessions with private staff accounts (admin, agent roles)
 - Farmer self-registration from the sign-in card (creates farmer account + farmer profile)
-- Admin-only agent account management (create and list multiple agent logins inside the portal)
+- Admin-only agent account management (enter name + email, auto-generate temporary username/password, and list multiple agent logins)
 - Signed-in password change flow
 - Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards) with mandatory National ID, total farm size + area under avocado, and auto-conversion across hectares, acres, and square feet
@@ -92,5 +92,5 @@ Your current website stays as-is, and this app runs as a portal under a subdomai
 - Excel import parsing is handled in-browser via the `xlsx` CDN script; CSV import works without it.
 - Default demo credentials are disabled when `ALLOW_DEMO_USERS=false` (recommended for production).
 - Farmer self-registration can be turned off by setting `ALLOW_FARMER_REGISTRATION=false`.
-- Admins can create additional agent accounts from the in-app **Agents** section; env `AGENT_*` is only the initial bootstrap agent.
+- Admins can create additional agent accounts from the in-app **Agents** section by entering agent name and email. The portal auto-generates temporary login credentials, and env `AGENT_*` remains the initial bootstrap agent.
 - If you later install PHP/Composer/MySQL/Redis, this can be migrated to Laravel + React/Inertia exactly as planned.

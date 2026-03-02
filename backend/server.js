@@ -499,11 +499,79 @@ function findUserByUsername(store, username) {
   return store.users.find((row) => normalizedUsername(row.username) === target);
 }
 
+function normalizedEmail(value) {
+  return clean(value).toLowerCase();
+}
+
+function isValidEmail(value) {
+  const email = normalizedEmail(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function findUserByEmail(store, email) {
+  const target = normalizedEmail(email);
+  if (!target) return null;
+  return store.users.find((row) => normalizedEmail(row.email) === target) || null;
+}
+
+function baseAgentUsername(name) {
+  const normalized = clean(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '.')
+    .replace(/^\.+|\.+$/g, '');
+  const fallback = normalized || 'agent';
+  return fallback.slice(0, 24);
+}
+
+function generateAgentUsername(store, name) {
+  const base = baseAgentUsername(name);
+  for (let i = 0; i < 200; i += 1) {
+    const suffix = String(crypto.randomInt(1000, 9999));
+    let candidate = `${base}.${suffix}`;
+    if (candidate.length > 32) {
+      const maxBase = Math.max(3, 32 - (suffix.length + 1));
+      candidate = `${base.slice(0, maxBase)}.${suffix}`;
+    }
+    if (!findUserByUsername(store, candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error('Could not generate a unique username. Try again.');
+}
+
+function generateTemporaryPassword(length = 12) {
+  const lowers = 'abcdefghijkmnopqrstuvwxyz';
+  const uppers = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const digits = '23456789';
+  const symbols = '!@#$%&*?';
+  const all = `${lowers}${uppers}${digits}${symbols}`;
+
+  const chars = [
+    lowers[crypto.randomInt(0, lowers.length)],
+    uppers[crypto.randomInt(0, uppers.length)],
+    digits[crypto.randomInt(0, digits.length)],
+    symbols[crypto.randomInt(0, symbols.length)]
+  ];
+  while (chars.length < length) {
+    chars.push(all[crypto.randomInt(0, all.length)]);
+  }
+
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(0, i + 1);
+    const tmp = chars[i];
+    chars[i] = chars[j];
+    chars[j] = tmp;
+  }
+
+  return chars.join('');
+}
+
 function agentView(user) {
   return {
     id: user.id,
     username: user.username,
     name: user.name || '',
+    email: user.email || '',
     role: user.role || 'agent',
     status: user.status || 'active',
     provisioning: user.provisioning || 'admin',
@@ -1694,7 +1762,7 @@ const server = http.createServer(async (req, res) => {
 
     if (query) {
       rows = rows.filter((row) =>
-        [row.username, row.name, row.status, row.provisioning].some((field) =>
+        [row.username, row.name, row.email, row.status, row.provisioning].some((field) =>
           clean(field).toLowerCase().includes(query)
         )
       );
@@ -1735,43 +1803,31 @@ const server = http.createServer(async (req, res) => {
 
       const payload = await readBody(req);
       const name = clean(payload.name);
-      const username = normalizedUsername(payload.username);
-      const password = String(payload.password || '');
-      const confirmPassword = payload.confirmPassword === undefined
-        ? password
-        : String(payload.confirmPassword || '');
+      const email = normalizedEmail(payload.email);
 
-      if (!name || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, username, password, and confirmPassword are required.' });
+      if (!name || !email) {
+        json(res, 422, { error: 'name and email are required.' });
         return;
       }
-      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-        json(res, 422, { error: 'Username must be 3-32 chars and contain only letters, numbers, dot, underscore, or dash.' });
+      if (!isValidEmail(email)) {
+        json(res, 422, { error: 'Enter a valid email address.' });
         return;
       }
-      if (!secureEquals(password, confirmPassword)) {
-        json(res, 422, { error: 'Password confirmation does not match.' });
+      if (findUserByEmail(store, email)) {
+        json(res, 409, { error: 'This email is already linked to an existing user.' });
         return;
       }
-
-      const invalidPassword = validateNewPassword(password);
-      if (invalidPassword) {
-        json(res, 422, { error: invalidPassword });
-        return;
-      }
-
-      if (findUserByUsername(store, username)) {
-        json(res, 409, { error: 'Username is already taken.' });
-        return;
-      }
+      const username = generateAgentUsername(store, name);
+      const temporaryPassword = generateTemporaryPassword();
 
       const agent = {
         id: id('USR'),
         username,
         name,
+        email,
         role: 'agent',
         status: 'active',
-        password: hashPassword(password),
+        password: hashPassword(temporaryPassword),
         provisioning: 'admin',
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -1784,11 +1840,16 @@ const server = http.createServer(async (req, res) => {
         action: 'agent.create',
         entity: 'user',
         entityId: agent.id,
-        details: `Created agent account ${agent.username}`
+        details: `Created agent account ${agent.username} (${agent.email})`
       });
 
       writeStore(store);
-      json(res, 201, { data: agentView(agent) });
+      json(res, 201, {
+        data: {
+          ...agentView(agent),
+          temporaryPassword
+        }
+      });
     } catch (error) {
       json(res, 400, { error: error.message });
     }

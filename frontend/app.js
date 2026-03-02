@@ -122,10 +122,9 @@ const elements = {
   farmerTableWrap: document.getElementById('farmerTableWrap'),
   agentForm: document.getElementById('agentForm'),
   agentName: document.getElementById('agentName'),
-  agentUsername: document.getElementById('agentUsername'),
-  agentPassword: document.getElementById('agentPassword'),
-  agentConfirmPassword: document.getElementById('agentConfirmPassword'),
+  agentEmail: document.getElementById('agentEmail'),
   agentMsg: document.getElementById('agentMsg'),
+  agentCredentials: document.getElementById('agentCredentials'),
   agentSearch: document.getElementById('agentSearch'),
   agentRefreshBtn: document.getElementById('agentRefreshBtn'),
   agentTableWrap: document.getElementById('agentTableWrap'),
@@ -707,6 +706,7 @@ function bindAuth() {
     smsPicker.total = 0;
     smsPicker.offset = 0;
     state.agents = [];
+    clearAgentCredentialDisplay();
     elements.registrationPanel.open = false;
     elements.recoveryPanel.open = false;
 
@@ -1020,6 +1020,7 @@ function bindAgents() {
   elements.agentForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     clearMessages();
+    clearAgentCredentialDisplay();
 
     if (currentRole() !== 'admin') {
       elements.agentMsg.textContent = 'Only administrators can create agent accounts.';
@@ -1035,31 +1036,25 @@ function bindAgents() {
     }
 
     const name = elements.agentName.value.trim();
-    const username = elements.agentUsername.value.trim().toLowerCase();
-    const password = elements.agentPassword.value;
-    const confirmPassword = elements.agentConfirmPassword.value;
+    const email = elements.agentEmail.value.trim().toLowerCase();
 
-    if (!name || !username || !password || !confirmPassword) {
-      elements.agentMsg.textContent = 'Name, username, and both password fields are required.';
+    if (!name || !email) {
+      elements.agentMsg.textContent = 'Name and email are required.';
       return;
     }
-    if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-      elements.agentMsg.textContent =
-        'Username must be 3-32 characters using letters, numbers, dot, underscore, or dash.';
-      return;
-    }
-    if (password !== confirmPassword) {
-      elements.agentMsg.textContent = 'Password confirmation does not match.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      elements.agentMsg.textContent = 'Enter a valid email address.';
       return;
     }
 
     try {
       const response = await apiRequest('/api/agents', {
         method: 'POST',
-        body: { name, username, password, confirmPassword }
+        body: { name, email }
       });
       elements.agentForm.reset();
-      elements.agentMsg.textContent = `Agent account created: ${response.data.username}`;
+      elements.agentMsg.textContent = `Agent account created for ${response.data.name}.`;
+      showAgentCredentialDisplay(response.data);
       await loadAgentAccounts();
     } catch (error) {
       elements.agentMsg.textContent = error.message;
@@ -1086,6 +1081,33 @@ function bindAgents() {
       elements.agentMsg.textContent = error.message;
     }
   });
+}
+
+function showAgentCredentialDisplay(data) {
+  if (!elements.agentCredentials) return;
+  const username = String(data?.username || '').trim();
+  const temporaryPassword = String(data?.temporaryPassword || '').trim();
+  const email = String(data?.email || '').trim();
+  if (!username || !temporaryPassword) {
+    elements.agentCredentials.hidden = true;
+    elements.agentCredentials.textContent = '';
+    return;
+  }
+
+  elements.agentCredentials.hidden = false;
+  elements.agentCredentials.innerHTML = `
+    <strong>Temporary login created.</strong><br>
+    Email: <code>${escapeHtml(email || '-')}</code><br>
+    Username: <code>${escapeHtml(username)}</code><br>
+    Password: <code>${escapeHtml(temporaryPassword)}</code><br>
+    <span class="meta compact">Share these once, then ask the agent to change password after first sign-in.</span>
+  `;
+}
+
+function clearAgentCredentialDisplay() {
+  if (!elements.agentCredentials) return;
+  elements.agentCredentials.hidden = true;
+  elements.agentCredentials.textContent = '';
 }
 
 function bindProduce() {
@@ -2681,9 +2703,7 @@ function updatePermissionUi() {
   elements.farmerImportBtn.disabled = !importAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
   elements.agentName.disabled = !agentManageAllowed;
-  elements.agentUsername.disabled = !agentManageAllowed;
-  elements.agentPassword.disabled = !agentManageAllowed;
-  elements.agentConfirmPassword.disabled = !agentManageAllowed;
+  elements.agentEmail.disabled = !agentManageAllowed;
   elements.agentRefreshBtn.disabled = !agentManageAllowed;
   elements.agentSearch.disabled = !agentManageAllowed;
   elements.agentForm.querySelector('button[type="submit"]').disabled = !agentManageAllowed;
@@ -2696,6 +2716,9 @@ function updatePermissionUi() {
   }
   if (!agentManageAllowed && elements.agentsPane?.classList.contains('active')) {
     setActivePane('overview');
+  }
+  if (!agentManageAllowed) {
+    clearAgentCredentialDisplay();
   }
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
@@ -2876,6 +2899,7 @@ function renderAgents() {
       <tr>
         <td>${escapeHtml(agent.name || '-')}</td>
         <td>${escapeHtml(agent.username || '-')}</td>
+        <td>${escapeHtml(agent.email || '-')}</td>
         <td>${escapeHtml(agent.status || '-')}</td>
         <td>${escapeHtml(agent.provisioning === 'environment' ? 'Environment' : 'Admin')}</td>
         <td>${escapeHtml(dateShort(agent.updatedAt || agent.createdAt))}</td>
@@ -2889,6 +2913,7 @@ function renderAgents() {
         <tr>
           <th>Name</th>
           <th>Username</th>
+          <th>Email</th>
           <th>Status</th>
           <th>Source</th>
           <th>Updated</th>
