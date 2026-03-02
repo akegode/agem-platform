@@ -275,7 +275,7 @@
                   </div>
                   <div class="row">
                     <input required id="purchaseKgs" type="number" min="0.1" step="0.1" placeholder="Purchased weight (kg)">
-                    <input id="purchasePricePerKgKes" type="number" min="0.1" step="0.1" placeholder="Price per kg (KES, optional)">
+                    <input id="purchasePricePerKgKes" type="number" min="0.1" step="0.1" placeholder="Agreed/contract price per kg (KES)">
                   </div>
                   <div class="row">
                     <select id="purchaseVariety">
@@ -391,6 +391,36 @@
           <h2>Payments & M-PESA</h2>
           <div class="grid">
             <details class="dropdown-card" open>
+              <summary>Farmers Owed (From Produce Purchases)</summary>
+              <div class="dropdown-body">
+                <div class="row">
+                  <select id="owedPeriod">
+                    <option value="today">Today</option>
+                    <option value="week">Last 7 Days</option>
+                    <option value="month" selected>This Month</option>
+                    <option value="all">All Dates</option>
+                  </select>
+                  <input id="owedFromDate" type="date">
+                </div>
+                <div class="row">
+                  <input id="owedToDate" type="date">
+                  <input id="owedSearch" placeholder="Search owed farmers by name, phone, ID, or location">
+                </div>
+                <div class="inline-actions wrap">
+                  <button class="secondary" id="owedRefreshBtn" type="button">Refresh Owed</button>
+                  <button class="secondary" id="owedSelectVisibleBtn" type="button">Select Visible</button>
+                  <button class="secondary" id="owedClearSelectedBtn" type="button">Clear Selected</button>
+                  <button class="secondary" id="owedPrepareBtn" type="button">Prepare Selected (Pending)</button>
+                  <button class="primary" id="owedPaySelectedBtn" type="button">Pay Selected Now</button>
+                  <button class="secondary" id="owedExportBtn" type="button">Export Owed CSV</button>
+                </div>
+                <p class="meta compact" id="owedSummary">No owed balances loaded yet.</p>
+                <div id="owedTableWrap"></div>
+                <div class="success" id="owedMsg"></div>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
               <summary>Log Payment / Disbursement</summary>
               <div class="dropdown-body">
               <form id="paymentForm">

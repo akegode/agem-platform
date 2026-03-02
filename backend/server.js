@@ -310,6 +310,7 @@ function normalizeStore(raw) {
     }
   }
 
+  reconcileProducePurchases(store);
   applyUserPolicy(store);
   pruneExpiredSessions(store);
   return store;
@@ -715,6 +716,10 @@ function validateProducePurchase(payload) {
   const valueRaw = clean(payload.purchaseValueKes);
   if (valueRaw && !(parseNumber(valueRaw) > 0)) return 'purchaseValueKes must be greater than 0 when provided';
 
+  if (!(parseNumber(payload.pricePerKgKes) > 0) && !(parseNumber(payload.purchaseValueKes) > 0)) {
+    return 'Provide either pricePerKgKes or purchaseValueKes';
+  }
+
   if (!clean(payload.buyer)) return 'buyer is required';
   return '';
 }
@@ -840,6 +845,208 @@ function normalizePaymentStatus(status) {
   return 'Failed';
 }
 
+function money(value) {
+  return Number(parseNumber(value).toFixed(2));
+}
+
+function valueFromPurchase(purchase) {
+  const explicitValue = parseNumber(purchase.purchaseValueKes);
+  if (explicitValue > 0) return money(explicitValue);
+  const pricePerKg = parseNumber(purchase.pricePerKgKes);
+  const purchasedKgs = parseNumber(purchase.purchasedKgs);
+  if (pricePerKg > 0 && purchasedKgs > 0) return money(pricePerKg * purchasedKgs);
+  return 0;
+}
+
+function dateMs(value) {
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function parseDateBound(raw, isEnd) {
+  const value = clean(raw);
+  if (!value) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const stamp = isEnd ? `${value}T23:59:59.999Z` : `${value}T00:00:00.000Z`;
+    const ms = new Date(stamp).getTime();
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function endOfDayUtc(now) {
+  const date = new Date(now);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999);
+}
+
+function startOfDayUtc(now) {
+  const date = new Date(now);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0);
+}
+
+function resolveRange(period, fromRaw, toRaw) {
+  const normalizedPeriod = clean(period).toLowerCase();
+  const now = Date.now();
+
+  let from = parseDateBound(fromRaw, false);
+  let to = parseDateBound(toRaw, true);
+
+  if (from !== null && to !== null && from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+
+  if (from === null && to === null) {
+    if (normalizedPeriod === 'today' || normalizedPeriod === 'day') {
+      from = startOfDayUtc(now);
+      to = endOfDayUtc(now);
+    } else if (normalizedPeriod === 'week') {
+      to = endOfDayUtc(now);
+      from = startOfDayUtc(now - 6 * 24 * 60 * 60 * 1000);
+    } else if (normalizedPeriod === 'month') {
+      const nowDate = new Date(now);
+      from = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1, 0, 0, 0, 0);
+      to = endOfDayUtc(now);
+    }
+  }
+
+  return {
+    period: normalizedPeriod || 'all',
+    from,
+    to
+  };
+}
+
+function isInRange(createdAt, range) {
+  const ms = dateMs(createdAt);
+  if (range.from !== null && ms < range.from) return false;
+  if (range.to !== null && ms > range.to) return false;
+  return true;
+}
+
+function reconcileProducePurchases(store) {
+  if (!Array.isArray(store.producePurchases)) {
+    store.producePurchases = [];
+  }
+
+  const receivedByFarmer = {};
+  for (const payment of store.payments || []) {
+    if (normalizePaymentStatus(payment.status) !== 'Received') continue;
+    const farmerId = clean(payment.farmerId);
+    if (!farmerId) continue;
+    receivedByFarmer[farmerId] = money((receivedByFarmer[farmerId] || 0) + money(payment.amount));
+  }
+
+  const purchasesChronological = [...store.producePurchases].sort((a, b) => dateMs(a.createdAt) - dateMs(b.createdAt));
+  for (const purchase of purchasesChronological) {
+    if (!purchase || typeof purchase !== 'object') continue;
+    const farmerId = clean(purchase.farmerId);
+    const purchasedKgs = money(purchase.purchasedKgs);
+    purchase.purchasedKgs = purchasedKgs;
+
+    const pricePerKg = parseNumber(purchase.pricePerKgKes);
+    purchase.pricePerKgKes = pricePerKg > 0 ? money(pricePerKg) : null;
+
+    const totalValue = valueFromPurchase(purchase);
+    purchase.purchaseValueKes = totalValue > 0 ? totalValue : null;
+
+    const available = money(receivedByFarmer[farmerId] || 0);
+    const paidAmountKes = totalValue > 0 ? money(Math.min(totalValue, available)) : 0;
+    const balanceKes = totalValue > 0 ? money(totalValue - paidAmountKes) : 0;
+
+    purchase.paidAmountKes = paidAmountKes;
+    purchase.balanceKes = balanceKes;
+
+    if (totalValue <= 0) {
+      purchase.settlementStatus = 'Unpriced';
+    } else if (paidAmountKes <= 0) {
+      purchase.settlementStatus = 'Unpaid';
+    } else if (balanceKes > 0) {
+      purchase.settlementStatus = 'Partially Paid';
+    } else {
+      purchase.settlementStatus = 'Paid';
+    }
+
+    receivedByFarmer[farmerId] = money(Math.max(0, available - paidAmountKes));
+  }
+}
+
+function buildOwedRows(store, options = {}) {
+  reconcileProducePurchases(store);
+
+  const range = resolveRange(options.period, options.from, options.to);
+  const farmersById = new Map((store.farmers || []).map((row) => [row.id, row]));
+  const byFarmer = new Map();
+
+  for (const purchase of store.producePurchases || []) {
+    if (!isInRange(purchase.createdAt, range)) continue;
+
+    const farmerId = clean(purchase.farmerId);
+    if (!farmerId) continue;
+
+    const balanceKes = money(purchase.balanceKes);
+    if (!(balanceKes > 0)) continue;
+
+    const farmer = farmersById.get(farmerId) || {};
+    if (!byFarmer.has(farmerId)) {
+      byFarmer.set(farmerId, {
+        farmerId,
+        farmerName: clean(purchase.farmerName) || clean(farmer.name),
+        phone: clean(farmer.phone),
+        nationalId: clean(farmer.nationalId),
+        location: clean(farmer.location),
+        purchaseCount: 0,
+        purchasedKgs: 0,
+        totalValueKes: 0,
+        paidKes: 0,
+        balanceKes: 0,
+        lastPurchaseAt: ''
+      });
+    }
+
+    const row = byFarmer.get(farmerId);
+    row.purchaseCount += 1;
+    row.purchasedKgs = money(row.purchasedKgs + money(purchase.purchasedKgs));
+    row.totalValueKes = money(row.totalValueKes + money(purchase.purchaseValueKes));
+    row.paidKes = money(row.paidKes + money(purchase.paidAmountKes));
+    row.balanceKes = money(row.balanceKes + balanceKes);
+
+    if (!row.lastPurchaseAt || dateMs(purchase.createdAt) > dateMs(row.lastPurchaseAt)) {
+      row.lastPurchaseAt = purchase.createdAt;
+    }
+  }
+
+  let rows = Array.from(byFarmer.values())
+    .filter((row) => row.balanceKes > 0)
+    .sort((a, b) => {
+      if (b.balanceKes !== a.balanceKes) return b.balanceKes - a.balanceKes;
+      return dateMs(b.lastPurchaseAt) - dateMs(a.lastPurchaseAt);
+    });
+
+  const q = clean(options.q).toLowerCase();
+  if (q) {
+    rows = rows.filter((row) =>
+      [row.farmerName, row.phone, row.nationalId, row.location].some((value) => clean(value).toLowerCase().includes(q))
+    );
+  }
+
+  const totalBalanceKes = money(rows.reduce((sum, row) => sum + money(row.balanceKes), 0));
+  return {
+    rows,
+    meta: {
+      period: range.period,
+      from: range.from ? new Date(range.from).toISOString() : '',
+      to: range.to ? new Date(range.to).toISOString() : '',
+      count: rows.length,
+      totalBalanceKes
+    }
+  };
+}
+
 function toCsv(rows, headers) {
   const head = headers.map((h) => h.label).join(',');
   const body = rows.map((row) => headers.map((h) => csvCell(row[h.key])).join(',')).join('\n');
@@ -902,9 +1109,11 @@ function sendFile(res, filePath) {
 }
 
 function makeSummary(store) {
+  reconcileProducePurchases(store);
   const totalProduceKg = store.produce.reduce((sum, row) => sum + Number(row.kgs || 0), 0);
   const totalPurchasedKg = store.producePurchases.reduce((sum, row) => sum + Number(row.purchasedKgs || 0), 0);
   const purchasedValueKes = store.producePurchases.reduce((sum, row) => sum + Number(row.purchaseValueKes || 0), 0);
+  const owed = buildOwedRows(store, { period: 'all' });
   const paymentsReceived = store.payments
     .filter((row) => row.status === 'Received')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -924,6 +1133,8 @@ function makeSummary(store) {
     totalProduceKg,
     totalPurchasedKg,
     purchasedValueKes,
+    owedFarmers: owed.meta.count || 0,
+    totalOwedKes: owed.meta.totalBalanceKes || 0,
     paymentsReceived,
     paymentSuccessRate,
     launchReady:
@@ -2094,6 +2305,9 @@ const server = http.createServer(async (req, res) => {
         purchasedKgs,
         pricePerKgKes,
         purchaseValueKes,
+        paidAmountKes: 0,
+        balanceKes: purchaseValueKes || 0,
+        settlementStatus: purchaseValueKes ? 'Unpaid' : 'Unpriced',
         buyer: clean(payload.buyer),
         notes: clean(payload.notes),
         createdBy: auth.session.username,
@@ -2143,6 +2357,138 @@ const server = http.createServer(async (req, res) => {
     });
     writeStore(store);
     json(res, 200, { data: { success: true } });
+    return;
+  }
+
+  if (pathname === '/api/payments/owed' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const owed = buildOwedRows(store, {
+      period: reqUrl.searchParams.get('period'),
+      from: reqUrl.searchParams.get('from'),
+      to: reqUrl.searchParams.get('to'),
+      q: reqUrl.searchParams.get('q')
+    });
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 500, 5000);
+
+    json(res, 200, {
+      data: owed.rows.slice(0, limit),
+      meta: {
+        ...owed.meta,
+        limit,
+        returned: Math.min(limit, owed.rows.length)
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/payments/settle' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const farmerIds = Array.isArray(payload.farmerIds) ? payload.farmerIds.map(clean).filter(Boolean) : [];
+      const payAll = payload.payAll === true;
+      const owed = buildOwedRows(store, {
+        period: payload.period,
+        from: payload.from,
+        to: payload.to,
+        q: payload.q
+      });
+
+      let targets = [];
+      if (payAll) {
+        targets = owed.rows;
+      } else {
+        const selected = new Set(farmerIds);
+        targets = owed.rows.filter((row) => selected.has(row.farmerId));
+      }
+
+      if (!targets.length) {
+        json(res, 422, { error: 'No farmers with outstanding balances selected in this date range.' });
+        return;
+      }
+
+      const status = normalizePaymentStatus(payload.status || 'Pending');
+      const method = clean(payload.method) || (status === 'Received' ? 'M-PESA(Mock)' : 'M-PESA');
+      const refPrefix = clean(payload.refPrefix) || (status === 'Received' ? 'MPB' : 'SET');
+      const noteBase = clean(payload.notes) || `Settlement from owed list (${owed.meta.period || 'all'})`;
+
+      const created = [];
+      let totalAmount = 0;
+      const stamp = Date.now().toString().slice(-8);
+      for (let index = 0; index < targets.length; index += 1) {
+        const row = targets[index];
+        const amount = money(row.balanceKes);
+        if (!(amount > 0)) continue;
+
+        totalAmount = money(totalAmount + amount);
+        const ref = `${refPrefix}${stamp}${String(index + 1).padStart(2, '0')}`;
+        const record = {
+          id: id('TX'),
+          farmerId: row.farmerId,
+          farmerName: row.farmerName,
+          amount,
+          ref,
+          status,
+          method,
+          notes: noteBase,
+          source: 'purchase-owed',
+          settlementPeriod: owed.meta.period || 'all',
+          settlementFrom: owed.meta.from || '',
+          settlementTo: owed.meta.to || '',
+          createdBy: auth.session.username,
+          createdAt: nowIso(),
+          updatedAt: nowIso()
+        };
+
+        store.payments.unshift(record);
+        created.push(record);
+      }
+
+      if (!created.length) {
+        json(res, 422, { error: 'No payable balances found for the selected farmers.' });
+        return;
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payment.bulk.settle',
+        entity: 'payment',
+        details: `Created ${created.length} settlement payments (KES ${totalAmount}) with status ${status}`
+      });
+      writeStore(store);
+
+      const refreshed = buildOwedRows(store, {
+        period: payload.period,
+        from: payload.from,
+        to: payload.to,
+        q: payload.q
+      });
+
+      json(res, 201, {
+        data: {
+          createdCount: created.length,
+          totalAmount,
+          status,
+          remainingOwedKes: refreshed.meta.totalBalanceKes,
+          payments: created
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
     return;
   }
 
@@ -2654,12 +3000,47 @@ const server = http.createServer(async (req, res) => {
       { key: 'purchasedKgs', label: 'purchasedKgs' },
       { key: 'pricePerKgKes', label: 'pricePerKgKes' },
       { key: 'purchaseValueKes', label: 'purchaseValueKes' },
+      { key: 'paidAmountKes', label: 'paidAmountKes' },
+      { key: 'balanceKes', label: 'balanceKes' },
+      { key: 'settlementStatus', label: 'settlementStatus' },
       { key: 'buyer', label: 'buyer' },
       { key: 'notes', label: 'notes' },
       { key: 'createdBy', label: 'createdBy' },
       { key: 'createdAt', label: 'createdAt' }
     ]);
     csv(res, 'produce-purchases.csv', csvData);
+    return;
+  }
+
+  if (pathname === '/api/exports/payments-owed.csv' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const owed = buildOwedRows(store, {
+      period: reqUrl.searchParams.get('period'),
+      from: reqUrl.searchParams.get('from'),
+      to: reqUrl.searchParams.get('to'),
+      q: reqUrl.searchParams.get('q')
+    });
+
+    const csvData = toCsv(owed.rows, [
+      { key: 'farmerId', label: 'farmerId' },
+      { key: 'farmerName', label: 'farmerName' },
+      { key: 'phone', label: 'phone' },
+      { key: 'nationalId', label: 'nationalId' },
+      { key: 'location', label: 'location' },
+      { key: 'purchaseCount', label: 'purchaseCount' },
+      { key: 'purchasedKgs', label: 'purchasedKgs' },
+      { key: 'totalValueKes', label: 'totalValueKes' },
+      { key: 'paidKes', label: 'paidKes' },
+      { key: 'balanceKes', label: 'balanceKes' },
+      { key: 'lastPurchaseAt', label: 'lastPurchaseAt' }
+    ]);
+    csv(res, 'payments-owed.csv', csvData);
     return;
   }
 
@@ -2679,6 +3060,10 @@ const server = http.createServer(async (req, res) => {
       { key: 'ref', label: 'ref' },
       { key: 'status', label: 'status' },
       { key: 'method', label: 'method' },
+      { key: 'source', label: 'source' },
+      { key: 'settlementPeriod', label: 'settlementPeriod' },
+      { key: 'settlementFrom', label: 'settlementFrom' },
+      { key: 'settlementTo', label: 'settlementTo' },
       { key: 'createdBy', label: 'createdBy' },
       { key: 'createdAt', label: 'createdAt' }
     ]);

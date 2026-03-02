@@ -740,12 +740,20 @@ button.table-btn.danger {
 
 #farmerTableWrap,
 #produceTableWrap,
+#purchaseTableWrap,
+#owedTableWrap,
 #paymentTableWrap,
 #smsTableWrap,
 #agentStatsWrap,
 #backupListWrap {
   max-height: 360px;
   overflow: auto;
+}
+
+.table-check {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 
 .scroll-top {

@@ -429,6 +429,56 @@ async function run() {
     });
     assert.ok(purchaseResponse.data.id, 'Produce purchase ID missing');
 
+    const owedBefore = await request(baseUrl, '/api/payments/owed?period=all', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const owedBeforeRow = (owedBefore.data || []).find((row) => row.farmerId === farmerId);
+    assert.ok(owedBeforeRow, 'Expected farmer to appear in owed list');
+    const owedBalanceBefore = Number(owedBeforeRow.balanceKes || 0);
+    assert.ok(owedBalanceBefore > 1000, 'Expected positive owed balance before settlement');
+
+    const pendingSettlement = await request(baseUrl, '/api/payments/settle', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        period: 'all',
+        farmerIds: [farmerId],
+        status: 'Pending'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(pendingSettlement.data.createdCount, 1);
+    assert.strictEqual(pendingSettlement.data.status, 'Pending');
+
+    const owedAfterPending = await request(baseUrl, '/api/payments/owed?period=all', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const owedAfterPendingRow = (owedAfterPending.data || []).find((row) => row.farmerId === farmerId);
+    assert.ok(owedAfterPendingRow, 'Farmer should remain owed after pending settlement');
+    assert.ok(Number(owedAfterPendingRow.balanceKes || 0) >= owedBalanceBefore - 0.01);
+
+    const receivedSettlement = await request(baseUrl, '/api/payments/settle', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        period: 'all',
+        farmerIds: [farmerId],
+        status: 'Received'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(receivedSettlement.data.createdCount, 1);
+    assert.strictEqual(receivedSettlement.data.status, 'Received');
+
+    const owedAfterReceived = await request(baseUrl, '/api/payments/owed?period=all', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const owedAfterReceivedRow = (owedAfterReceived.data || []).find((row) => row.farmerId === farmerId);
+    assert.ok(!owedAfterReceivedRow || Number(owedAfterReceivedRow.balanceKes || 0) < 0.01);
+
     await request(baseUrl, '/api/payments', {
       method: 'POST',
       token: agentToken,
@@ -511,9 +561,10 @@ async function run() {
     assert.strictEqual(summary.data.farmers, 4);
     assert.strictEqual(summary.data.produceRecords, 1);
     assert.strictEqual(summary.data.purchasedRecords, 1);
-    assert.strictEqual(summary.data.paymentRecords, 1);
+    assert.strictEqual(summary.data.paymentRecords, 3);
     assert.strictEqual(summary.data.smsSent, 6);
     assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
+    assert.ok(Number(summary.data.totalOwedKes || 0) < 0.01, 'Expected owed balance to be settled');
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
       token: adminToken,
@@ -542,8 +593,18 @@ async function run() {
       expectStatus: 200
     });
     assert.ok(
-      producePurchasesCsv.includes('qcRecordId,variety,sizeCode,purchasedKgs,pricePerKgKes,purchaseValueKes,buyer'),
+      producePurchasesCsv.includes('qcRecordId,variety,sizeCode,purchasedKgs,pricePerKgKes,purchaseValueKes,paidAmountKes,balanceKes,settlementStatus,buyer'),
       'Produce purchases CSV header missing purchase columns'
+    );
+
+    const owedCsv = await request(baseUrl, '/api/exports/payments-owed.csv?period=all', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(
+      owedCsv.includes('farmerId,farmerName,phone,nationalId,location,purchaseCount,purchasedKgs,totalValueKes,paidKes,balanceKes,lastPurchaseAt'),
+      'Owed CSV header missing'
     );
 
     await request(baseUrl, '/api/admin/backup', {

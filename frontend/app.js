@@ -17,6 +17,17 @@ const smsPicker = {
   rows: [],
   selectedIds: new Set()
 };
+const owedPicker = {
+  rows: [],
+  selectedFarmerIds: new Set(),
+  meta: {
+    period: 'month',
+    from: '',
+    to: '',
+    count: 0,
+    totalBalanceKes: 0
+  }
+};
 
 const elements = {
   authShell: document.getElementById('authShell'),
@@ -143,6 +154,19 @@ const elements = {
   paymentStatus: document.getElementById('paymentStatus'),
   paymentNotes: document.getElementById('paymentNotes'),
   mpesaDisburseBtn: document.getElementById('mpesaDisburseBtn'),
+  owedPeriod: document.getElementById('owedPeriod'),
+  owedFromDate: document.getElementById('owedFromDate'),
+  owedToDate: document.getElementById('owedToDate'),
+  owedSearch: document.getElementById('owedSearch'),
+  owedRefreshBtn: document.getElementById('owedRefreshBtn'),
+  owedSelectVisibleBtn: document.getElementById('owedSelectVisibleBtn'),
+  owedClearSelectedBtn: document.getElementById('owedClearSelectedBtn'),
+  owedPrepareBtn: document.getElementById('owedPrepareBtn'),
+  owedPaySelectedBtn: document.getElementById('owedPaySelectedBtn'),
+  owedExportBtn: document.getElementById('owedExportBtn'),
+  owedSummary: document.getElementById('owedSummary'),
+  owedTableWrap: document.getElementById('owedTableWrap'),
+  owedMsg: document.getElementById('owedMsg'),
   paymentMsg: document.getElementById('paymentMsg'),
   paymentTableWrap: document.getElementById('paymentTableWrap'),
 
@@ -214,6 +238,7 @@ async function init() {
     notifySync('Backend offline. Running in local mode.');
   }
 
+  await refreshOwedRows(false);
   updatePermissionUi();
 }
 
@@ -396,10 +421,11 @@ function setActivePane(paneId, resetScroll = false) {
 
 function bindRoleSelect() {
   elements.roleSelect.value = state.role;
-  elements.roleSelect.addEventListener('change', (event) => {
+  elements.roleSelect.addEventListener('change', async (event) => {
     state.role = event.target.value;
     persist();
     renderAll();
+    await refreshOwedRows(true);
     updatePermissionUi();
   });
 }
@@ -1115,6 +1141,7 @@ function bindProducePurchases() {
         elements.purchaseForm.reset();
         elements.purchaseMsg.textContent = 'Purchased produce recorded.';
         await fetchAllData();
+        await refreshOwedRows(false);
         return;
       }
 
@@ -1127,6 +1154,11 @@ function bindProducePurchases() {
       const purchasedKgs = Number(payload.purchasedKgs || 0);
       if (!(purchasedKgs > 0)) {
         elements.purchaseMsg.textContent = 'Purchased weight must be greater than 0.';
+        return;
+      }
+
+      if (!(Number(payload.pricePerKgKes) > 0) && !(Number(payload.purchaseValueKes) > 0)) {
+        elements.purchaseMsg.textContent = 'Enter agreed price per kg or total purchase value.';
         return;
       }
 
@@ -1155,6 +1187,7 @@ function bindProducePurchases() {
       elements.purchaseForm.reset();
       elements.purchaseMsg.textContent = 'Purchased produce recorded (local mode).';
       renderAll();
+      await refreshOwedRows(false);
       persist();
     } catch (error) {
       elements.purchaseMsg.textContent = error.message;
@@ -1175,11 +1208,13 @@ function bindProducePurchases() {
         await apiRequest(`/api/produce-purchases/${encodeURIComponent(purchaseId)}`, { method: 'DELETE' });
         elements.purchaseMsg.textContent = 'Purchased produce record deleted.';
         await fetchAllData();
+        await refreshOwedRows(false);
         return;
       }
 
       state.producePurchases = state.producePurchases.filter((row) => row.id !== purchaseId);
       renderAll();
+      await refreshOwedRows(false);
       persist();
       elements.purchaseMsg.textContent = 'Purchased produce record deleted (local mode).';
     } catch (error) {
@@ -1189,6 +1224,81 @@ function bindProducePurchases() {
 }
 
 function bindPayments() {
+  elements.paymentFarmer.addEventListener('change', () => {
+    const owed = owedPicker.rows.find((row) => row.farmerId === elements.paymentFarmer.value);
+    if (owed && owed.balanceKes > 0) {
+      elements.amount.value = String(owed.balanceKes);
+    }
+  });
+
+  elements.owedPeriod.addEventListener('change', async () => {
+    clearMessages();
+    await refreshOwedRows(true);
+  });
+
+  elements.owedFromDate.addEventListener('change', async () => {
+    clearMessages();
+    await refreshOwedRows(true);
+  });
+
+  elements.owedToDate.addEventListener('change', async () => {
+    clearMessages();
+    await refreshOwedRows(true);
+  });
+
+  elements.owedSearch.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    clearMessages();
+    await refreshOwedRows(true);
+  });
+
+  elements.owedRefreshBtn.addEventListener('click', async () => {
+    clearMessages();
+    await refreshOwedRows(false);
+  });
+
+  elements.owedSelectVisibleBtn.addEventListener('click', () => {
+    for (const row of owedPicker.rows) {
+      owedPicker.selectedFarmerIds.add(row.farmerId);
+    }
+    renderOwedTable();
+  });
+
+  elements.owedClearSelectedBtn.addEventListener('click', () => {
+    owedPicker.selectedFarmerIds.clear();
+    renderOwedTable();
+  });
+
+  elements.owedTableWrap.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-action="toggle-owed-farmer"]');
+    if (!checkbox) return;
+    const farmerId = String(checkbox.dataset.id || '');
+    if (!farmerId) return;
+
+    if (checkbox.checked) {
+      owedPicker.selectedFarmerIds.add(farmerId);
+    } else {
+      owedPicker.selectedFarmerIds.delete(farmerId);
+    }
+    renderOwedTable();
+  });
+
+  elements.owedPrepareBtn.addEventListener('click', async () => {
+    clearMessages();
+    await settleSelectedOwed('Pending');
+  });
+
+  elements.owedPaySelectedBtn.addEventListener('click', async () => {
+    clearMessages();
+    await settleSelectedOwed('Received');
+  });
+
+  elements.owedExportBtn.addEventListener('click', async () => {
+    clearMessages();
+    await exportOwedCsv();
+  });
+
   elements.paymentForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     clearMessages();
@@ -1227,6 +1337,7 @@ function bindPayments() {
         elements.paymentForm.reset();
         elements.paymentMsg.textContent = 'Payment logged.';
         await fetchAllData();
+        await refreshOwedRows(false);
         return;
       }
 
@@ -1247,6 +1358,7 @@ function bindPayments() {
       elements.paymentForm.reset();
       elements.paymentMsg.textContent = 'Payment logged (local mode).';
       renderAll();
+      await refreshOwedRows(false);
       persist();
     } catch (error) {
       elements.paymentMsg.textContent = error.message;
@@ -1283,6 +1395,7 @@ function bindPayments() {
 
       elements.paymentMsg.textContent = 'M-PESA disbursement simulated successfully.';
       await fetchAllData();
+      await refreshOwedRows(false);
     } catch (error) {
       elements.paymentMsg.textContent = error.message;
     }
@@ -1310,6 +1423,7 @@ function bindPayments() {
         });
         elements.paymentMsg.textContent = `Payment status changed to ${nextStatus}.`;
         await fetchAllData();
+        await refreshOwedRows(false);
         return;
       }
 
@@ -1319,12 +1433,417 @@ function bindPayments() {
         payment.updatedAt = new Date().toISOString();
       }
       renderAll();
+      await refreshOwedRows(false);
       persist();
       elements.paymentMsg.textContent = `Payment status changed to ${nextStatus} (local mode).`;
     } catch (error) {
       elements.paymentMsg.textContent = error.message;
     }
   });
+}
+
+function moneyValue(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return Number(num.toFixed(2));
+}
+
+function normalizePaymentStatusValue(status) {
+  const lower = String(status || '').trim().toLowerCase();
+  if (lower === 'received') return 'Received';
+  if (lower === 'pending') return 'Pending';
+  return 'Failed';
+}
+
+function parseDateBound(value, isEnd) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const stamp = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? `${raw}T${isEnd ? '23:59:59.999' : '00:00:00.000'}`
+    : raw;
+  const ms = new Date(stamp).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function resolveOwedFilters() {
+  const period = String(elements.owedPeriod.value || 'month').toLowerCase();
+  let from = parseDateBound(elements.owedFromDate.value, false);
+  let to = parseDateBound(elements.owedToDate.value, true);
+
+  if (from !== null && to !== null && from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+
+  if (from === null && to === null) {
+    const now = new Date();
+    if (period === 'today') {
+      from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+    } else if (period === 'week') {
+      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+      from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0, 0).getTime();
+    } else if (period === 'month') {
+      from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
+      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).getTime();
+    }
+  }
+
+  return {
+    period,
+    q: String(elements.owedSearch.value || '').trim(),
+    from,
+    to,
+    fromRaw: String(elements.owedFromDate.value || '').trim(),
+    toRaw: String(elements.owedToDate.value || '').trim()
+  };
+}
+
+function purchaseTotalValue(row) {
+  const explicit = Number(row.purchaseValueKes);
+  if (Number.isFinite(explicit) && explicit > 0) return moneyValue(explicit);
+  const unit = Number(row.pricePerKgKes);
+  const qty = Number(row.purchasedKgs);
+  if (Number.isFinite(unit) && unit > 0 && Number.isFinite(qty) && qty > 0) {
+    return moneyValue(unit * qty);
+  }
+  return 0;
+}
+
+function dateValue(input) {
+  const ms = new Date(input).getTime();
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function reconcileLocalPurchases() {
+  const receivedByFarmer = {};
+  for (const payment of state.payments) {
+    if (normalizePaymentStatusValue(payment.status) !== 'Received') continue;
+    const farmerId = String(payment.farmerId || '').trim();
+    if (!farmerId) continue;
+    receivedByFarmer[farmerId] = moneyValue((receivedByFarmer[farmerId] || 0) + moneyValue(payment.amount));
+  }
+
+  const purchases = [...state.producePurchases].sort((a, b) => dateValue(a.createdAt) - dateValue(b.createdAt));
+  for (const purchase of purchases) {
+    const farmerId = String(purchase.farmerId || '').trim();
+    const totalValue = purchaseTotalValue(purchase);
+    const available = moneyValue(receivedByFarmer[farmerId] || 0);
+    const paidAmountKes = totalValue > 0 ? moneyValue(Math.min(totalValue, available)) : 0;
+    const balanceKes = totalValue > 0 ? moneyValue(totalValue - paidAmountKes) : 0;
+
+    purchase.purchasedKgs = moneyValue(purchase.purchasedKgs);
+    purchase.pricePerKgKes = Number.isFinite(Number(purchase.pricePerKgKes)) && Number(purchase.pricePerKgKes) > 0
+      ? moneyValue(purchase.pricePerKgKes)
+      : null;
+    purchase.purchaseValueKes = totalValue > 0 ? totalValue : null;
+    purchase.paidAmountKes = paidAmountKes;
+    purchase.balanceKes = balanceKes;
+    purchase.settlementStatus = totalValue <= 0
+      ? 'Unpriced'
+      : balanceKes <= 0
+        ? 'Paid'
+        : paidAmountKes > 0
+          ? 'Partially Paid'
+          : 'Unpaid';
+
+    receivedByFarmer[farmerId] = moneyValue(Math.max(0, available - paidAmountKes));
+  }
+}
+
+function buildLocalOwedRows(filters) {
+  reconcileLocalPurchases();
+  const farmersById = new Map((state.farmers || []).map((row) => [row.id, row]));
+  const grouped = new Map();
+
+  for (const purchase of state.producePurchases) {
+    const createdMs = dateValue(purchase.createdAt);
+    if (filters.from !== null && createdMs < filters.from) continue;
+    if (filters.to !== null && createdMs > filters.to) continue;
+
+    const farmerId = String(purchase.farmerId || '').trim();
+    const balanceKes = moneyValue(purchase.balanceKes);
+    if (!farmerId || !(balanceKes > 0)) continue;
+
+    if (!grouped.has(farmerId)) {
+      const farmer = farmersById.get(farmerId) || {};
+      grouped.set(farmerId, {
+        farmerId,
+        farmerName: purchase.farmerName || farmer.name || '-',
+        phone: farmer.phone || '',
+        nationalId: farmer.nationalId || '',
+        location: farmer.location || '',
+        purchaseCount: 0,
+        purchasedKgs: 0,
+        totalValueKes: 0,
+        paidKes: 0,
+        balanceKes: 0,
+        lastPurchaseAt: ''
+      });
+    }
+
+    const row = grouped.get(farmerId);
+    row.purchaseCount += 1;
+    row.purchasedKgs = moneyValue(row.purchasedKgs + moneyValue(purchase.purchasedKgs));
+    row.totalValueKes = moneyValue(row.totalValueKes + moneyValue(purchase.purchaseValueKes));
+    row.paidKes = moneyValue(row.paidKes + moneyValue(purchase.paidAmountKes));
+    row.balanceKes = moneyValue(row.balanceKes + balanceKes);
+    if (!row.lastPurchaseAt || dateValue(purchase.createdAt) > dateValue(row.lastPurchaseAt)) {
+      row.lastPurchaseAt = purchase.createdAt;
+    }
+  }
+
+  let rows = Array.from(grouped.values());
+  const q = String(filters.q || '').toLowerCase();
+  if (q) {
+    rows = rows.filter((row) =>
+      [row.farmerName, row.phone, row.nationalId, row.location].some((value) => String(value || '').toLowerCase().includes(q))
+    );
+  }
+
+  rows.sort((a, b) => {
+    if (b.balanceKes !== a.balanceKes) return b.balanceKes - a.balanceKes;
+    return dateValue(b.lastPurchaseAt) - dateValue(a.lastPurchaseAt);
+  });
+
+  return rows;
+}
+
+function renderOwedTable() {
+  const selectedCount = owedPicker.rows.filter((row) => owedPicker.selectedFarmerIds.has(row.farmerId)).length;
+  const totalBalance = moneyValue(owedPicker.rows.reduce((sum, row) => sum + moneyValue(row.balanceKes), 0));
+
+  elements.owedSummary.textContent =
+    `${owedPicker.rows.length} farmer(s) owed, KES ${formatCurrency(totalBalance)} total. ${selectedCount} selected.`;
+
+  if (!owedPicker.rows.length) {
+    elements.owedTableWrap.innerHTML = '<div class="empty">No owed farmers in this period.</div>';
+    return;
+  }
+
+  const rows = owedPicker.rows
+    .slice(0, 500)
+    .map((row) => `
+      <tr>
+        <td><input class="table-check" type="checkbox" data-action="toggle-owed-farmer" data-id="${escapeHtml(row.farmerId)}" ${owedPicker.selectedFarmerIds.has(row.farmerId) ? 'checked' : ''}></td>
+        <td>${escapeHtml(row.farmerName)}</td>
+        <td>${escapeHtml(row.phone || '-')}</td>
+        <td>${escapeHtml(row.nationalId || '-')}</td>
+        <td>${escapeHtml(String(row.purchaseCount))}</td>
+        <td>${escapeHtml(String(row.purchasedKgs))}</td>
+        <td>${escapeHtml(formatCurrency(row.totalValueKes))}</td>
+        <td>${escapeHtml(formatCurrency(row.paidKes))}</td>
+        <td>${escapeHtml(formatCurrency(row.balanceKes))}</td>
+        <td>${escapeHtml(dateShort(row.lastPurchaseAt))}</td>
+      </tr>
+    `)
+    .join('');
+
+  elements.owedTableWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Select</th>
+          <th>Farmer</th>
+          <th>Phone</th>
+          <th>National ID</th>
+          <th>Lots</th>
+          <th>Purchased Kg</th>
+          <th>Total Value</th>
+          <th>Paid</th>
+          <th>Balance</th>
+          <th>Last Purchase</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refreshOwedRows(resetSelection = false) {
+  if (currentRole() !== 'admin') {
+    owedPicker.rows = [];
+    owedPicker.selectedFarmerIds.clear();
+    elements.owedSummary.textContent = 'Owed list is visible to admin only.';
+    elements.owedTableWrap.innerHTML = '<div class="empty">Sign in as admin to view owed balances.</div>';
+    return;
+  }
+
+  const filters = resolveOwedFilters();
+  if (resetSelection) {
+    owedPicker.selectedFarmerIds.clear();
+  }
+
+  if (API.enabled) {
+    if (!isAuthenticated()) {
+      owedPicker.rows = [];
+      elements.owedSummary.textContent = 'Sign in to view owed balances.';
+      elements.owedTableWrap.innerHTML = '<div class="empty">Sign in to load owed balances from backend.</div>';
+      return;
+    }
+
+    const query = new URLSearchParams();
+    if (filters.period) query.set('period', filters.period);
+    if (filters.fromRaw) query.set('from', filters.fromRaw);
+    if (filters.toRaw) query.set('to', filters.toRaw);
+    if (filters.q) query.set('q', filters.q);
+    query.set('limit', '2000');
+
+    try {
+      const response = await apiRequest(`/api/payments/owed?${query.toString()}`);
+      owedPicker.rows = response.data || [];
+      owedPicker.meta = response.meta || owedPicker.meta;
+    } catch (error) {
+      elements.owedMsg.textContent = error.message;
+      return;
+    }
+  } else {
+    owedPicker.rows = buildLocalOwedRows(filters);
+    owedPicker.meta = {
+      period: filters.period,
+      from: filters.from ? new Date(filters.from).toISOString() : '',
+      to: filters.to ? new Date(filters.to).toISOString() : '',
+      count: owedPicker.rows.length,
+      totalBalanceKes: moneyValue(owedPicker.rows.reduce((sum, row) => sum + moneyValue(row.balanceKes), 0))
+    };
+  }
+
+  for (const farmerId of Array.from(owedPicker.selectedFarmerIds)) {
+    if (!owedPicker.rows.some((row) => row.farmerId === farmerId)) {
+      owedPicker.selectedFarmerIds.delete(farmerId);
+    }
+  }
+
+  renderOwedTable();
+}
+
+async function settleSelectedOwed(status) {
+  if (currentRole() !== 'admin') {
+    elements.owedMsg.textContent = 'Only admin can run owed settlements.';
+    return;
+  }
+
+  const selected = owedPicker.rows.filter((row) => owedPicker.selectedFarmerIds.has(row.farmerId) && row.balanceKes > 0);
+  if (!selected.length) {
+    elements.owedMsg.textContent = 'Select at least one owed farmer.';
+    return;
+  }
+
+  const filters = resolveOwedFilters();
+  const farmerIds = selected.map((row) => row.farmerId);
+
+  try {
+    if (API.enabled) {
+      const response = await apiRequest('/api/payments/settle', {
+        method: 'POST',
+        body: {
+          farmerIds,
+          status,
+          method: 'M-PESA(Mock)',
+          period: filters.period,
+          from: filters.fromRaw,
+          to: filters.toRaw
+        }
+      });
+      elements.owedMsg.textContent =
+        `${response.data.createdCount} payment(s) created, total KES ${formatCurrency(response.data.totalAmount)} (${status}).`;
+      await fetchAllData();
+      await refreshOwedRows(false);
+      return;
+    }
+
+    for (let index = 0; index < selected.length; index += 1) {
+      const row = selected[index];
+      const record = {
+        id: `TX-${Date.now()}-${index + 1}`,
+        farmerId: row.farmerId,
+        farmerName: row.farmerName,
+        amount: moneyValue(row.balanceKes),
+        ref: `${status === 'Received' ? 'MPB' : 'SET'}${Date.now().toString().slice(-8)}${String(index + 1).padStart(2, '0')}`,
+        status,
+        method: status === 'Received' ? 'M-PESA(Mock)' : 'M-PESA',
+        notes: 'Settlement from owed panel',
+        source: 'purchase-owed',
+        createdBy: 'local',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      state.payments.unshift(record);
+    }
+
+    elements.owedMsg.textContent = `${selected.length} payment(s) created (${status}) in local mode.`;
+    persist();
+    renderAll();
+    await refreshOwedRows(false);
+  } catch (error) {
+    elements.owedMsg.textContent = error.message;
+  }
+}
+
+function csvCell(value) {
+  const raw = value == null ? '' : String(value);
+  if (/[",\n]/.test(raw)) {
+    return `"${raw.replace(/"/g, '""')}"`;
+  }
+  return raw;
+}
+
+function rowsToCsv(rows, headers) {
+  const head = headers.map((header) => header.label).join(',');
+  const body = rows.map((row) => headers.map((header) => csvCell(row[header.key])).join(',')).join('\n');
+  return `${head}\n${body}`;
+}
+
+async function exportOwedCsv() {
+  if (currentRole() !== 'admin') {
+    elements.owedMsg.textContent = 'Only admin can export owed balances.';
+    return;
+  }
+
+  const filters = resolveOwedFilters();
+  const query = new URLSearchParams();
+  if (filters.period) query.set('period', filters.period);
+  if (filters.fromRaw) query.set('from', filters.fromRaw);
+  if (filters.toRaw) query.set('to', filters.toRaw);
+  if (filters.q) query.set('q', filters.q);
+
+  try {
+    let content = '';
+    if (API.enabled) {
+      content = await apiRequest(`/api/exports/payments-owed.csv?${query.toString()}`, {
+        response: 'text'
+      });
+    } else {
+      const rows = buildLocalOwedRows(filters);
+      content = rowsToCsv(rows, [
+        { key: 'farmerId', label: 'farmerId' },
+        { key: 'farmerName', label: 'farmerName' },
+        { key: 'phone', label: 'phone' },
+        { key: 'nationalId', label: 'nationalId' },
+        { key: 'location', label: 'location' },
+        { key: 'purchaseCount', label: 'purchaseCount' },
+        { key: 'purchasedKgs', label: 'purchasedKgs' },
+        { key: 'totalValueKes', label: 'totalValueKes' },
+        { key: 'paidKes', label: 'paidKes' },
+        { key: 'balanceKes', label: 'balanceKes' },
+        { key: 'lastPurchaseAt', label: 'lastPurchaseAt' }
+      ]);
+    }
+
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `payments-owed-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    elements.owedMsg.textContent = 'Owed balances CSV exported.';
+  } catch (error) {
+    elements.owedMsg.textContent = error.message;
+  }
 }
 
 function bindSms() {
@@ -1771,6 +2290,7 @@ function bindExports() {
       resetFarmerForm();
       hydrateFarmerSelectors();
       renderAll();
+      await refreshOwedRows(true);
       persist();
       elements.exportsMsg.textContent = 'Local dataset reset.';
       return;
@@ -1894,6 +2414,7 @@ async function fetchAllData() {
     persist();
 
     notifySync(`Connected to backend as ${currentRole()}.`);
+    await refreshOwedRows(false);
     if (currentSmsMode() === 'selected') {
       await loadSmsRecipients(false);
     }
@@ -2030,6 +2551,7 @@ function updatePermissionUi() {
   const farmersAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const produceAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const producePurchaseAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
+  const owedAllowed = backendAuthReady && role === 'admin';
   const paymentAllowed = backendAuthReady && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const adminAllowed = backendAuthReady && role === 'admin';
@@ -2042,6 +2564,17 @@ function updatePermissionUi() {
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
   elements.purchaseForm.querySelector('button[type="submit"]').disabled = !producePurchaseAllowed;
+
+  elements.owedPeriod.disabled = !owedAllowed;
+  elements.owedFromDate.disabled = !owedAllowed;
+  elements.owedToDate.disabled = !owedAllowed;
+  elements.owedSearch.disabled = !owedAllowed;
+  elements.owedRefreshBtn.disabled = !owedAllowed;
+  elements.owedSelectVisibleBtn.disabled = !owedAllowed;
+  elements.owedClearSelectedBtn.disabled = !owedAllowed;
+  elements.owedPrepareBtn.disabled = !owedAllowed;
+  elements.owedPaySelectedBtn.disabled = !owedAllowed;
+  elements.owedExportBtn.disabled = !owedAllowed;
 
   elements.paymentForm.querySelector('button[type="submit"]').disabled = !paymentAllowed;
   elements.mpesaDisburseBtn.disabled = !paymentAllowed;
@@ -2096,6 +2629,8 @@ function renderOverview() {
     { label: 'Registered Farmers', value: summary.farmers || 0 },
     { label: 'QC Records', value: summary.qcRecords ?? summary.produceRecords ?? 0 },
     { label: 'Purchased Kg', value: Number(summary.totalPurchasedKg || 0).toFixed(1) },
+    { label: 'Farmers Owed', value: summary.owedFarmers || 0 },
+    { label: 'Amount Owed (KES)', value: formatCurrency(summary.totalOwedKes || 0) },
     { label: 'Payments (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
     { label: 'SMS Sent', value: summary.smsSent || 0 },
     { label: 'Payment Success Rate', value: `${summary.paymentSuccessRate || 0}%` }
@@ -2246,6 +2781,10 @@ function renderProduce() {
 }
 
 function renderProducePurchases() {
+  if (!API.enabled) {
+    reconcileLocalPurchases();
+  }
+
   if (!state.producePurchases.length) {
     elements.purchaseTableWrap.innerHTML = '<div class="empty">No purchased produce entries yet.</div>';
     return;
@@ -2269,6 +2808,9 @@ function renderProducePurchases() {
           <td>${escapeHtml(String(row.purchasedKgs ?? '-'))}</td>
           <td>${escapeHtml(row.pricePerKgKes == null || row.pricePerKgKes === '' ? '-' : formatCurrency(row.pricePerKgKes))}</td>
           <td>${escapeHtml(row.purchaseValueKes == null || row.purchaseValueKes === '' ? '-' : formatCurrency(row.purchaseValueKes))}</td>
+          <td>${escapeHtml(row.paidAmountKes == null || row.paidAmountKes === '' ? '-' : formatCurrency(row.paidAmountKes))}</td>
+          <td>${escapeHtml(row.balanceKes == null || row.balanceKes === '' ? '-' : formatCurrency(row.balanceKes))}</td>
+          <td>${escapeHtml(String(row.settlementStatus || '-'))}</td>
           <td>${escapeHtml(String(row.buyer || '-'))}</td>
           <td>${escapeHtml(dateShort(row.createdAt))}</td>
           <td class="actions">${actions}</td>
@@ -2289,6 +2831,9 @@ function renderProducePurchases() {
           <th>Purchased Kg</th>
           <th>Price/Kg (KES)</th>
           <th>Value (KES)</th>
+          <th>Paid (KES)</th>
+          <th>Balance (KES)</th>
+          <th>Status</th>
           <th>Buyer</th>
           <th>Date</th>
           <th>Actions</th>
@@ -2399,6 +2944,8 @@ function renderReports() {
     { label: 'Farmers', value: summary.farmers || 0 },
     { label: 'QC Lot Weight (kg)', value: Number(summary.totalProduceKg || 0).toFixed(1) },
     { label: 'Purchased Produce (kg)', value: Number(summary.totalPurchasedKg || 0).toFixed(1) },
+    { label: 'Farmers Owed', value: summary.owedFarmers || 0 },
+    { label: 'Amount Owed (KES)', value: formatCurrency(summary.totalOwedKes || 0) },
     { label: 'Payments Received (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
     { label: 'Payment Success', value: `${summary.paymentSuccessRate || 0}%` }
   ];
@@ -2419,7 +2966,8 @@ function renderReports() {
 
   elements.reportNarrative.textContent =
     `Current operations show ${summary.farmers || 0} farmers, ${summary.qcRecords ?? summary.produceRecords ?? 0} QC entries, ` +
-    `${summary.purchasedRecords || 0} purchase entries, ${summary.paymentRecords || 0} payment records, and ${summary.smsSent || 0} SMS messages. ` +
+    `${summary.purchasedRecords || 0} purchase entries, ${summary.owedFarmers || 0} farmers currently owed, ` +
+    `${summary.paymentRecords || 0} payment records, and ${summary.smsSent || 0} SMS messages. ` +
     `Data source: ${dataSource}. Session: ${user}.`;
 
   if (!state.agentStats.length) {
@@ -3171,13 +3719,24 @@ function seedLocalData() {
 
   hydrateFarmerSelectors();
   renderAll();
+  void refreshOwedRows(true);
   persist();
 }
 
 function deriveSummaryFromState() {
+  if (!API.enabled) {
+    reconcileLocalPurchases();
+  }
+
   const totalProduceKg = state.produce.reduce((sum, row) => sum + Number(row.kgs || 0), 0);
   const totalPurchasedKg = state.producePurchases.reduce((sum, row) => sum + Number(row.purchasedKgs || 0), 0);
   const purchasedValueKes = state.producePurchases.reduce((sum, row) => sum + Number(row.purchaseValueKes || 0), 0);
+  const totalOwedKes = state.producePurchases.reduce((sum, row) => sum + Number(row.balanceKes || 0), 0);
+  const owedFarmers = new Set(
+    state.producePurchases
+      .filter((row) => Number(row.balanceKes || 0) > 0)
+      .map((row) => row.farmerId)
+  ).size;
   const paymentsReceived = state.payments
     .filter((row) => row.status === 'Received')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -3196,6 +3755,8 @@ function deriveSummaryFromState() {
     totalProduceKg,
     totalPurchasedKg,
     purchasedValueKes,
+    totalOwedKes,
+    owedFarmers,
     paymentsReceived,
     paymentSuccessRate,
     launchReady:
@@ -3325,6 +3886,7 @@ function clearMessages() {
   elements.farmerImportErrors.classList.remove('import-errors');
   elements.produceMsg.textContent = '';
   elements.purchaseMsg.textContent = '';
+  elements.owedMsg.textContent = '';
   elements.paymentMsg.textContent = '';
   elements.smsMsg.textContent = '';
   elements.exportsMsg.textContent = '';
