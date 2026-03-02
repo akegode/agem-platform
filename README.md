@@ -12,6 +12,7 @@ This project is now a full working web application with authentication, role-bas
 - Duplicate protection for admin/agent/farmer accounts and farmer phone records (no double registration)
 - Import duplicate handling: choose to keep existing farmer data or overwrite with incoming file data
 - Farm-gate avocado QC capture (Hass/Fuerte): visual grade, dry matter, firmness, fruit weight, size code, lot weight, and QC decision
+- Separate produce purchasing log linked to farmer (and optional QC lot): purchased kg, price/kg, value, and buyer
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint
 - SMS sending simulation + message logs

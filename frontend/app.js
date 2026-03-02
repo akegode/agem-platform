@@ -123,6 +123,18 @@ const elements = {
   produceNotes: document.getElementById('produceNotes'),
   produceMsg: document.getElementById('produceMsg'),
   produceTableWrap: document.getElementById('produceTableWrap'),
+  purchaseForm: document.getElementById('purchaseForm'),
+  purchaseFarmer: document.getElementById('purchaseFarmer'),
+  purchaseQcRecord: document.getElementById('purchaseQcRecord'),
+  purchaseKgs: document.getElementById('purchaseKgs'),
+  purchasePricePerKgKes: document.getElementById('purchasePricePerKgKes'),
+  purchaseVariety: document.getElementById('purchaseVariety'),
+  purchaseSizeCode: document.getElementById('purchaseSizeCode'),
+  purchaseBuyer: document.getElementById('purchaseBuyer'),
+  purchaseValueKes: document.getElementById('purchaseValueKes'),
+  purchaseNotes: document.getElementById('purchaseNotes'),
+  purchaseMsg: document.getElementById('purchaseMsg'),
+  purchaseTableWrap: document.getElementById('purchaseTableWrap'),
 
   paymentForm: document.getElementById('paymentForm'),
   paymentFarmer: document.getElementById('paymentFarmer'),
@@ -175,6 +187,7 @@ async function init() {
   bindScrollTools();
   bindFarmers();
   bindProduce();
+  bindProducePurchases();
   bindPayments();
   bindSms();
   bindExports();
@@ -1056,6 +1069,125 @@ function bindProduce() {
   });
 }
 
+function bindProducePurchases() {
+  elements.purchaseFarmer.addEventListener('change', () => {
+    hydratePurchaseQcOptions();
+  });
+
+  elements.purchaseForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+
+    const role = currentRole();
+    if (!['admin', 'agent'].includes(role)) {
+      elements.purchaseMsg.textContent = 'Only admin or agent can record purchased produce.';
+      return;
+    }
+
+    if (!state.farmers.length) {
+      elements.purchaseMsg.textContent = 'Register a farmer first.';
+      return;
+    }
+
+    const payload = {
+      farmerId: elements.purchaseFarmer.value,
+      qcRecordId: elements.purchaseQcRecord.value.trim(),
+      purchasedKgs: Number(elements.purchaseKgs.value || 0),
+      pricePerKgKes: elements.purchasePricePerKgKes.value.trim(),
+      variety: elements.purchaseVariety.value.trim(),
+      sizeCode: elements.purchaseSizeCode.value.trim(),
+      buyer: elements.purchaseBuyer.value.trim(),
+      purchaseValueKes: elements.purchaseValueKes.value.trim(),
+      notes: elements.purchaseNotes.value.trim()
+    };
+
+    try {
+      if (API.enabled) {
+        if (!isAuthenticated()) {
+          elements.purchaseMsg.textContent = 'Sign in first to use backend mode.';
+          return;
+        }
+
+        await apiRequest('/api/produce-purchases', {
+          method: 'POST',
+          body: payload
+        });
+        elements.purchaseForm.reset();
+        elements.purchaseMsg.textContent = 'Purchased produce recorded.';
+        await fetchAllData();
+        return;
+      }
+
+      const linkedQc = state.produce.find((row) => row.id === payload.qcRecordId) || null;
+      const variety = payload.variety || linkedQc?.variety || '';
+      if (!variety) {
+        elements.purchaseMsg.textContent = 'Select variety or link a QC lot.';
+        return;
+      }
+      const purchasedKgs = Number(payload.purchasedKgs || 0);
+      if (!(purchasedKgs > 0)) {
+        elements.purchaseMsg.textContent = 'Purchased weight must be greater than 0.';
+        return;
+      }
+
+      const pricePerKgKes = payload.pricePerKgKes ? Number(payload.pricePerKgKes) : null;
+      const computedValue = pricePerKgKes ? purchasedKgs * pricePerKgKes : null;
+      const purchaseValueKes = payload.purchaseValueKes
+        ? Number(payload.purchaseValueKes)
+        : computedValue;
+
+      state.producePurchases.unshift({
+        id: `PR-${Date.now()}`,
+        farmerId: payload.farmerId,
+        farmerName: farmerNameById(payload.farmerId),
+        qcRecordId: payload.qcRecordId,
+        variety,
+        sizeCode: payload.sizeCode || linkedQc?.sizeCode || '',
+        purchasedKgs: Number(purchasedKgs.toFixed(2)),
+        pricePerKgKes: pricePerKgKes ? Number(pricePerKgKes.toFixed(2)) : null,
+        purchaseValueKes: purchaseValueKes ? Number(purchaseValueKes.toFixed(2)) : null,
+        buyer: payload.buyer,
+        notes: payload.notes,
+        createdBy: 'local',
+        createdAt: new Date().toISOString()
+      });
+
+      elements.purchaseForm.reset();
+      elements.purchaseMsg.textContent = 'Purchased produce recorded (local mode).';
+      renderAll();
+      persist();
+    } catch (error) {
+      elements.purchaseMsg.textContent = error.message;
+    }
+  });
+
+  elements.purchaseTableWrap.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-action="delete-purchase"]');
+    if (!button) return;
+
+    const purchaseId = button.dataset.id;
+    if (!purchaseId) return;
+
+    if (!confirm('Delete this purchased produce record?')) return;
+
+    try {
+      if (API.enabled) {
+        await apiRequest(`/api/produce-purchases/${encodeURIComponent(purchaseId)}`, { method: 'DELETE' });
+        elements.purchaseMsg.textContent = 'Purchased produce record deleted.';
+        await fetchAllData();
+        return;
+      }
+
+      state.producePurchases = state.producePurchases.filter((row) => row.id !== purchaseId);
+      renderAll();
+      persist();
+      elements.purchaseMsg.textContent = 'Purchased produce record deleted (local mode).';
+    } catch (error) {
+      elements.purchaseMsg.textContent = error.message;
+    }
+  });
+}
+
 function bindPayments() {
   elements.paymentForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1625,11 +1757,12 @@ function bindExports() {
   elements.resetBtn.addEventListener('click', async () => {
     clearMessages();
 
-    if (!confirm('This will clear all farmers, produce, payments, and SMS data. Continue?')) return;
+    if (!confirm('This will clear all farmers, QC records, produce purchases, payments, and SMS data. Continue?')) return;
 
     if (!API.enabled) {
       state.farmers = [];
       state.produce = [];
+      state.producePurchases = [];
       state.payments = [];
       state.smsLogs = [];
       state.summary = null;
@@ -1660,7 +1793,7 @@ function bindExports() {
   elements.seedBtn.addEventListener('click', async () => {
     clearMessages();
 
-    if (state.farmers.length || state.produce.length || state.payments.length) {
+    if (state.farmers.length || state.produce.length || state.producePurchases.length || state.payments.length) {
       notifySync('Seed skipped: data already exists. Use reset if you need a clean slate.');
       return;
     }
@@ -1737,9 +1870,10 @@ async function fetchAllData() {
   }
 
   try {
-    const [farmers, produce, payments, sms, summary, agents] = await Promise.all([
+    const [farmers, produce, producePurchases, payments, sms, summary, agents] = await Promise.all([
       apiRequest('/api/farmers'),
       apiRequest('/api/produce'),
+      apiRequest('/api/produce-purchases'),
       apiRequest('/api/payments'),
       apiRequest('/api/sms'),
       apiRequest('/api/reports/summary'),
@@ -1748,6 +1882,7 @@ async function fetchAllData() {
 
     state.farmers = farmers.data || [];
     state.produce = produce.data || [];
+    state.producePurchases = producePurchases.data || [];
     state.payments = payments.data || [];
     state.smsLogs = sms.data || [];
     state.summary = summary.data || null;
@@ -1894,6 +2029,7 @@ function updatePermissionUi() {
 
   const farmersAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const produceAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
+  const producePurchaseAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const paymentAllowed = backendAuthReady && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const adminAllowed = backendAuthReady && role === 'admin';
@@ -1905,6 +2041,7 @@ function updatePermissionUi() {
   elements.farmerImportFile.disabled = !importAllowed;
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
+  elements.purchaseForm.querySelector('button[type="submit"]').disabled = !producePurchaseAllowed;
 
   elements.paymentForm.querySelector('button[type="submit"]').disabled = !paymentAllowed;
   elements.mpesaDisburseBtn.disabled = !paymentAllowed;
@@ -1944,6 +2081,7 @@ function renderAll() {
   renderOverview();
   renderFarmers();
   renderProduce();
+  renderProducePurchases();
   renderPayments();
   renderSms();
   renderReports();
@@ -1956,7 +2094,8 @@ function renderOverview() {
 
   const cards = [
     { label: 'Registered Farmers', value: summary.farmers || 0 },
-    { label: 'Produce Records', value: summary.produceRecords || 0 },
+    { label: 'QC Records', value: summary.qcRecords ?? summary.produceRecords ?? 0 },
+    { label: 'Purchased Kg', value: Number(summary.totalPurchasedKg || 0).toFixed(1) },
     { label: 'Payments (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
     { label: 'SMS Sent', value: summary.smsSent || 0 },
     { label: 'Payment Success Rate', value: `${summary.paymentSuccessRate || 0}%` }
@@ -2046,6 +2185,7 @@ function renderFarmers() {
 function renderProduce() {
   if (!state.produce.length) {
     elements.produceTableWrap.innerHTML = '<div class="empty">No produce entries yet.</div>';
+    hydratePurchaseQcOptions();
     return;
   }
 
@@ -2095,6 +2235,61 @@ function renderProduce() {
           <th>Firmness</th>
           <th>Decision</th>
           <th>Inspector</th>
+          <th>Date</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+  hydratePurchaseQcOptions();
+}
+
+function renderProducePurchases() {
+  if (!state.producePurchases.length) {
+    elements.purchaseTableWrap.innerHTML = '<div class="empty">No purchased produce entries yet.</div>';
+    return;
+  }
+
+  const canDelete = currentRole() === 'admin';
+  const rows = state.producePurchases
+    .slice(0, 250)
+    .map((row) => {
+      const actions = canDelete
+        ? `<button class="table-btn danger" data-action="delete-purchase" data-id="${escapeHtml(row.id)}">Delete</button>`
+        : '-';
+
+      return `
+        <tr>
+          <td>${escapeHtml(row.id)}</td>
+          <td>${escapeHtml(row.farmerName || '-')}</td>
+          <td>${escapeHtml(String(row.qcRecordId || '-'))}</td>
+          <td>${escapeHtml(String(row.variety || '-'))}</td>
+          <td>${escapeHtml(String(row.sizeCode || '-'))}</td>
+          <td>${escapeHtml(String(row.purchasedKgs ?? '-'))}</td>
+          <td>${escapeHtml(row.pricePerKgKes == null || row.pricePerKgKes === '' ? '-' : formatCurrency(row.pricePerKgKes))}</td>
+          <td>${escapeHtml(row.purchaseValueKes == null || row.purchaseValueKes === '' ? '-' : formatCurrency(row.purchaseValueKes))}</td>
+          <td>${escapeHtml(String(row.buyer || '-'))}</td>
+          <td>${escapeHtml(dateShort(row.createdAt))}</td>
+          <td class="actions">${actions}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  elements.purchaseTableWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Farmer</th>
+          <th>QC Lot</th>
+          <th>Variety</th>
+          <th>Size</th>
+          <th>Purchased Kg</th>
+          <th>Price/Kg (KES)</th>
+          <th>Value (KES)</th>
+          <th>Buyer</th>
           <th>Date</th>
           <th>Actions</th>
         </tr>
@@ -2202,7 +2397,8 @@ function renderReports() {
   const summary = state.summary || deriveSummaryFromState();
   const cards = [
     { label: 'Farmers', value: summary.farmers || 0 },
-    { label: 'Produce (kg)', value: Number(summary.totalProduceKg || 0).toFixed(1) },
+    { label: 'QC Lot Weight (kg)', value: Number(summary.totalProduceKg || 0).toFixed(1) },
+    { label: 'Purchased Produce (kg)', value: Number(summary.totalPurchasedKg || 0).toFixed(1) },
     { label: 'Payments Received (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
     { label: 'Payment Success', value: `${summary.paymentSuccessRate || 0}%` }
   ];
@@ -2222,8 +2418,8 @@ function renderReports() {
   const user = isAuthenticated() ? `${state.auth.user.username} (${state.auth.user.role})` : `offline role: ${state.role}`;
 
   elements.reportNarrative.textContent =
-    `Current operations show ${summary.farmers || 0} farmers, ${summary.produceRecords || 0} produce entries, ` +
-    `${summary.paymentRecords || 0} payment records, and ${summary.smsSent || 0} SMS messages. ` +
+    `Current operations show ${summary.farmers || 0} farmers, ${summary.qcRecords ?? summary.produceRecords ?? 0} QC entries, ` +
+    `${summary.purchasedRecords || 0} purchase entries, ${summary.paymentRecords || 0} payment records, and ${summary.smsSent || 0} SMS messages. ` +
     `Data source: ${dataSource}. Session: ${user}.`;
 
   if (!state.agentStats.length) {
@@ -2238,6 +2434,7 @@ function renderReports() {
           <td>${escapeHtml(row.actor)}</td>
           <td>${escapeHtml(String(row.farmers))}</td>
           <td>${escapeHtml(String(row.produceKg))}</td>
+          <td>${escapeHtml(String(row.purchasedKg || 0))}</td>
           <td>${escapeHtml(String(row.sms))}</td>
         </tr>
       `
@@ -2250,7 +2447,8 @@ function renderReports() {
         <tr>
           <th>Actor</th>
           <th>Farmers</th>
-          <th>Produce Kg</th>
+          <th>QC Kg</th>
+          <th>Purchased Kg</th>
           <th>SMS Sent</th>
         </tr>
       </thead>
@@ -2853,11 +3051,28 @@ function hydrateFarmerSelectors() {
 
   const fallback = '<option value="">No farmers yet</option>';
   elements.produceFarmer.innerHTML = options || fallback;
+  elements.purchaseFarmer.innerHTML = options || fallback;
   elements.paymentFarmer.innerHTML = options || fallback;
+  hydratePurchaseQcOptions();
 
   if (!API.enabled && currentSmsMode() === 'selected') {
     void loadSmsRecipients(false);
   }
+}
+
+function hydratePurchaseQcOptions() {
+  if (!elements.purchaseQcRecord) return;
+  const selectedFarmerId = elements.purchaseFarmer?.value || '';
+  const qcOptions = state.produce
+    .filter((row) => !selectedFarmerId || row.farmerId === selectedFarmerId)
+    .slice(0, 400)
+    .map((row) => {
+      const label = `${row.id} | ${row.farmerName || '-'} | ${row.variety || '-'} | ${row.lotWeightKgs ?? row.kgs ?? '-'}kg`;
+      return `<option value="${escapeHtml(row.id)}">${escapeHtml(label)}</option>`;
+    })
+    .join('');
+
+  elements.purchaseQcRecord.innerHTML = '<option value="">Link QC lot (optional)</option>' + qcOptions;
 }
 
 function seedLocalData() {
@@ -2918,6 +3133,23 @@ function seedLocalData() {
       createdAt: now
     }
   ];
+  state.producePurchases = [
+    {
+      id: `PR-${Date.now()}-01`,
+      farmerId: farmerA.id,
+      farmerName: farmerA.name,
+      qcRecordId: state.produce[0].id,
+      variety: 'Hass',
+      sizeCode: 'C20',
+      purchasedKgs: 302.5,
+      pricePerKgKes: 152.5,
+      purchaseValueKes: Number((302.5 * 152.5).toFixed(2)),
+      buyer: 'Agent Njoroge',
+      notes: 'Accepted lot from farm-gate QC',
+      createdBy: 'local',
+      createdAt: now
+    }
+  ];
   state.payments = [
     {
       id: `TX-${Date.now()}-01`,
@@ -2944,6 +3176,8 @@ function seedLocalData() {
 
 function deriveSummaryFromState() {
   const totalProduceKg = state.produce.reduce((sum, row) => sum + Number(row.kgs || 0), 0);
+  const totalPurchasedKg = state.producePurchases.reduce((sum, row) => sum + Number(row.purchasedKgs || 0), 0);
+  const purchasedValueKes = state.producePurchases.reduce((sum, row) => sum + Number(row.purchaseValueKes || 0), 0);
   const paymentsReceived = state.payments
     .filter((row) => row.status === 'Received')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -2954,10 +3188,14 @@ function deriveSummaryFromState() {
 
   return {
     farmers: state.farmers.length,
+    qcRecords: state.produce.length,
     produceRecords: state.produce.length,
+    purchasedRecords: state.producePurchases.length,
     paymentRecords: state.payments.length,
     smsSent: state.smsLogs.length,
     totalProduceKg,
+    totalPurchasedKg,
+    purchasedValueKes,
     paymentsReceived,
     paymentSuccessRate,
     launchReady:
@@ -3086,6 +3324,7 @@ function clearMessages() {
   elements.farmerImportErrors.innerHTML = '';
   elements.farmerImportErrors.classList.remove('import-errors');
   elements.produceMsg.textContent = '';
+  elements.purchaseMsg.textContent = '';
   elements.paymentMsg.textContent = '';
   elements.smsMsg.textContent = '';
   elements.exportsMsg.textContent = '';
@@ -3151,6 +3390,7 @@ function loadState() {
       },
       farmers: Array.isArray(parsed.farmers) ? parsed.farmers.map(normalizeLocalFarmerRow) : [],
       produce: Array.isArray(parsed.produce) ? parsed.produce : [],
+      producePurchases: Array.isArray(parsed.producePurchases) ? parsed.producePurchases : [],
       payments: Array.isArray(parsed.payments) ? parsed.payments : [],
       smsLogs: Array.isArray(parsed.smsLogs) ? parsed.smsLogs : [],
       summary: parsed.summary || null,
@@ -3170,6 +3410,7 @@ function freshState() {
     auth: { token: '', user: null, expiresAt: '' },
     farmers: [],
     produce: [],
+    producePurchases: [],
     payments: [],
     smsLogs: [],
     summary: null,

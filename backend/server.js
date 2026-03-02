@@ -259,7 +259,7 @@ function invalidateUserSessions(store, userId, exceptToken = '') {
 function freshStore() {
   return {
     meta: {
-      version: 2,
+      version: 3,
       createdAt: nowIso(),
       lastWriteAt: nowIso(),
       authMode: ALLOW_DEMO_USERS ? 'demo' : 'private'
@@ -267,6 +267,7 @@ function freshStore() {
     users: ALLOW_DEMO_USERS ? seededDemoUsers() : [],
     farmers: [],
     produce: [],
+    producePurchases: [],
     payments: [],
     smsLogs: [],
     activityLogs: [],
@@ -280,6 +281,7 @@ function normalizeStore(raw) {
     users: Array.isArray(raw.users) ? raw.users : [],
     farmers: Array.isArray(raw.farmers) ? raw.farmers : [],
     produce: Array.isArray(raw.produce) ? raw.produce : [],
+    producePurchases: Array.isArray(raw.producePurchases) ? raw.producePurchases : [],
     payments: Array.isArray(raw.payments) ? raw.payments : [],
     smsLogs: Array.isArray(raw.smsLogs) ? raw.smsLogs : [],
     activityLogs: Array.isArray(raw.activityLogs) ? raw.activityLogs : [],
@@ -287,7 +289,7 @@ function normalizeStore(raw) {
   };
 
   if (!store.meta.createdAt) store.meta.createdAt = nowIso();
-  store.meta.version = 2;
+  store.meta.version = 3;
   store.meta.authMode = ALLOW_DEMO_USERS ? 'demo' : 'private';
 
   const usersValid = store.users.some((u) => u && u.username && u.password && u.password.hash);
@@ -700,6 +702,23 @@ function validateProduce(payload) {
   return '';
 }
 
+function validateProducePurchase(payload) {
+  if (!clean(payload.farmerId)) return 'farmerId is required';
+  if (!(parseNumber(payload.purchasedKgs) > 0)) return 'purchasedKgs must be greater than 0';
+
+  const varietyRaw = clean(payload.variety);
+  if (varietyRaw && !normalizeAvocadoVariety(varietyRaw)) return 'variety must be Hass or Fuerte when provided';
+
+  const unitPriceRaw = clean(payload.pricePerKgKes);
+  if (unitPriceRaw && !(parseNumber(unitPriceRaw) > 0)) return 'pricePerKgKes must be greater than 0 when provided';
+
+  const valueRaw = clean(payload.purchaseValueKes);
+  if (valueRaw && !(parseNumber(valueRaw) > 0)) return 'purchaseValueKes must be greater than 0 when provided';
+
+  if (!clean(payload.buyer)) return 'buyer is required';
+  return '';
+}
+
 function validatePayment(payload) {
   if (!clean(payload.farmerId)) return 'farmerId is required';
   if (!(parseNumber(payload.amount) > 0)) return 'amount must be greater than 0';
@@ -884,6 +903,8 @@ function sendFile(res, filePath) {
 
 function makeSummary(store) {
   const totalProduceKg = store.produce.reduce((sum, row) => sum + Number(row.kgs || 0), 0);
+  const totalPurchasedKg = store.producePurchases.reduce((sum, row) => sum + Number(row.purchasedKgs || 0), 0);
+  const purchasedValueKes = store.producePurchases.reduce((sum, row) => sum + Number(row.purchaseValueKes || 0), 0);
   const paymentsReceived = store.payments
     .filter((row) => row.status === 'Received')
     .reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -895,10 +916,14 @@ function makeSummary(store) {
 
   return {
     farmers: store.farmers.length,
+    qcRecords: store.produce.length,
     produceRecords: store.produce.length,
+    purchasedRecords: store.producePurchases.length,
     paymentRecords: store.payments.length,
     smsSent: store.smsLogs.length,
     totalProduceKg,
+    totalPurchasedKg,
+    purchasedValueKes,
     paymentsReceived,
     paymentSuccessRate,
     launchReady:
@@ -913,25 +938,37 @@ function makeAgentStats(store) {
 
   for (const farmer of store.farmers) {
     if (!farmer.createdBy) continue;
-    if (!byActor[farmer.createdBy]) byActor[farmer.createdBy] = { actor: farmer.createdBy, farmers: 0, produceKg: 0, sms: 0 };
+    if (!byActor[farmer.createdBy]) {
+      byActor[farmer.createdBy] = { actor: farmer.createdBy, farmers: 0, produceKg: 0, purchasedKg: 0, sms: 0 };
+    }
     byActor[farmer.createdBy].farmers += 1;
   }
 
   for (const produce of store.produce) {
     const actor = produce.createdBy || produce.agent || 'unknown';
-    if (!byActor[actor]) byActor[actor] = { actor, farmers: 0, produceKg: 0, sms: 0 };
+    if (!byActor[actor]) byActor[actor] = { actor, farmers: 0, produceKg: 0, purchasedKg: 0, sms: 0 };
     byActor[actor].produceKg += Number(produce.kgs || 0);
+  }
+
+  for (const purchase of store.producePurchases) {
+    const actor = purchase.createdBy || purchase.buyer || 'unknown';
+    if (!byActor[actor]) byActor[actor] = { actor, farmers: 0, produceKg: 0, purchasedKg: 0, sms: 0 };
+    byActor[actor].purchasedKg += Number(purchase.purchasedKgs || 0);
   }
 
   for (const sms of store.smsLogs) {
     const actor = sms.createdBy || 'unknown';
-    if (!byActor[actor]) byActor[actor] = { actor, farmers: 0, produceKg: 0, sms: 0 };
+    if (!byActor[actor]) byActor[actor] = { actor, farmers: 0, produceKg: 0, purchasedKg: 0, sms: 0 };
     byActor[actor].sms += 1;
   }
 
   return Object.values(byActor)
     .sort((a, b) => b.produceKg - a.produceKg)
-    .map((row) => ({ ...row, produceKg: Number(row.produceKg.toFixed(2)) }));
+    .map((row) => ({
+      ...row,
+      produceKg: Number(row.produceKg.toFixed(2)),
+      purchasedKg: Number((row.purchasedKg || 0).toFixed(2))
+    }));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1641,12 +1678,14 @@ const server = http.createServer(async (req, res) => {
     }
 
     const produce = store.produce.filter((row) => row.farmerId === farmer.id);
+    const producePurchases = store.producePurchases.filter((row) => row.farmerId === farmer.id);
     const payments = store.payments.filter((row) => row.farmerId === farmer.id);
 
     json(res, 200, {
       data: {
         farmer,
         produce,
+        producePurchases,
         payments
       }
     });
@@ -1804,9 +1843,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const linkedProduce = store.produce.some((row) => row.farmerId === farmerId);
+    const linkedProducePurchases = store.producePurchases.some((row) => row.farmerId === farmerId);
     const linkedPayments = store.payments.some((row) => row.farmerId === farmerId);
-    if (linkedProduce || linkedPayments) {
-      json(res, 409, { error: 'Cannot delete farmer with produce/payment history' });
+    if (linkedProduce || linkedProducePurchases || linkedPayments) {
+      json(res, 409, { error: 'Cannot delete farmer with produce/purchase/payment history' });
       return;
     }
 
@@ -1951,6 +1991,155 @@ const server = http.createServer(async (req, res) => {
       entity: 'produce',
       entityId: removed.id,
       details: `Deleted produce record ${removed.id}`
+    });
+    writeStore(store);
+    json(res, 200, { data: { success: true } });
+    return;
+  }
+
+  if (pathname === '/api/produce-purchases' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...store.producePurchases];
+    const farmerId = clean(reqUrl.searchParams.get('farmerId'));
+    if (farmerId) rows = rows.filter((row) => row.farmerId === farmerId);
+    rows = filterByQuery(rows, reqUrl.searchParams, [
+      'farmerName',
+      'variety',
+      'sizeCode',
+      'buyer',
+      'qcRecordId',
+      'notes',
+      'createdBy'
+    ]);
+
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 300, 2000);
+    json(res, 200, { data: rows.slice(0, limit) });
+    return;
+  }
+
+  if (pathname === '/api/produce-purchases' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin', 'agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const invalid = validateProducePurchase(payload);
+      if (invalid) {
+        json(res, 422, { error: invalid });
+        return;
+      }
+
+      const farmer = findById(store.farmers, clean(payload.farmerId));
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found' });
+        return;
+      }
+
+      const qcRecordId = clean(payload.qcRecordId);
+      let qcRecord = null;
+      if (qcRecordId) {
+        qcRecord = findById(store.produce, qcRecordId);
+        if (!qcRecord) {
+          json(res, 404, { error: 'QC record not found' });
+          return;
+        }
+        if (qcRecord.farmerId !== farmer.id) {
+          json(res, 422, { error: 'qcRecordId must belong to the selected farmer' });
+          return;
+        }
+      }
+
+      const purchasedKgs = Number(parseNumber(payload.purchasedKgs).toFixed(2));
+      const normalizedVariety = normalizeAvocadoVariety(payload.variety);
+      const variety = normalizedVariety || (qcRecord ? clean(qcRecord.variety) : '');
+      if (!variety) {
+        json(res, 422, { error: 'variety is required when no QC record is linked' });
+        return;
+      }
+
+      const rawSizeCode = clean(payload.sizeCode);
+      const sizeCode = rawSizeCode ? normalizeSizeCode(rawSizeCode) : normalizeSizeCode(qcRecord?.sizeCode);
+      if (rawSizeCode && !sizeCode) {
+        json(res, 422, { error: 'sizeCode must be one of C12, C14, C16, C18, C20, C22, C24, C26, C28' });
+        return;
+      }
+
+      const pricePerKgRaw = clean(payload.pricePerKgKes);
+      const pricePerKgKes = pricePerKgRaw ? Number(parseNumber(pricePerKgRaw).toFixed(2)) : null;
+      const purchaseValueRaw = clean(payload.purchaseValueKes);
+      const computedValue = pricePerKgKes !== null ? purchasedKgs * pricePerKgKes : null;
+      const purchaseValueKes = purchaseValueRaw
+        ? Number(parseNumber(purchaseValueRaw).toFixed(2))
+        : computedValue !== null
+          ? Number(computedValue.toFixed(2))
+          : null;
+
+      const record = {
+        id: id('PR'),
+        farmerId: farmer.id,
+        farmerName: farmer.name,
+        qcRecordId: qcRecord ? qcRecord.id : '',
+        variety,
+        sizeCode: sizeCode || '',
+        purchasedKgs,
+        pricePerKgKes,
+        purchaseValueKes,
+        buyer: clean(payload.buyer),
+        notes: clean(payload.notes),
+        createdBy: auth.session.username,
+        createdAt: nowIso()
+      };
+
+      store.producePurchases.unshift(record);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'produce.purchase.create',
+        entity: 'producePurchase',
+        entityId: record.id,
+        details: `Logged purchase ${record.purchasedKgs}kg (${record.variety}) for ${record.farmerName}`
+      });
+      writeStore(store);
+      json(res, 201, { data: record });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/produce-purchases/') && req.method === 'DELETE') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const purchaseId = routeParam(pathname, '/api/produce-purchases/');
+    const index = store.producePurchases.findIndex((row) => row.id === purchaseId);
+    if (index === -1) {
+      json(res, 404, { error: 'Produce purchase record not found' });
+      return;
+    }
+
+    const [removed] = store.producePurchases.splice(index, 1);
+    addActivity(store, {
+      actor: auth.session.username,
+      role: auth.session.role,
+      action: 'produce.purchase.delete',
+      entity: 'producePurchase',
+      entityId: removed.id,
+      details: `Deleted produce purchase record ${removed.id}`
     });
     writeStore(store);
     json(res, 200, { data: { success: true } });
@@ -2447,6 +2636,33 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/exports/produce-purchases.csv' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const csvData = toCsv(store.producePurchases, [
+      { key: 'id', label: 'id' },
+      { key: 'farmerId', label: 'farmerId' },
+      { key: 'farmerName', label: 'farmerName' },
+      { key: 'qcRecordId', label: 'qcRecordId' },
+      { key: 'variety', label: 'variety' },
+      { key: 'sizeCode', label: 'sizeCode' },
+      { key: 'purchasedKgs', label: 'purchasedKgs' },
+      { key: 'pricePerKgKes', label: 'pricePerKgKes' },
+      { key: 'purchaseValueKes', label: 'purchaseValueKes' },
+      { key: 'buyer', label: 'buyer' },
+      { key: 'notes', label: 'notes' },
+      { key: 'createdBy', label: 'createdBy' },
+      { key: 'createdAt', label: 'createdAt' }
+    ]);
+    csv(res, 'produce-purchases.csv', csvData);
+    return;
+  }
+
   if (pathname === '/api/exports/payments.csv' && req.method === 'GET') {
     const store = readStore();
     const auth = requireSession(req, store, ['admin']);
@@ -2565,6 +2781,7 @@ const server = http.createServer(async (req, res) => {
 
       store.farmers = [];
       store.produce = [];
+      store.producePurchases = [];
       store.payments = [];
       store.smsLogs = [];
       store.activityLogs = [];
@@ -2602,7 +2819,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (store.farmers.length || store.produce.length || store.payments.length) {
+    if (store.farmers.length || store.produce.length || store.producePurchases.length || store.payments.length) {
       json(res, 409, { error: 'Store already has data' });
       return;
     }
@@ -2661,6 +2878,23 @@ const server = http.createServer(async (req, res) => {
         createdAt: nowIso()
       }
     ];
+    store.producePurchases = [
+      {
+        id: id('PR'),
+        farmerId: farmerA.id,
+        farmerName: farmerA.name,
+        qcRecordId: store.produce[0].id,
+        variety: 'Hass',
+        sizeCode: 'C20',
+        purchasedKgs: 302.5,
+        pricePerKgKes: 152.5,
+        purchaseValueKes: Number((302.5 * 152.5).toFixed(2)),
+        buyer: 'Agent Njoroge',
+        notes: 'Accepted lot from farm-gate QC',
+        createdBy: auth.session.username,
+        createdAt: nowIso()
+      }
+    ];
     store.payments = [
       {
         id: id('TX'),
@@ -2690,6 +2924,7 @@ const server = http.createServer(async (req, res) => {
       data: {
         farmers: store.farmers,
         produce: store.produce,
+        producePurchases: store.producePurchases,
         payments: store.payments,
         summary: makeSummary(store)
       }

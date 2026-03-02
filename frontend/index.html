@@ -260,7 +260,7 @@
         </section>
 
         <section class="pane" id="produce">
-          <h2>Farm-Gate Avocado QC</h2>
+          <h2>Produce & Farm-Gate QC</h2>
           <div class="grid">
             <details class="dropdown-card" open>
               <summary>Record Farm-Gate QC</summary>
@@ -327,9 +327,61 @@
             </details>
 
             <details class="dropdown-card">
-              <summary>Recent Produce Entries</summary>
+              <summary>Farm-Gate QC Entries</summary>
               <div class="dropdown-body">
                 <div id="produceTableWrap"></div>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
+              <summary>Record Purchased Produce</summary>
+              <div class="dropdown-body">
+                <form id="purchaseForm">
+                  <p class="meta">Use this after QC to capture the quantity actually bought from the farmer.</p>
+                  <div class="row">
+                    <select required id="purchaseFarmer"></select>
+                    <select id="purchaseQcRecord">
+                      <option value="">Link QC lot (optional)</option>
+                    </select>
+                  </div>
+                  <div class="row">
+                    <input required id="purchaseKgs" type="number" min="0.1" step="0.1" placeholder="Purchased weight (kg)">
+                    <input id="purchasePricePerKgKes" type="number" min="0.1" step="0.1" placeholder="Price per kg (KES, optional)">
+                  </div>
+                  <div class="row">
+                    <select id="purchaseVariety">
+                      <option value="">Variety (optional if QC lot linked)</option>
+                      <option value="Hass">Hass</option>
+                      <option value="Fuerte">Fuerte</option>
+                    </select>
+                    <select id="purchaseSizeCode">
+                      <option value="">Size code (optional)</option>
+                      <option value="C12">C12</option>
+                      <option value="C14">C14</option>
+                      <option value="C16">C16</option>
+                      <option value="C18">C18</option>
+                      <option value="C20">C20</option>
+                      <option value="C22">C22</option>
+                      <option value="C24">C24</option>
+                      <option value="C26">C26</option>
+                      <option value="C28">C28</option>
+                    </select>
+                  </div>
+                  <div class="row">
+                    <input required id="purchaseBuyer" placeholder="Buyer / receiving officer">
+                    <input id="purchaseValueKes" type="number" min="0.1" step="0.1" placeholder="Total value (KES, optional)">
+                  </div>
+                  <textarea id="purchaseNotes" rows="3" placeholder="Purchase notes"></textarea>
+                  <button class="primary" type="submit">Save Purchase</button>
+                  <div class="success" id="purchaseMsg"></div>
+                </form>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
+              <summary>Purchased Produce Log</summary>
+              <div class="dropdown-body">
+                <div id="purchaseTableWrap"></div>
               </div>
             </details>
           </div>
@@ -457,6 +509,7 @@
             <div class="inline-actions wrap">
               <button class="secondary export-btn" data-export="farmers">Export Farmers CSV</button>
               <button class="secondary export-btn" data-export="produce">Export Produce CSV</button>
+              <button class="secondary export-btn" data-export="produce-purchases">Export Produce Purchases CSV</button>
               <button class="secondary export-btn" data-export="payments">Export Payments CSV</button>
               <button class="secondary export-btn" data-export="activity">Export Activity CSV</button>
             </div>

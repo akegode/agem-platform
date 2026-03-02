@@ -412,6 +412,23 @@ async function run() {
       expectStatus: 201
     });
 
+    const purchaseResponse = await request(baseUrl, '/api/produce-purchases', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        farmerId,
+        qcRecordId: '',
+        variety: 'Hass',
+        sizeCode: 'C20',
+        purchasedKgs: 120.3,
+        pricePerKgKes: 155.5,
+        buyer: 'Agent Jane',
+        notes: 'Accepted for pickup'
+      },
+      expectStatus: 201
+    });
+    assert.ok(purchaseResponse.data.id, 'Produce purchase ID missing');
+
     await request(baseUrl, '/api/payments', {
       method: 'POST',
       token: agentToken,
@@ -493,8 +510,10 @@ async function run() {
     });
     assert.strictEqual(summary.data.farmers, 4);
     assert.strictEqual(summary.data.produceRecords, 1);
+    assert.strictEqual(summary.data.purchasedRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 1);
     assert.strictEqual(summary.data.smsSent, 6);
+    assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
       token: adminToken,
@@ -515,6 +534,16 @@ async function run() {
     assert.ok(
       produceCsv.includes('lotWeightKgs,variety,sampleSize,visualGrade,dryMatterPct,firmnessValue,firmnessUnit,avgFruitWeightG,sizeCode,qcDecision,inspector'),
       'Produce CSV header missing farm-gate QC columns'
+    );
+
+    const producePurchasesCsv = await request(baseUrl, '/api/exports/produce-purchases.csv', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(
+      producePurchasesCsv.includes('qcRecordId,variety,sizeCode,purchasedKgs,pricePerKgKes,purchaseValueKes,buyer'),
+      'Produce purchases CSV header missing purchase columns'
     );
 
     await request(baseUrl, '/api/admin/backup', {
@@ -543,6 +572,7 @@ async function run() {
       expectStatus: 200
     });
     assert.strictEqual(summaryAfterReset.data.farmers, 0);
+    assert.strictEqual(summaryAfterReset.data.purchasedRecords, 0);
 
     await request(baseUrl, '/api/auth/logout', {
       method: 'POST',
