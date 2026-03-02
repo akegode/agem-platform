@@ -1,6 +1,8 @@
 const STORAGE_KEY = 'agem_platform_state_v1';
 const MAX_PROFILE_PHOTO_BYTES = 1_500_000;
 const HECTARES_PER_ACRE = 0.40468564224;
+const ACRES_PER_HECTARE = 1 / HECTARES_PER_ACRE;
+const SQFT_PER_HECTARE = 107639.1041671;
 
 const API = {
   enabled: false
@@ -43,8 +45,9 @@ const elements = {
   registerName: document.getElementById('registerName'),
   registerPhone: document.getElementById('registerPhone'),
   registerLocation: document.getElementById('registerLocation'),
-  registerHectares: document.getElementById('registerHectares'),
-  registerAreaUnit: document.getElementById('registerAreaUnit'),
+  registerAreaHectares: document.getElementById('registerAreaHectares'),
+  registerAreaAcres: document.getElementById('registerAreaAcres'),
+  registerAreaSquareFeet: document.getElementById('registerAreaSquareFeet'),
   registerUsername: document.getElementById('registerUsername'),
   registerPassword: document.getElementById('registerPassword'),
   registerConfirmPassword: document.getElementById('registerConfirmPassword'),
@@ -81,8 +84,9 @@ const elements = {
   farmerPhone: document.getElementById('farmerPhone'),
   farmerLocation: document.getElementById('farmerLocation'),
   treeCount: document.getElementById('treeCount'),
-  farmerHectares: document.getElementById('farmerHectares'),
-  farmerAreaUnit: document.getElementById('farmerAreaUnit'),
+  farmerAreaHectares: document.getElementById('farmerAreaHectares'),
+  farmerAreaAcres: document.getElementById('farmerAreaAcres'),
+  farmerAreaSquareFeet: document.getElementById('farmerAreaSquareFeet'),
   farmerNotes: document.getElementById('farmerNotes'),
   farmerSubmitBtn: document.getElementById('farmerSubmitBtn'),
   farmerCancelEditBtn: document.getElementById('farmerCancelEditBtn'),
@@ -151,6 +155,7 @@ async function init() {
   bindRoleSelect();
   bindAccountSettings();
   bindAuth();
+  bindAreaConverters();
   bindScrollTools();
   bindFarmers();
   bindProduce();
@@ -199,6 +204,83 @@ function bindAccountSettings() {
       hideAccountPanel();
     });
   }
+}
+
+function bindAreaConverters() {
+  setupAreaConverterGroup({
+    hectaresInput: elements.registerAreaHectares,
+    acresInput: elements.registerAreaAcres,
+    squareFeetInput: elements.registerAreaSquareFeet
+  });
+  setupAreaConverterGroup({
+    hectaresInput: elements.farmerAreaHectares,
+    acresInput: elements.farmerAreaAcres,
+    squareFeetInput: elements.farmerAreaSquareFeet
+  });
+}
+
+function setupAreaConverterGroup(group) {
+  if (!group.hectaresInput || !group.acresInput || !group.squareFeetInput) return;
+
+  let syncing = false;
+
+  const syncFrom = (source) => {
+    if (syncing) return;
+    syncing = true;
+
+    const sourceValue =
+      source === 'hectares'
+        ? group.hectaresInput.value
+        : source === 'acres'
+          ? group.acresInput.value
+          : group.squareFeetInput.value;
+
+    const sourceParsed = parseAreaClient(sourceValue);
+    if (!String(sourceValue || '').trim()) {
+      group.hectaresInput.value = '';
+      group.acresInput.value = '';
+      group.squareFeetInput.value = '';
+      syncing = false;
+      return;
+    }
+
+    if (!Number.isFinite(sourceParsed) || sourceParsed <= 0) {
+      if (source !== 'hectares') group.hectaresInput.value = '';
+      if (source !== 'acres') group.acresInput.value = '';
+      if (source !== 'squareFeet') group.squareFeetInput.value = '';
+      syncing = false;
+      return;
+    }
+
+    const hectares =
+      source === 'hectares'
+        ? sourceParsed
+        : source === 'acres'
+          ? sourceParsed * HECTARES_PER_ACRE
+          : sourceParsed / SQFT_PER_HECTARE;
+
+    const metrics = areaMetricsFromHectares(hectares);
+
+    if (source !== 'hectares') {
+      group.hectaresInput.value = formatAreaForInput(metrics.hectares, 3);
+    }
+    if (source !== 'acres') {
+      group.acresInput.value = formatAreaForInput(metrics.acres, 3);
+    }
+    if (source !== 'squareFeet') {
+      group.squareFeetInput.value = formatAreaForInput(metrics.squareFeet, 1);
+    }
+
+    syncing = false;
+  };
+
+  group.hectaresInput.addEventListener('input', () => syncFrom('hectares'));
+  group.acresInput.addEventListener('input', () => syncFrom('acres'));
+  group.squareFeetInput.addEventListener('input', () => syncFrom('squareFeet'));
+
+  group.hectaresInput.addEventListener('blur', () => syncFrom('hectares'));
+  group.acresInput.addEventListener('blur', () => syncFrom('acres'));
+  group.squareFeetInput.addEventListener('blur', () => syncFrom('squareFeet'));
 }
 
 function showAccountPanel() {
@@ -345,13 +427,14 @@ function bindAuth() {
     const name = elements.registerName.value.trim();
     const phone = elements.registerPhone.value.trim();
     const location = elements.registerLocation.value.trim();
-    const farmSize = elements.registerHectares.value.trim();
-    const areaUnit = elements.registerAreaUnit.value;
+    const areaHectares = elements.registerAreaHectares.value.trim();
+    const areaAcres = elements.registerAreaAcres.value.trim();
+    const areaSquareFeet = elements.registerAreaSquareFeet.value.trim();
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const confirmPassword = elements.registerConfirmPassword.value;
 
-    if (!name || !phone || !location || !farmSize || !username || !password || !confirmPassword) {
+    if (!name || !phone || !location || (!areaHectares && !areaAcres && !areaSquareFeet) || !username || !password || !confirmPassword) {
       elements.registerMsg.textContent = 'All registration fields are required.';
       return;
     }
@@ -364,7 +447,7 @@ function bindAuth() {
           name,
           phone,
           location,
-          ...buildAreaPayload(farmSize, areaUnit),
+          ...buildAreaPayload(areaHectares, areaAcres, areaSquareFeet),
           username,
           password,
           confirmPassword
@@ -584,7 +667,11 @@ function bindFarmers() {
       phone: elements.farmerPhone.value.trim(),
       location: elements.farmerLocation.value.trim(),
       trees: Number(elements.treeCount.value || 0),
-      ...buildAreaPayload(elements.farmerHectares.value.trim(), elements.farmerAreaUnit.value),
+      ...buildAreaPayload(
+        elements.farmerAreaHectares.value.trim(),
+        elements.farmerAreaAcres.value.trim(),
+        elements.farmerAreaSquareFeet.value.trim()
+      ),
       notes: elements.farmerNotes.value.trim()
     };
 
@@ -715,8 +802,14 @@ function bindFarmers() {
       elements.farmerPhone.value = farmer.phone || '';
       elements.farmerLocation.value = farmer.location || '';
       elements.treeCount.value = farmer.trees || 0;
-      elements.farmerHectares.value = farmer.hectares ?? '';
-      elements.farmerAreaUnit.value = 'hectares';
+      fillAreaInputsFromHectares(
+        {
+          hectaresInput: elements.farmerAreaHectares,
+          acresInput: elements.farmerAreaAcres,
+          squareFeetInput: elements.farmerAreaSquareFeet
+        },
+        farmer.hectares
+      );
       elements.farmerNotes.value = farmer.notes || '';
 
       elements.farmerSubmitBtn.textContent = 'Update Farmer';
@@ -1784,6 +1877,8 @@ function renderFarmers() {
           <td>${escapeHtml(farmer.phone)}</td>
           <td>${escapeHtml(farmer.location)}</td>
           <td>${escapeHtml(formatHectares(farmer.hectares))}</td>
+          <td>${escapeHtml(formatAcres(farmer.hectares))}</td>
+          <td>${escapeHtml(formatSquareFeet(farmer.hectares))}</td>
           <td>${escapeHtml(String(farmer.trees ?? '0'))}</td>
           <td>${escapeHtml(dateShort(farmer.updatedAt || farmer.createdAt))}</td>
           <td class="actions">${actions}</td>
@@ -1801,6 +1896,8 @@ function renderFarmers() {
           <th>Phone</th>
           <th>Location</th>
           <th>Hectares</th>
+          <th>Acres</th>
+          <th>Square Feet</th>
           <th>Trees</th>
           <th>Updated</th>
           <th>Actions</th>
@@ -2110,17 +2207,20 @@ function parseAreaClient(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
-function buildAreaPayload(rawValue, areaUnit) {
-  const parsed = parseAreaClient(rawValue);
-  if (!Number.isFinite(parsed)) {
-    return { hectares: rawValue };
+function areaMetricsFromHectares(hectaresValue) {
+  const hectares = Number(hectaresValue);
+  if (!Number.isFinite(hectares) || hectares <= 0) {
+    return { hectares: NaN, acres: NaN, squareFeet: NaN };
   }
 
-  const hectares = areaUnit === 'acres' ? parsed * HECTARES_PER_ACRE : parsed;
-  return { hectares: Number(hectares.toFixed(3)) };
+  return {
+    hectares,
+    acres: hectares * ACRES_PER_HECTARE,
+    squareFeet: hectares * SQFT_PER_HECTARE
+  };
 }
 
-function toHectaresFromInputsClient(hectaresInput, acresInput) {
+function toHectaresFromInputsClient(hectaresInput, acresInput, squareFeetInput) {
   const hectaresText = String(hectaresInput ?? '').trim();
   if (hectaresText) return parseAreaClient(hectaresText);
 
@@ -2131,7 +2231,53 @@ function toHectaresFromInputsClient(hectaresInput, acresInput) {
     return acres * HECTARES_PER_ACRE;
   }
 
+  const squareFeetText = String(squareFeetInput ?? '').trim();
+  if (squareFeetText) {
+    const squareFeet = parseAreaClient(squareFeetText);
+    if (!Number.isFinite(squareFeet)) return NaN;
+    return squareFeet / SQFT_PER_HECTARE;
+  }
+
   return NaN;
+}
+
+function formatAreaForInput(value, precision) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  return num.toFixed(precision).replace(/\.?0+$/, '');
+}
+
+function fillAreaInputsFromHectares(group, hectaresValue) {
+  if (!group?.hectaresInput || !group?.acresInput || !group?.squareFeetInput) return;
+  const metrics = areaMetricsFromHectares(hectaresValue);
+  if (!Number.isFinite(metrics.hectares)) {
+    group.hectaresInput.value = '';
+    group.acresInput.value = '';
+    group.squareFeetInput.value = '';
+    return;
+  }
+
+  group.hectaresInput.value = formatAreaForInput(metrics.hectares, 3);
+  group.acresInput.value = formatAreaForInput(metrics.acres, 3);
+  group.squareFeetInput.value = formatAreaForInput(metrics.squareFeet, 1);
+}
+
+function buildAreaPayload(hectaresInput, acresInput, squareFeetInput) {
+  const hectares = toHectaresFromInputsClient(hectaresInput, acresInput, squareFeetInput);
+  if (!Number.isFinite(hectares) || hectares <= 0) {
+    return {
+      hectares: String(hectaresInput ?? '').trim(),
+      acres: String(acresInput ?? '').trim(),
+      squareFeet: String(squareFeetInput ?? '').trim()
+    };
+  }
+
+  const metrics = areaMetricsFromHectares(hectares);
+  return {
+    hectares: Number(metrics.hectares.toFixed(3)),
+    acres: Number(metrics.acres.toFixed(3)),
+    squareFeet: Number(metrics.squareFeet.toFixed(1))
+  };
 }
 
 function mapFarmerImportRecordClient(raw) {
@@ -2154,12 +2300,22 @@ function mapFarmerImportRecordClient(raw) {
   const treesRaw = firstNonEmptyClient([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
   const hectaresRaw = firstNonEmptyClient([flat.hectares, flat.hectare, flat.farmsizeha, flat.farmsizehectares, flat.landsizehectares]);
   const acresRaw = firstNonEmptyClient([flat.acres, flat.acre, flat.acreage, flat.farmsizeacres, flat.landsizeacres]);
+  const squareFeetRaw = firstNonEmptyClient([
+    flat.squarefeet,
+    flat.squarefoot,
+    flat.squareft,
+    flat.sqft,
+    flat.ft2,
+    flat.squarefeetarea,
+    flat.farmsizesquarefeet,
+    flat.landsizesquarefeet
+  ]);
 
   return {
     name,
     phone,
     location,
-    hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw),
+    hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw, squareFeetRaw),
     trees: parseTreeCountClient(treesRaw),
     notes
   };
@@ -2169,7 +2325,7 @@ function validateImportedFarmer(mapped) {
   if (!mapped.name) return 'name is required';
   if (!mapped.phone) return 'phone is required';
   if (!mapped.location) return 'location is required';
-  if (!Number.isFinite(mapped.hectares)) return 'hectares (or acres) is required';
+  if (!Number.isFinite(mapped.hectares)) return 'hectares/acres/square feet is required';
   if (mapped.hectares <= 0) return 'hectares must be greater than 0';
   if (Number.isNaN(mapped.trees)) return 'trees must be a number';
   return '';
@@ -2615,9 +2771,21 @@ function formatCurrency(value) {
 }
 
 function formatHectares(value) {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return '-';
-  return num.toFixed(2);
+  const metrics = areaMetricsFromHectares(value);
+  if (!Number.isFinite(metrics.hectares)) return '-';
+  return metrics.hectares.toFixed(2);
+}
+
+function formatAcres(value) {
+  const metrics = areaMetricsFromHectares(value);
+  if (!Number.isFinite(metrics.acres)) return '-';
+  return metrics.acres.toFixed(2);
+}
+
+function formatSquareFeet(value) {
+  const metrics = areaMetricsFromHectares(value);
+  if (!Number.isFinite(metrics.squareFeet)) return '-';
+  return Math.round(metrics.squareFeet).toLocaleString('en-US');
 }
 
 function dateShort(value) {

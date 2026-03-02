@@ -229,6 +229,16 @@ async function run() {
     const farmerId = farmer.data.id;
     assert.ok(farmerId, 'Farmer ID missing after create');
 
+    const farmerPatchedArea = await request(baseUrl, `/api/farmers/${encodeURIComponent(farmerId)}`, {
+      method: 'PATCH',
+      token: adminToken,
+      body: {
+        squareFeet: 107639.1
+      },
+      expectStatus: 200
+    });
+    assert.ok(Math.abs(Number(farmerPatchedArea.data.hectares) - 1.0) < 0.02, 'Square feet update should convert to hectares');
+
     await request(baseUrl, '/api/farmers/import', {
       method: 'POST',
       token: agentToken,
@@ -274,7 +284,7 @@ async function run() {
             'Full Name': 'Alice Otieno',
             MSISDN: '254733445566',
             County: 'Nyeri',
-            hectares: '1.75',
+            'Square Feet': '107639.1',
             'Number of Trees': '14',
             Remarks: 'Excel alias columns'
           }
@@ -302,6 +312,7 @@ async function run() {
     assert.ok(peter && Number.isFinite(Number(peter.hectares)), 'Expected hectares for Peter');
     assert.ok(alice && Number.isFinite(Number(alice.hectares)), 'Expected hectares for Alice');
     assert.ok(Math.abs(Number(peter.hectares) - 1.821) < 0.02, 'Acreage to hectares conversion should be applied');
+    assert.ok(Math.abs(Number(alice.hectares) - 1.0) < 0.02, 'Square-feet to hectares conversion should be applied');
 
     await request(baseUrl, '/api/produce', {
       method: 'POST',
@@ -405,7 +416,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(farmersCsv.includes('name,phone,location,hectares'), 'Farmers CSV header missing');
+    assert.ok(farmersCsv.includes('name,phone,location,hectares,acres,squareFeet'), 'Farmers CSV header missing');
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
 
     await request(baseUrl, '/api/admin/backup', {

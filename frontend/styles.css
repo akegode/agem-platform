@@ -597,6 +597,12 @@ form {
   grid-template-columns: 1fr 1fr;
 }
 
+.area-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
 .inline-actions {
   display: flex;
   gap: 8px;
@@ -840,7 +846,8 @@ button.table-btn.danger {
   }
 
   .grid,
-  .row {
+  .row,
+  .area-grid {
     grid-template-columns: 1fr;
   }
 

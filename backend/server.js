@@ -14,6 +14,7 @@ const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const ACTIVITY_CAP = 1000;
 const HECTARES_PER_ACRE = 0.40468564224;
+const SQFT_PER_HECTARE = 107639.1041671;
 const MIN_PASSWORD_LENGTH = 10;
 
 function envValue(key) {
@@ -490,14 +491,22 @@ function parseArea(value) {
 function resolveHectares(payload) {
   const hectaresRaw = payload?.hectares;
   const acresRaw = payload?.acres;
+  const squareFeetRaw =
+    payload?.squareFeet ?? payload?.squarefeet ?? payload?.square_feet ?? payload?.sqft ?? payload?.squareFt;
   const hasHectares = clean(hectaresRaw) !== '';
   const hasAcres = clean(acresRaw) !== '';
+  const hasSquareFeet = clean(squareFeetRaw) !== '';
 
   if (hasHectares) return parseArea(hectaresRaw);
   if (hasAcres) {
     const acres = parseArea(acresRaw);
     if (!Number.isFinite(acres)) return NaN;
     return acres * HECTARES_PER_ACRE;
+  }
+  if (hasSquareFeet) {
+    const squareFeet = parseArea(squareFeetRaw);
+    if (!Number.isFinite(squareFeet)) return NaN;
+    return squareFeet / SQFT_PER_HECTARE;
   }
   return NaN;
 }
@@ -538,7 +547,7 @@ function validateFarmer(payload) {
   if (!clean(payload.location)) return 'location is required';
   if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
   const hectares = resolveHectares(payload);
-  if (!Number.isFinite(hectares)) return 'hectares (or acres) is required';
+  if (!Number.isFinite(hectares)) return 'hectares/acres/square feet is required';
   if (hectares <= 0) return 'hectares must be greater than 0';
   return '';
 }
@@ -607,7 +616,17 @@ function mapFarmerImportRecord(raw) {
   const trees = parseTrees(treesRaw);
   const hectaresRaw = firstNonEmpty([flat.hectares, flat.hectare, flat.farmsizeha, flat.farmsizehectares, flat.landsizehectares]);
   const acresRaw = firstNonEmpty([flat.acres, flat.acre, flat.acreage, flat.farmsizeacres, flat.landsizeacres]);
-  const hectares = resolveHectares({ hectares: hectaresRaw, acres: acresRaw });
+  const squareFeetRaw = firstNonEmpty([
+    flat.squarefeet,
+    flat.squarefoot,
+    flat.squareft,
+    flat.sqft,
+    flat.ft2,
+    flat.squarefeetarea,
+    flat.farmsizesquarefeet,
+    flat.landsizesquarefeet
+  ]);
+  const hectares = resolveHectares({ hectares: hectaresRaw, acres: acresRaw, squareFeet: squareFeetRaw });
 
   return {
     name,
@@ -843,7 +862,7 @@ const server = http.createServer(async (req, res) => {
       const hectares = resolveHectares(payload);
 
       if (!name || !phone || !location || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, phone, location, hectares/acres, username, password, and confirmPassword are required.' });
+        json(res, 422, { error: 'name, phone, location, hectares/acres/square feet, username, password, and confirmPassword are required.' });
         return;
       }
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
@@ -859,7 +878,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (!Number.isFinite(hectares) || hectares <= 0) {
-        json(res, 422, { error: 'hectares (or acres) must be a number greater than 0.' });
+        json(res, 422, { error: 'hectares/acres/square feet must be a number greater than 0.' });
         return;
       }
 
@@ -1395,10 +1414,18 @@ const server = http.createServer(async (req, res) => {
         }
         farmer.trees = Number(trees.toFixed(2));
       }
-      if (payload.hectares !== undefined || payload.acres !== undefined) {
+      if (
+        payload.hectares !== undefined ||
+        payload.acres !== undefined ||
+        payload.squareFeet !== undefined ||
+        payload.squarefeet !== undefined ||
+        payload.square_feet !== undefined ||
+        payload.sqft !== undefined ||
+        payload.squareFt !== undefined
+      ) {
         const hectares = resolveHectares(payload);
         if (!Number.isFinite(hectares) || hectares <= 0) {
-          json(res, 422, { error: 'hectares (or acres) must be greater than 0' });
+          json(res, 422, { error: 'hectares/acres/square feet must be greater than 0' });
           return;
         }
         farmer.hectares = Number(hectares.toFixed(3));
@@ -1968,12 +1995,26 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const csvData = toCsv(store.farmers, [
+    const farmerRows = store.farmers.map((row) => {
+      const hectares = Number(row.hectares || 0);
+      const acres = Number.isFinite(hectares) ? hectares / HECTARES_PER_ACRE : 0;
+      const squareFeet = Number.isFinite(hectares) ? hectares * SQFT_PER_HECTARE : 0;
+
+      return {
+        ...row,
+        acres: Number(acres.toFixed(3)),
+        squareFeet: Number(squareFeet.toFixed(2))
+      };
+    });
+
+    const csvData = toCsv(farmerRows, [
       { key: 'id', label: 'id' },
       { key: 'name', label: 'name' },
       { key: 'phone', label: 'phone' },
       { key: 'location', label: 'location' },
       { key: 'hectares', label: 'hectares' },
+      { key: 'acres', label: 'acres' },
+      { key: 'squareFeet', label: 'squareFeet' },
       { key: 'trees', label: 'trees' },
       { key: 'notes', label: 'notes' },
       { key: 'createdBy', label: 'createdBy' },
