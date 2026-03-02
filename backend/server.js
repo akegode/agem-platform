@@ -484,10 +484,22 @@ function safeQueryInt(searchParams, key, fallback, max = 1000) {
   return Math.min(Math.floor(num), max);
 }
 
-function filterByQuery(list, searchParams, fields) {
-  const q = clean(searchParams.get('q')).toLowerCase();
+function safeQueryOffset(searchParams, key, fallback = 0, max = 2_000_000) {
+  const raw = searchParams.get(key);
+  if (raw === null || raw === undefined || raw === '') return fallback;
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num < 0) return fallback;
+  return Math.min(Math.floor(num), max);
+}
+
+function filterByTextQuery(list, query, fields) {
+  const q = clean(query).toLowerCase();
   if (!q) return list;
   return list.filter((row) => fields.some((field) => clean(row[field]).toLowerCase().includes(q)));
+}
+
+function filterByQuery(list, searchParams, fields) {
+  return filterByTextQuery(list, searchParams.get('q'), fields);
 }
 
 function validateFarmer(payload) {
@@ -1471,10 +1483,46 @@ const server = http.createServer(async (req, res) => {
     }
 
     let rows = [...store.smsLogs];
-    rows = filterByQuery(rows, reqUrl.searchParams, ['phone', 'message', 'createdBy']);
+    rows = filterByQuery(rows, reqUrl.searchParams, ['phone', 'message', 'createdBy', 'farmerName']);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 300, 2000);
     json(res, 200, { data: rows.slice(0, limit) });
+    return;
+  }
+
+  if (pathname === '/api/sms/recipients' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const q = clean(reqUrl.searchParams.get('q'));
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 50, 200);
+    const offset = safeQueryOffset(reqUrl.searchParams, 'offset', 0, 2_000_000);
+
+    let recipients = store.farmers.filter((row) => clean(row.phone));
+    recipients = filterByTextQuery(recipients, q, ['id', 'name', 'phone', 'location', 'notes']);
+
+    const total = recipients.length;
+    const rows = recipients.slice(offset, offset + limit).map((row) => ({
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      location: row.location
+    }));
+
+    json(res, 200, {
+      data: rows,
+      meta: {
+        q,
+        total,
+        limit,
+        offset,
+        hasMore: offset + rows.length < total
+      }
+    });
     return;
   }
 
@@ -1535,6 +1583,98 @@ const server = http.createServer(async (req, res) => {
       });
       writeStore(store);
       json(res, 201, { data: log });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/sms/send-bulk' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const mode = clean(payload.mode).toLowerCase();
+      const message = clean(payload.message);
+      const selectedIds = Array.isArray(payload.farmerIds) ? payload.farmerIds.map((row) => clean(row)).filter(Boolean) : [];
+
+      if (!message) {
+        json(res, 422, { error: 'message is required' });
+        return;
+      }
+      if (!['all', 'selected'].includes(mode)) {
+        json(res, 422, { error: 'mode must be all or selected' });
+        return;
+      }
+      if (mode === 'selected' && selectedIds.length === 0) {
+        json(res, 422, { error: 'farmerIds is required when mode is selected' });
+        return;
+      }
+
+      let targetFarmers = [];
+      if (mode === 'all') {
+        targetFarmers = store.farmers.filter((row) => clean(row.phone));
+      } else {
+        const selectedSet = new Set(selectedIds);
+        targetFarmers = store.farmers.filter((row) => selectedSet.has(row.id) && clean(row.phone));
+      }
+
+      if (!targetFarmers.length) {
+        json(res, 422, { error: 'No valid farmer recipients with mobile numbers were found.' });
+        return;
+      }
+
+      const byPhone = new Map();
+      for (const farmer of targetFarmers) {
+        const phone = clean(farmer.phone);
+        if (!phone || byPhone.has(phone)) continue;
+        byPhone.set(phone, farmer);
+      }
+
+      const createdAt = nowIso();
+      const logs = [];
+      for (const [phone, farmer] of byPhone.entries()) {
+        logs.push({
+          id: id('SMS'),
+          farmerId: farmer.id || '',
+          farmerName: farmer.name || '',
+          phone,
+          message,
+          provider: 'AfricaTalking(Mock)',
+          status: 'Sent',
+          createdBy: auth.session.username,
+          createdAt
+        });
+      }
+
+      if (!logs.length) {
+        json(res, 422, { error: 'No valid mobile numbers found after deduplication.' });
+        return;
+      }
+
+      store.smsLogs = logs.reverse().concat(store.smsLogs);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'sms.send_bulk',
+        entity: 'sms',
+        details: `Sent bulk SMS to ${logs.length} unique mobile numbers (${mode} mode)`
+      });
+
+      writeStore(store);
+      json(res, 201, {
+        data: {
+          mode,
+          sentCount: logs.length,
+          requestedFarmerCount: targetFarmers.length,
+          uniquePhoneCount: logs.length
+        }
+      });
     } catch (error) {
       json(res, 400, { error: error.message });
     }

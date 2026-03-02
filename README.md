@@ -12,6 +12,7 @@ This project is now a full working web application with authentication, role-bas
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint
 - SMS sending simulation + message logs
+- Bulk SMS for admin (all farmers or selected recipients) with searchable recipient picker
 - Operational KPI dashboard and agent performance report
 - CSV exports (farmers, produce, payments, activity)
 - Backup snapshots + backup listing

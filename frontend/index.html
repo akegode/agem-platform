@@ -292,10 +292,37 @@
               <summary>Send SMS</summary>
               <div class="dropdown-body">
               <form id="smsForm">
-                <div class="row">
-                  <select id="smsFarmer"></select>
-                  <input id="smsPhone" placeholder="Phone (optional if farmer selected)">
+                <select id="smsTargetMode">
+                  <option value="selected">Selected Farmers</option>
+                  <option value="all">All Farmers (Select All)</option>
+                  <option value="single">Single Mobile Number</option>
+                </select>
+
+                <div id="smsSingleWrap">
+                  <input id="smsPhone" placeholder="Phone number (e.g. 2547xxxxxxx)">
                 </div>
+
+                <div id="smsRecipientPickerWrap">
+                  <div class="row">
+                    <input id="smsRecipientSearch" placeholder="Search by name, phone, location, or notes">
+                    <button class="secondary" id="smsRecipientSearchBtn" type="button">Search</button>
+                  </div>
+
+                  <div class="inline-actions wrap">
+                    <button class="secondary" id="smsSelectVisibleBtn" type="button">Select Visible</button>
+                    <button class="secondary" id="smsClearSelectedBtn" type="button">Clear Selected</button>
+                    <button class="secondary" id="smsPrevPageBtn" type="button">Prev</button>
+                    <button class="secondary" id="smsNextPageBtn" type="button">Next</button>
+                  </div>
+
+                  <p class="meta" id="smsSelectionInfo">0 selected.</p>
+                  <div id="smsRecipientListWrap"></div>
+                </div>
+
+                <div id="smsAllModeNotice" class="empty" hidden>
+                  This will send one SMS to every unique farmer mobile number on the platform.
+                </div>
+
                 <textarea id="smsMessage" rows="4" placeholder="Message"></textarea>
                 <button class="primary" type="submit">Send SMS</button>
                 <div class="success" id="smsMsg"></div>

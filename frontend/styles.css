@@ -227,6 +227,25 @@ body.dashboard-open {
   transform: translateY(-1px);
 }
 
+#smsSingleWrap {
+  display: grid;
+  gap: 8px;
+}
+
+#smsRecipientPickerWrap {
+  border: 1px dashed #d0d0cb;
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  background: #fcfcfa;
+}
+
+#smsRecipientListWrap {
+  max-height: 280px;
+  overflow: auto;
+}
+
 .auth-title {
   margin: 0 0 6px;
   font-size: 0.9rem;

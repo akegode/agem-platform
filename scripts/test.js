@@ -274,6 +274,46 @@ async function run() {
       expectStatus: 201
     });
 
+    const recipientSearch = await request(baseUrl, '/api/sms/recipients?q=grace&limit=10&offset=0', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(recipientSearch.data));
+    assert.ok((recipientSearch.meta?.total || 0) >= 1);
+
+    await request(baseUrl, '/api/sms/send-bulk', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        mode: 'all',
+        message: 'Agent should not be allowed for bulk SMS.'
+      },
+      expectStatus: 403
+    });
+
+    const bulkSelected = await request(baseUrl, '/api/sms/send-bulk', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        mode: 'selected',
+        farmerIds: [farmerId],
+        message: 'Selected recipient broadcast.'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(bulkSelected.data.sentCount, 1);
+
+    const bulkAll = await request(baseUrl, '/api/sms/send-bulk', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        mode: 'all',
+        message: 'Platform-wide broadcast.'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(bulkAll.data.sentCount, 2);
+
     const summary = await request(baseUrl, '/api/reports/summary', {
       token: adminToken,
       expectStatus: 200
@@ -281,7 +321,7 @@ async function run() {
     assert.strictEqual(summary.data.farmers, 2);
     assert.strictEqual(summary.data.produceRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 1);
-    assert.strictEqual(summary.data.smsSent, 1);
+    assert.strictEqual(summary.data.smsSent, 4);
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
       token: adminToken,

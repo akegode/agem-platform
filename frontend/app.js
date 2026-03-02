@@ -6,6 +6,14 @@ const API = {
 };
 
 const state = loadState();
+const smsPicker = {
+  q: '',
+  offset: 0,
+  limit: 50,
+  total: 0,
+  rows: [],
+  selectedIds: new Set()
+};
 
 const elements = {
   authShell: document.getElementById('authShell'),
@@ -96,7 +104,18 @@ const elements = {
   paymentTableWrap: document.getElementById('paymentTableWrap'),
 
   smsForm: document.getElementById('smsForm'),
-  smsFarmer: document.getElementById('smsFarmer'),
+  smsTargetMode: document.getElementById('smsTargetMode'),
+  smsSingleWrap: document.getElementById('smsSingleWrap'),
+  smsRecipientPickerWrap: document.getElementById('smsRecipientPickerWrap'),
+  smsRecipientSearch: document.getElementById('smsRecipientSearch'),
+  smsRecipientSearchBtn: document.getElementById('smsRecipientSearchBtn'),
+  smsSelectVisibleBtn: document.getElementById('smsSelectVisibleBtn'),
+  smsClearSelectedBtn: document.getElementById('smsClearSelectedBtn'),
+  smsPrevPageBtn: document.getElementById('smsPrevPageBtn'),
+  smsNextPageBtn: document.getElementById('smsNextPageBtn'),
+  smsSelectionInfo: document.getElementById('smsSelectionInfo'),
+  smsRecipientListWrap: document.getElementById('smsRecipientListWrap'),
+  smsAllModeNotice: document.getElementById('smsAllModeNotice'),
   smsPhone: document.getElementById('smsPhone'),
   smsMessage: document.getElementById('smsMessage'),
   smsMsg: document.getElementById('smsMsg'),
@@ -473,6 +492,10 @@ function bindAuth() {
     persist();
     elements.changePasswordForm.reset();
     elements.profilePhotoInput.value = '';
+    smsPicker.selectedIds.clear();
+    smsPicker.rows = [];
+    smsPicker.total = 0;
+    smsPicker.offset = 0;
     elements.registrationPanel.open = false;
     elements.recoveryPanel.open = false;
 
@@ -886,12 +909,62 @@ function bindPayments() {
 }
 
 function bindSms() {
-  elements.smsFarmer.addEventListener('change', () => {
-    if (!elements.smsFarmer.value) return;
-    const farmer = state.farmers.find((row) => row.id === elements.smsFarmer.value);
-    if (farmer) {
-      elements.smsPhone.value = farmer.phone || '';
+  elements.smsTargetMode.addEventListener('change', async () => {
+    clearMessages();
+    updateSmsComposerUi();
+    if (currentSmsMode() === 'selected') {
+      await loadSmsRecipients(true);
     }
+  });
+
+  elements.smsRecipientSearchBtn.addEventListener('click', async () => {
+    clearMessages();
+    await loadSmsRecipients(true);
+  });
+
+  elements.smsRecipientSearch.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    clearMessages();
+    await loadSmsRecipients(true);
+  });
+
+  elements.smsPrevPageBtn.addEventListener('click', async () => {
+    if (smsPicker.offset === 0) return;
+    smsPicker.offset = Math.max(0, smsPicker.offset - smsPicker.limit);
+    await loadSmsRecipients(false);
+  });
+
+  elements.smsNextPageBtn.addEventListener('click', async () => {
+    if (smsPicker.offset + smsPicker.rows.length >= smsPicker.total) return;
+    smsPicker.offset += smsPicker.limit;
+    await loadSmsRecipients(false);
+  });
+
+  elements.smsSelectVisibleBtn.addEventListener('click', () => {
+    for (const row of smsPicker.rows) {
+      smsPicker.selectedIds.add(row.id);
+    }
+    renderSmsRecipientList();
+  });
+
+  elements.smsClearSelectedBtn.addEventListener('click', () => {
+    smsPicker.selectedIds.clear();
+    renderSmsRecipientList();
+  });
+
+  elements.smsRecipientListWrap.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('input[data-farmer-id]');
+    if (!checkbox) return;
+    const farmerId = checkbox.dataset.farmerId;
+    if (!farmerId) return;
+
+    if (checkbox.checked) {
+      smsPicker.selectedIds.add(farmerId);
+    } else {
+      smsPicker.selectedIds.delete(farmerId);
+    }
+    renderSmsRecipientList();
   });
 
   elements.smsForm.addEventListener('submit', async (event) => {
@@ -903,11 +976,18 @@ function bindSms() {
       return;
     }
 
-    const payload = {
-      farmerId: elements.smsFarmer.value || '',
-      phone: elements.smsPhone.value.trim(),
-      message: elements.smsMessage.value.trim()
-    };
+    const mode = currentSmsMode();
+    const message = elements.smsMessage.value.trim();
+
+    if (!message) {
+      elements.smsMsg.textContent = 'Message is required.';
+      return;
+    }
+
+    if (mode !== 'single' && currentRole() !== 'admin') {
+      elements.smsMsg.textContent = 'Bulk SMS is admin-only. Switch mode to Single Mobile Number.';
+      return;
+    }
 
     try {
       if (API.enabled) {
@@ -916,57 +996,275 @@ function bindSms() {
           return;
         }
 
-        await apiRequest('/api/sms/send', {
-          method: 'POST',
-          body: payload
-        });
+        if (mode === 'single') {
+          const phone = elements.smsPhone.value.trim();
+          if (!phone) {
+            elements.smsMsg.textContent = 'Phone number is required for single send mode.';
+            return;
+          }
 
-        elements.smsForm.reset();
-        elements.smsMsg.textContent = 'SMS sent.';
+          await apiRequest('/api/sms/send', {
+            method: 'POST',
+            body: { phone, message }
+          });
+          elements.smsMsg.textContent = 'SMS sent.';
+        } else if (mode === 'all') {
+          const response = await apiRequest('/api/sms/send-bulk', {
+            method: 'POST',
+            body: { mode: 'all', message }
+          });
+          elements.smsMsg.textContent = `Bulk SMS sent to ${response.data.sentCount} recipients.`;
+        } else {
+          if (smsPicker.selectedIds.size === 0) {
+            elements.smsMsg.textContent = 'Select at least one recipient first.';
+            return;
+          }
+
+          const response = await apiRequest('/api/sms/send-bulk', {
+            method: 'POST',
+            body: {
+              mode: 'selected',
+              farmerIds: [...smsPicker.selectedIds],
+              message
+            }
+          });
+          elements.smsMsg.textContent = `Bulk SMS sent to ${response.data.sentCount} recipients.`;
+        }
+
+        elements.smsMessage.value = '';
         await fetchAllData();
         return;
       }
 
-      if (!payload.message) {
-        elements.smsMsg.textContent = 'Message is required.';
-        return;
-      }
-
-      let phone = payload.phone;
-      let farmerName = '';
-      if (payload.farmerId) {
-        const farmer = state.farmers.find((row) => row.id === payload.farmerId);
-        if (farmer) {
-          phone = farmer.phone;
-          farmerName = farmer.name;
+      if (mode === 'single') {
+        const phone = elements.smsPhone.value.trim();
+        if (!phone) {
+          elements.smsMsg.textContent = 'Phone number is required for single send mode.';
+          return;
         }
+
+        state.smsLogs.unshift({
+          id: `SMS-${Date.now()}`,
+          farmerId: '',
+          farmerName: '',
+          phone,
+          message,
+          provider: 'Local Mock',
+          status: 'Sent',
+          createdBy: 'local',
+          createdAt: new Date().toISOString()
+        });
+        elements.smsMsg.textContent = 'SMS sent (local mode).';
+      } else {
+        if (mode === 'selected' && smsPicker.selectedIds.size === 0) {
+          elements.smsMsg.textContent = 'Select at least one recipient first.';
+          return;
+        }
+
+        let targets = [];
+        if (mode === 'all') {
+          targets = state.farmers.filter((row) => String(row.phone || '').trim());
+        } else {
+          targets = state.farmers.filter((row) => smsPicker.selectedIds.has(row.id) && String(row.phone || '').trim());
+        }
+
+        const byPhone = new Map();
+        for (const farmer of targets) {
+          const phone = String(farmer.phone || '').trim();
+          if (!phone || byPhone.has(phone)) continue;
+          byPhone.set(phone, farmer);
+        }
+
+        const now = new Date().toISOString();
+        const logs = [];
+        for (const [phone, farmer] of byPhone.entries()) {
+          logs.push({
+            id: `SMS-${Date.now()}-${logs.length + 1}`,
+            farmerId: farmer.id || '',
+            farmerName: farmer.name || '',
+            phone,
+            message,
+            provider: 'Local Mock',
+            status: 'Sent',
+            createdBy: 'local',
+            createdAt: now
+          });
+        }
+
+        state.smsLogs = logs.reverse().concat(state.smsLogs);
+        elements.smsMsg.textContent = `Bulk SMS sent to ${logs.length} recipients (local mode).`;
       }
 
-      if (!phone) {
-        elements.smsMsg.textContent = 'Provide phone or select farmer.';
-        return;
-      }
-
-      state.smsLogs.unshift({
-        id: `SMS-${Date.now()}`,
-        farmerId: payload.farmerId,
-        farmerName,
-        phone,
-        message: payload.message,
-        provider: 'Local Mock',
-        status: 'Sent',
-        createdBy: 'local',
-        createdAt: new Date().toISOString()
-      });
-
-      elements.smsForm.reset();
-      elements.smsMsg.textContent = 'SMS sent (local mode).';
+      elements.smsMessage.value = '';
       renderAll();
       persist();
     } catch (error) {
       elements.smsMsg.textContent = error.message;
     }
   });
+
+  updateSmsComposerUi();
+  void loadSmsRecipients(true);
+}
+
+function currentSmsMode() {
+  return String(elements.smsTargetMode.value || 'selected').trim().toLowerCase();
+}
+
+function updateSmsComposerUi() {
+  let mode = currentSmsMode();
+
+  if (currentRole() !== 'admin' && mode !== 'single') {
+    mode = 'single';
+    elements.smsTargetMode.value = 'single';
+  }
+
+  elements.smsSingleWrap.hidden = mode !== 'single';
+  elements.smsRecipientPickerWrap.hidden = mode !== 'selected';
+  elements.smsAllModeNotice.hidden = mode !== 'all';
+
+  const submitBtn = elements.smsForm.querySelector('button[type="submit"]');
+  if (mode === 'all') {
+    submitBtn.textContent = 'Send SMS to All Mobile Numbers';
+  } else if (mode === 'selected') {
+    submitBtn.textContent = 'Send SMS to Selected Recipients';
+  } else {
+    submitBtn.textContent = 'Send SMS';
+  }
+
+  const allowBulk = currentRole() === 'admin';
+  elements.smsTargetMode.disabled = !allowBulk;
+  elements.smsSelectVisibleBtn.disabled = !allowBulk || mode !== 'selected' || smsPicker.rows.length === 0;
+  elements.smsClearSelectedBtn.disabled = !allowBulk || smsPicker.selectedIds.size === 0;
+  elements.smsPrevPageBtn.disabled = !allowBulk || mode !== 'selected' || smsPicker.offset === 0;
+  elements.smsNextPageBtn.disabled = !allowBulk || mode !== 'selected' || smsPicker.offset + smsPicker.rows.length >= smsPicker.total;
+  elements.smsRecipientSearchBtn.disabled = !allowBulk || mode !== 'selected';
+  elements.smsRecipientSearch.disabled = !allowBulk || mode !== 'selected';
+}
+
+async function loadSmsRecipients(reset = false) {
+  if (currentSmsMode() !== 'selected') {
+    renderSmsRecipientList();
+    return;
+  }
+
+  if (reset) {
+    smsPicker.offset = 0;
+  }
+
+  const q = elements.smsRecipientSearch.value.trim();
+  smsPicker.q = q;
+
+  try {
+    if (API.enabled) {
+      if (!isAuthenticated()) {
+        smsPicker.rows = [];
+        smsPicker.total = 0;
+        renderSmsRecipientList();
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      params.set('limit', String(smsPicker.limit));
+      params.set('offset', String(smsPicker.offset));
+
+      const response = await apiRequest(`/api/sms/recipients?${params.toString()}`);
+      smsPicker.rows = Array.isArray(response.data) ? response.data : [];
+      smsPicker.total = Number(response.meta?.total || smsPicker.rows.length);
+
+      if (smsPicker.offset > 0 && smsPicker.rows.length === 0) {
+        smsPicker.offset = Math.max(0, smsPicker.offset - smsPicker.limit);
+        return loadSmsRecipients(false);
+      }
+
+      renderSmsRecipientList();
+      return;
+    }
+
+    let rows = state.farmers.filter((row) => String(row.phone || '').trim());
+    if (q) {
+      const needle = q.toLowerCase();
+      rows = rows.filter((row) => {
+        const text = `${row.id || ''} ${row.name || ''} ${row.phone || ''} ${row.location || ''} ${row.notes || ''}`.toLowerCase();
+        return text.includes(needle);
+      });
+    }
+
+    smsPicker.total = rows.length;
+    smsPicker.rows = rows.slice(smsPicker.offset, smsPicker.offset + smsPicker.limit).map((row) => ({
+      id: row.id,
+      name: row.name,
+      phone: row.phone,
+      location: row.location
+    }));
+
+    if (smsPicker.offset > 0 && smsPicker.rows.length === 0) {
+      smsPicker.offset = Math.max(0, smsPicker.offset - smsPicker.limit);
+      return loadSmsRecipients(false);
+    }
+
+    renderSmsRecipientList();
+  } catch (error) {
+    smsPicker.rows = [];
+    smsPicker.total = 0;
+    renderSmsRecipientList();
+    elements.smsMsg.textContent = error.message;
+  }
+}
+
+function renderSmsRecipientList() {
+  if (currentSmsMode() !== 'selected') {
+    elements.smsRecipientListWrap.innerHTML = '';
+    elements.smsSelectionInfo.textContent = '';
+    updateSmsComposerUi();
+    return;
+  }
+
+  const selectedCount = smsPicker.selectedIds.size;
+  const start = smsPicker.total ? smsPicker.offset + 1 : 0;
+  const end = smsPicker.offset + smsPicker.rows.length;
+
+  elements.smsSelectionInfo.textContent = `${selectedCount} selected. Showing ${start}-${end} of ${smsPicker.total}${
+    smsPicker.q ? ` (query: "${smsPicker.q}")` : ''
+  }.`;
+
+  if (!smsPicker.rows.length) {
+    elements.smsRecipientListWrap.innerHTML = '<div class="empty">No recipients found for this search.</div>';
+    updateSmsComposerUi();
+    return;
+  }
+
+  const rows = smsPicker.rows
+    .map(
+      (row) => `
+        <tr>
+          <td>
+            <input type="checkbox" data-farmer-id="${escapeHtml(row.id)}" ${smsPicker.selectedIds.has(row.id) ? 'checked' : ''}>
+          </td>
+          <td>${escapeHtml(row.name || '-')}</td>
+          <td>${escapeHtml(row.phone || '-')}</td>
+          <td>${escapeHtml(row.location || '-')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  elements.smsRecipientListWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Select</th>
+          <th>Name</th>
+          <th>Phone</th>
+          <th>Location</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  updateSmsComposerUi();
 }
 
 function bindExports() {
@@ -1171,6 +1469,9 @@ async function fetchAllData() {
     persist();
 
     notifySync(`Connected to backend as ${currentRole()}.`);
+    if (currentSmsMode() === 'selected') {
+      await loadSmsRecipients(false);
+    }
   } catch (error) {
     notifySync(error.message);
   }
@@ -1330,6 +1631,8 @@ function updatePermissionUi() {
       button.disabled = !(backendAuthReady && ['admin', 'agent'].includes(role));
     }
   });
+
+  updateSmsComposerUi();
 }
 
 function updateRoleHint() {
@@ -1684,7 +1987,10 @@ function hydrateFarmerSelectors() {
   const fallback = '<option value="">No farmers yet</option>';
   elements.produceFarmer.innerHTML = options || fallback;
   elements.paymentFarmer.innerHTML = options || fallback;
-  elements.smsFarmer.innerHTML = `<option value="">Select farmer (optional)</option>${options}`;
+
+  if (!API.enabled && currentSmsMode() === 'selected') {
+    void loadSmsRecipients(false);
+  }
 }
 
 function seedLocalData() {
