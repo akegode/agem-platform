@@ -10,6 +10,8 @@ const state = loadState();
 const elements = {
   authShell: document.getElementById('authShell'),
   appShell: document.getElementById('appShell'),
+  dashboardMain: document.querySelector('.dashboard-shell main'),
+  scrollTopBtn: document.getElementById('scrollTopBtn'),
 
   tabs: document.querySelectorAll('#tabs button'),
   panes: document.querySelectorAll('.pane'),
@@ -113,6 +115,7 @@ async function init() {
   bindTabs();
   bindRoleSelect();
   bindAuth();
+  bindScrollTools();
   bindFarmers();
   bindProduce();
   bindPayments();
@@ -142,6 +145,18 @@ async function init() {
   }
 
   updatePermissionUi();
+}
+
+function bindScrollTools() {
+  if (!elements.dashboardMain || !elements.scrollTopBtn) return;
+
+  elements.dashboardMain.addEventListener('scroll', () => {
+    elements.scrollTopBtn.hidden = elements.dashboardMain.scrollTop < 260;
+  });
+
+  elements.scrollTopBtn.addEventListener('click', () => {
+    elements.dashboardMain.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 }
 
 function bindTabs() {
@@ -1160,6 +1175,7 @@ function updateAuthUi() {
   if (isAuthenticated()) {
     elements.authShell.hidden = true;
     elements.appShell.hidden = false;
+    document.body.classList.add('dashboard-open');
     elements.authState.textContent = `Signed in: ${state.auth.user.username} (${state.auth.user.role})`;
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
@@ -1177,6 +1193,9 @@ function updateAuthUi() {
   } else {
     elements.authShell.hidden = false;
     elements.appShell.hidden = true;
+    elements.scrollTopBtn.hidden = true;
+    if (elements.dashboardMain) elements.dashboardMain.scrollTop = 0;
+    document.body.classList.remove('dashboard-open');
     elements.authState.textContent = 'Not signed in';
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';

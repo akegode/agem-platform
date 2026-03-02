@@ -33,6 +33,10 @@ body {
   padding: 20px;
 }
 
+body.dashboard-open {
+  overflow: hidden;
+}
+
 .auth-shell {
   max-width: 1120px;
   margin: 0 auto;
@@ -71,6 +75,7 @@ body {
 .dashboard-shell {
   max-width: 1240px;
   margin: 0 auto;
+  height: calc(100vh - 40px);
 }
 
 .app {
@@ -80,6 +85,8 @@ body {
   grid-template-columns: 300px 1fr;
   gap: 18px;
   animation: fadeIn 450ms ease;
+  height: 100%;
+  min-height: 0;
 }
 
 .sidebar {
@@ -89,9 +96,16 @@ body {
   border-radius: var(--radius);
   padding: 18px;
   box-shadow: var(--shadow);
-  position: sticky;
-  top: 18px;
-  height: fit-content;
+  position: relative;
+  top: auto;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.app main {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .brand-wrap {
@@ -505,6 +519,12 @@ table {
   border: 1px solid var(--line);
 }
 
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 th,
 td {
   padding: 9px;
@@ -550,6 +570,31 @@ button.table-btn.danger {
   color: var(--ink-muted);
   background: #fafaf8;
   font-size: 0.9rem;
+}
+
+#farmerTableWrap,
+#produceTableWrap,
+#paymentTableWrap,
+#smsTableWrap,
+#agentStatsWrap,
+#backupListWrap {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.scroll-top {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 20;
+  border: none;
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: #111111;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow);
 }
 
 .timeline {
@@ -606,16 +651,32 @@ button.table-btn.danger {
     padding: 14px;
   }
 
+  body.dashboard-open {
+    overflow: auto;
+  }
+
+  .dashboard-shell {
+    height: auto;
+  }
+
   .auth-layout {
     grid-template-columns: 1fr;
   }
 
   .app {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .sidebar {
     position: static;
+    height: auto;
+    overflow: visible;
+  }
+
+  .app main {
+    overflow: visible;
+    padding-right: 0;
   }
 
   .grid,
@@ -625,6 +686,11 @@ button.table-btn.danger {
 
   .top-actions {
     justify-items: start;
+  }
+
+  .scroll-top {
+    right: 14px;
+    bottom: 14px;
   }
 }
 
