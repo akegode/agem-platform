@@ -632,11 +632,71 @@ function validateFarmer(payload) {
   return '';
 }
 
+function normalizeAvocadoVariety(value) {
+  const upper = clean(value).toUpperCase();
+  if (upper === 'HASS') return 'Hass';
+  if (upper === 'FUERTE') return 'Fuerte';
+  return '';
+}
+
+function normalizeVisualGrade(value) {
+  const upper = clean(value).toUpperCase();
+  if (upper === 'PASS') return 'Pass';
+  if (upper === 'BORDERLINE') return 'Borderline';
+  if (upper === 'REJECT') return 'Reject';
+  return '';
+}
+
+function normalizeQcDecision(value) {
+  const upper = clean(value).toUpperCase();
+  if (upper === 'ACCEPT') return 'Accept';
+  if (upper === 'HOLD') return 'Hold';
+  if (upper === 'REJECT') return 'Reject';
+  return '';
+}
+
+function normalizeFirmnessUnit(value) {
+  const upper = clean(value).toUpperCase();
+  if (upper === 'N') return 'N';
+  if (upper === 'KGF') return 'kgf';
+  return '';
+}
+
+function normalizeSizeCode(value) {
+  const upper = clean(value).toUpperCase();
+  if (!upper) return '';
+  const numeric = upper.startsWith('C') ? upper.slice(1) : upper;
+  const allowed = new Set(['12', '14', '16', '18', '20', '22', '24', '26', '28']);
+  if (!allowed.has(numeric)) return '';
+  return `C${numeric}`;
+}
+
 function validateProduce(payload) {
   if (!clean(payload.farmerId)) return 'farmerId is required';
-  if (!(parseNumber(payload.kgs) > 0)) return 'kgs must be greater than 0';
-  if (!clean(payload.quality)) return 'quality is required';
-  if (!clean(payload.agent)) return 'agent is required';
+  if (!(parseNumber(payload.kgs ?? payload.lotWeightKgs) > 0)) return 'lotWeightKgs must be greater than 0';
+  if (!normalizeAvocadoVariety(payload.variety)) return 'variety must be Hass or Fuerte';
+
+  const sampleSize = parseNumber(payload.sampleSize);
+  if (!Number.isFinite(sampleSize) || sampleSize < 1 || !Number.isInteger(sampleSize)) {
+    return 'sampleSize must be a whole number greater than 0';
+  }
+
+  if (!normalizeVisualGrade(payload.visualGrade)) return 'visualGrade must be Pass, Borderline, or Reject';
+
+  const dryMatterRaw = clean(payload.dryMatterPct);
+  if (dryMatterRaw) {
+    const dryMatterPct = parseNumber(dryMatterRaw);
+    if (!Number.isFinite(dryMatterPct) || dryMatterPct <= 0 || dryMatterPct > 100) {
+      return 'dryMatterPct must be between 0 and 100 when provided';
+    }
+  }
+
+  if (!(parseNumber(payload.firmnessValue) > 0)) return 'firmnessValue must be greater than 0';
+  if (!normalizeFirmnessUnit(payload.firmnessUnit)) return 'firmnessUnit must be N or kgf';
+  if (!(parseNumber(payload.avgFruitWeightG) > 0)) return 'avgFruitWeightG must be greater than 0';
+  if (!normalizeSizeCode(payload.sizeCode)) return 'sizeCode must be one of C12, C14, C16, C18, C20, C22, C24, C26, C28';
+  if (!normalizeQcDecision(payload.qcDecision)) return 'qcDecision must be Accept, Hold, or Reject';
+  if (!clean(payload.inspector ?? payload.agent)) return 'inspector is required';
   return '';
 }
 
@@ -1775,7 +1835,18 @@ const server = http.createServer(async (req, res) => {
     let rows = [...store.produce];
     const farmerId = clean(reqUrl.searchParams.get('farmerId'));
     if (farmerId) rows = rows.filter((row) => row.farmerId === farmerId);
-    rows = filterByQuery(rows, reqUrl.searchParams, ['farmerName', 'quality', 'agent', 'createdBy']);
+    rows = filterByQuery(rows, reqUrl.searchParams, [
+      'farmerName',
+      'variety',
+      'visualGrade',
+      'sizeCode',
+      'qcDecision',
+      'inspector',
+      'quality',
+      'agent',
+      'notes',
+      'createdBy'
+    ]);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 300, 2000);
     json(res, 200, { data: rows.slice(0, limit) });
@@ -1804,13 +1875,37 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      const lotWeightKgs = Number(parseNumber(payload.kgs ?? payload.lotWeightKgs).toFixed(2));
+      const variety = normalizeAvocadoVariety(payload.variety);
+      const sampleSize = Math.floor(parseNumber(payload.sampleSize));
+      const visualGrade = normalizeVisualGrade(payload.visualGrade);
+      const dryMatterRaw = clean(payload.dryMatterPct);
+      const dryMatterPct = dryMatterRaw ? Number(parseNumber(dryMatterRaw).toFixed(2)) : null;
+      const firmnessValue = Number(parseNumber(payload.firmnessValue).toFixed(2));
+      const firmnessUnit = normalizeFirmnessUnit(payload.firmnessUnit);
+      const avgFruitWeightG = Number(parseNumber(payload.avgFruitWeightG).toFixed(1));
+      const sizeCode = normalizeSizeCode(payload.sizeCode);
+      const qcDecision = normalizeQcDecision(payload.qcDecision);
+      const inspector = clean(payload.inspector ?? payload.agent);
+
       const record = {
         id: id('P'),
         farmerId: farmer.id,
         farmerName: farmer.name,
-        kgs: Number(parseNumber(payload.kgs).toFixed(2)),
-        quality: clean(payload.quality),
-        agent: clean(payload.agent),
+        kgs: lotWeightKgs,
+        lotWeightKgs,
+        variety,
+        sampleSize,
+        visualGrade,
+        dryMatterPct,
+        firmnessValue,
+        firmnessUnit,
+        avgFruitWeightG,
+        sizeCode,
+        qcDecision,
+        inspector,
+        quality: visualGrade,
+        agent: inspector,
         notes: clean(payload.notes),
         createdBy: auth.session.username,
         createdAt: nowIso()
@@ -1823,7 +1918,7 @@ const server = http.createServer(async (req, res) => {
         action: 'produce.create',
         entity: 'produce',
         entityId: record.id,
-        details: `Logged ${record.kgs}kg for ${record.farmerName}`
+        details: `Logged farm-gate QC ${record.variety} lot (${record.kgs}kg) for ${record.farmerName}`
       });
       writeStore(store);
       json(res, 201, { data: record });
@@ -2322,13 +2417,29 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const csvData = toCsv(store.produce, [
+    const produceRows = store.produce.map((row) => ({
+      ...row,
+      lotWeightKgs: Number.isFinite(Number(row.lotWeightKgs)) ? Number(row.lotWeightKgs) : Number(row.kgs || 0),
+      visualGrade: clean(row.visualGrade) || clean(row.quality),
+      inspector: clean(row.inspector) || clean(row.agent)
+    }));
+
+    const csvData = toCsv(produceRows, [
       { key: 'id', label: 'id' },
       { key: 'farmerId', label: 'farmerId' },
       { key: 'farmerName', label: 'farmerName' },
-      { key: 'kgs', label: 'kgs' },
-      { key: 'quality', label: 'quality' },
-      { key: 'agent', label: 'agent' },
+      { key: 'lotWeightKgs', label: 'lotWeightKgs' },
+      { key: 'variety', label: 'variety' },
+      { key: 'sampleSize', label: 'sampleSize' },
+      { key: 'visualGrade', label: 'visualGrade' },
+      { key: 'dryMatterPct', label: 'dryMatterPct' },
+      { key: 'firmnessValue', label: 'firmnessValue' },
+      { key: 'firmnessUnit', label: 'firmnessUnit' },
+      { key: 'avgFruitWeightG', label: 'avgFruitWeightG' },
+      { key: 'sizeCode', label: 'sizeCode' },
+      { key: 'qcDecision', label: 'qcDecision' },
+      { key: 'inspector', label: 'inspector' },
+      { key: 'notes', label: 'notes' },
       { key: 'createdBy', label: 'createdBy' },
       { key: 'createdAt', label: 'createdAt' }
     ]);
@@ -2532,9 +2643,20 @@ const server = http.createServer(async (req, res) => {
         farmerId: farmerA.id,
         farmerName: farmerA.name,
         kgs: 320.4,
-        quality: 'A',
+        lotWeightKgs: 320.4,
+        variety: 'Hass',
+        sampleSize: 18,
+        visualGrade: 'Pass',
+        dryMatterPct: 24.1,
+        firmnessValue: 78.5,
+        firmnessUnit: 'N',
+        avgFruitWeightG: 248.6,
+        sizeCode: 'C20',
+        qcDecision: 'Accept',
+        inspector: 'Agent Njoroge',
+        quality: 'Pass',
         agent: 'Agent Njoroge',
-        notes: 'First harvest batch',
+        notes: 'Farm-gate QC complete',
         createdBy: auth.session.username,
         createdAt: nowIso()
       }

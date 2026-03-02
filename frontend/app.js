@@ -109,9 +109,17 @@ const elements = {
 
   produceForm: document.getElementById('produceForm'),
   produceFarmer: document.getElementById('produceFarmer'),
+  produceVariety: document.getElementById('produceVariety'),
   produceKgs: document.getElementById('produceKgs'),
-  quality: document.getElementById('quality'),
-  collector: document.getElementById('collector'),
+  produceSampleSize: document.getElementById('produceSampleSize'),
+  produceVisualGrade: document.getElementById('produceVisualGrade'),
+  produceQcDecision: document.getElementById('produceQcDecision'),
+  produceDryMatterPct: document.getElementById('produceDryMatterPct'),
+  produceFirmnessValue: document.getElementById('produceFirmnessValue'),
+  produceFirmnessUnit: document.getElementById('produceFirmnessUnit'),
+  produceAvgWeightG: document.getElementById('produceAvgWeightG'),
+  produceSizeCode: document.getElementById('produceSizeCode'),
+  produceInspector: document.getElementById('produceInspector'),
   produceNotes: document.getElementById('produceNotes'),
   produceMsg: document.getElementById('produceMsg'),
   produceTableWrap: document.getElementById('produceTableWrap'),
@@ -972,8 +980,17 @@ function bindProduce() {
     const payload = {
       farmerId: elements.produceFarmer.value,
       kgs: Number(elements.produceKgs.value || 0),
-      quality: elements.quality.value.trim(),
-      agent: elements.collector.value.trim(),
+      lotWeightKgs: Number(elements.produceKgs.value || 0),
+      variety: elements.produceVariety.value.trim(),
+      sampleSize: Number(elements.produceSampleSize.value || 0),
+      visualGrade: elements.produceVisualGrade.value.trim(),
+      qcDecision: elements.produceQcDecision.value.trim(),
+      dryMatterPct: elements.produceDryMatterPct.value.trim(),
+      firmnessValue: Number(elements.produceFirmnessValue.value || 0),
+      firmnessUnit: elements.produceFirmnessUnit.value.trim(),
+      avgFruitWeightG: Number(elements.produceAvgWeightG.value || 0),
+      sizeCode: elements.produceSizeCode.value.trim(),
+      inspector: elements.produceInspector.value.trim(),
       notes: elements.produceNotes.value.trim()
     };
 
@@ -2040,9 +2057,16 @@ function renderProduce() {
       <tr>
         <td>${escapeHtml(row.id)}</td>
         <td>${escapeHtml(row.farmerName)}</td>
-        <td>${escapeHtml(String(row.kgs))}</td>
-        <td>${escapeHtml(row.quality)}</td>
-        <td>${escapeHtml(row.agent)}</td>
+        <td>${escapeHtml(String(row.variety || '-'))}</td>
+        <td>${escapeHtml(String(row.sizeCode || '-'))}</td>
+        <td>${escapeHtml(String(row.lotWeightKgs ?? row.kgs ?? '-'))}</td>
+        <td>${escapeHtml(String(row.avgFruitWeightG ?? '-'))}</td>
+        <td>${escapeHtml(String(row.sampleSize ?? '-'))}</td>
+        <td>${escapeHtml(String(row.visualGrade || row.quality || '-'))}</td>
+        <td>${escapeHtml(row.dryMatterPct == null || row.dryMatterPct === '' ? '-' : String(row.dryMatterPct))}</td>
+        <td>${escapeHtml(`${row.firmnessValue ?? '-'} ${row.firmnessUnit || ''}`.trim() || '-')}</td>
+        <td>${escapeHtml(String(row.qcDecision || '-'))}</td>
+        <td>${escapeHtml(String(row.inspector || row.agent || '-'))}</td>
         <td>${escapeHtml(dateShort(row.createdAt))}</td>
         <td class="actions">
           ${
@@ -2061,9 +2085,16 @@ function renderProduce() {
         <tr>
           <th>ID</th>
           <th>Farmer</th>
-          <th>Kg</th>
-          <th>Quality</th>
-          <th>Agent</th>
+          <th>Variety</th>
+          <th>Size</th>
+          <th>Lot Kg</th>
+          <th>Avg g</th>
+          <th>Sample</th>
+          <th>Visual</th>
+          <th>Dry %</th>
+          <th>Firmness</th>
+          <th>Decision</th>
+          <th>Inspector</th>
           <th>Date</th>
           <th>Actions</th>
         </tr>
@@ -2869,7 +2900,18 @@ function seedLocalData() {
       farmerId: farmerA.id,
       farmerName: farmerA.name,
       kgs: 320.4,
-      quality: 'A',
+      lotWeightKgs: 320.4,
+      variety: 'Hass',
+      sampleSize: 18,
+      visualGrade: 'Pass',
+      dryMatterPct: 24.1,
+      firmnessValue: 78.5,
+      firmnessUnit: 'N',
+      avgFruitWeightG: 248.6,
+      sizeCode: 'C20',
+      qcDecision: 'Accept',
+      inspector: 'Agent Njoroge',
+      quality: 'Pass',
       agent: 'Agent Njoroge',
       notes: 'Seed dataset',
       createdBy: 'local',

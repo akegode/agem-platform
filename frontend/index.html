@@ -260,22 +260,67 @@
         </section>
 
         <section class="pane" id="produce">
-          <h2>Produce Collection</h2>
+          <h2>Farm-Gate Avocado QC</h2>
           <div class="grid">
             <details class="dropdown-card" open>
-              <summary>Record Produce</summary>
+              <summary>Record Farm-Gate QC</summary>
               <div class="dropdown-body">
               <form id="produceForm">
                 <div class="row">
                   <select required id="produceFarmer"></select>
-                  <input required id="produceKgs" type="number" min="0.1" step="0.1" placeholder="Weight (kg)">
+                  <select required id="produceVariety">
+                    <option value="">Select variety</option>
+                    <option value="Hass">Hass</option>
+                    <option value="Fuerte">Fuerte</option>
+                  </select>
                 </div>
                 <div class="row">
-                  <input required id="quality" placeholder="Quality grade (A/B/C)">
-                  <input required id="collector" placeholder="Agent name">
+                  <input required id="produceKgs" type="number" min="0.1" step="0.1" placeholder="Lot weight (kg)">
+                  <input required id="produceSampleSize" type="number" min="1" step="1" placeholder="Sample size (fruit count)">
                 </div>
-                <textarea id="produceNotes" rows="3" placeholder="Collection notes"></textarea>
-                <button class="primary" type="submit">Record Produce</button>
+                <div class="row">
+                  <select required id="produceVisualGrade">
+                    <option value="">Visual grade</option>
+                    <option value="Pass">Pass</option>
+                    <option value="Borderline">Borderline</option>
+                    <option value="Reject">Reject</option>
+                  </select>
+                  <select required id="produceQcDecision">
+                    <option value="">QC decision</option>
+                    <option value="Accept">Accept</option>
+                    <option value="Hold">Hold</option>
+                    <option value="Reject">Reject</option>
+                  </select>
+                </div>
+                <div class="row">
+                  <input id="produceDryMatterPct" type="number" min="0.1" max="100" step="0.1" placeholder="Dry matter % (optional)">
+                  <input required id="produceFirmnessValue" type="number" min="0.1" step="0.1" placeholder="Firmness value">
+                </div>
+                <div class="row">
+                  <select required id="produceFirmnessUnit">
+                    <option value="">Firmness unit</option>
+                    <option value="N">N</option>
+                    <option value="kgf">kgf</option>
+                  </select>
+                  <input required id="produceAvgWeightG" type="number" min="1" step="0.1" placeholder="Avg fruit weight (g)">
+                </div>
+                <div class="row">
+                  <select required id="produceSizeCode">
+                    <option value="">Size code</option>
+                    <option value="C12">C12</option>
+                    <option value="C14">C14</option>
+                    <option value="C16">C16</option>
+                    <option value="C18">C18</option>
+                    <option value="C20">C20</option>
+                    <option value="C22">C22</option>
+                    <option value="C24">C24</option>
+                    <option value="C26">C26</option>
+                    <option value="C28">C28</option>
+                  </select>
+                  <input required id="produceInspector" placeholder="Inspector / agent name">
+                </div>
+                <textarea id="produceNotes" rows="3" placeholder="Visual defects / farm-gate notes"></textarea>
+                <button class="primary" type="submit">Save QC Entry</button>
                 <div class="success" id="produceMsg"></div>
               </form>
               </div>

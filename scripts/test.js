@@ -396,8 +396,17 @@ async function run() {
       body: {
         farmerId,
         kgs: 128.5,
-        quality: 'A',
-        agent: 'Agent Jane',
+        lotWeightKgs: 128.5,
+        variety: 'Hass',
+        sampleSize: 16,
+        visualGrade: 'Pass',
+        dryMatterPct: 23.8,
+        firmnessValue: 75.2,
+        firmnessUnit: 'N',
+        avgFruitWeightG: 245.7,
+        sizeCode: 'C20',
+        qcDecision: 'Accept',
+        inspector: 'Agent Jane',
         notes: 'Morning collection'
       },
       expectStatus: 201
@@ -497,6 +506,16 @@ async function run() {
       'Farmers CSV header missing'
     );
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
+
+    const produceCsv = await request(baseUrl, '/api/exports/produce.csv', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(
+      produceCsv.includes('lotWeightKgs,variety,sampleSize,visualGrade,dryMatterPct,firmnessValue,firmnessUnit,avgFruitWeightG,sizeCode,qcDecision,inspector'),
+      'Produce CSV header missing farm-gate QC columns'
+    );
 
     await request(baseUrl, '/api/admin/backup', {
       method: 'POST',

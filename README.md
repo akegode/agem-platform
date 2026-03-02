@@ -11,7 +11,7 @@ This project is now a full working web application with authentication, role-bas
 - Bulk farmer import (CSV/Excel) for admin; required fields (including National ID, total area, and area under avocado) are mapped, extra columns ignored, and acreage/square-feet values are converted to hectares
 - Duplicate protection for admin/agent/farmer accounts and farmer phone records (no double registration)
 - Import duplicate handling: choose to keep existing farmer data or overwrite with incoming file data
-- Produce collection tracking
+- Farm-gate avocado QC capture (Hass/Fuerte): visual grade, dry matter, firmness, fruit weight, size code, lot weight, and QC decision
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint
 - SMS sending simulation + message logs
