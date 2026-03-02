@@ -102,5 +102,5 @@ Your current website stays as-is, and this app runs as a portal under a subdomai
 - Default demo credentials are disabled when `ALLOW_DEMO_USERS=false` (recommended for production).
 - Farmer self-registration can be turned off by setting `ALLOW_FARMER_REGISTRATION=false`.
 - Admins can create additional agent accounts from the in-app **Agents** section by entering agent name and email. The portal auto-generates temporary login credentials, and env `AGENT_*` remains the initial bootstrap agent.
-- For live Safaricom USSD, use a gateway provider (e.g., Africa's Talking), point callback URL to `https://portal.agemlimited.com/api/ussd/callback`, and pass the same secret in `X-USSD-Secret`.
+- For live Safaricom USSD, use a gateway provider (e.g., Africa's Talking), point callback URL to `https://portal.agemlimited.com/api/ussd/callback?secret=<same-secret>` and events URL to `https://portal.agemlimited.com/api/ussd/events?secret=<same-secret>`.
 - If you later install PHP/Composer/MySQL/Redis, this can be migrated to Laravel + React/Inertia exactly as planned.

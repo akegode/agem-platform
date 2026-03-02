@@ -1448,14 +1448,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (USSD_SHARED_SECRET) {
-      const secretHeader = clean(req.headers['x-ussd-secret']);
-      if (!secureEquals(secretHeader, USSD_SHARED_SECRET)) {
-        text(res, 403, 'END Unauthorized USSD request');
-        return;
-      }
-    }
-
     try {
       let payload = {};
       if (req.method === 'GET') {
@@ -1477,6 +1469,18 @@ const server = http.createServer(async (req, res) => {
               payload = Object.fromEntries(new URLSearchParams(rawBody).entries());
             }
           }
+        }
+      }
+
+      if (USSD_SHARED_SECRET) {
+        const providedSecret = clean(
+          req.headers['x-ussd-secret'] ||
+          payload.secret ||
+          reqUrl.searchParams.get('secret')
+        );
+        if (!secureEquals(providedSecret, USSD_SHARED_SECRET)) {
+          text(res, 403, 'END Unauthorized USSD request');
+          return;
         }
       }
 
@@ -1533,6 +1537,50 @@ const server = http.createServer(async (req, res) => {
       ussdReply(res, `Invalid option.\n${ussdMainMenu()}`, false);
     } catch (error) {
       ussdReply(res, `USSD processing failed: ${error.message}`, true);
+    }
+    return;
+  }
+
+  if (pathname === '/api/ussd/events' && (req.method === 'POST' || req.method === 'GET')) {
+    try {
+      let payload = {};
+      if (req.method === 'GET') {
+        payload = Object.fromEntries(reqUrl.searchParams.entries());
+      } else {
+        const contentType = clean(req.headers['content-type']).toLowerCase();
+        if (contentType.includes('application/json')) {
+          payload = await readBody(req, 120_000);
+        } else {
+          const rawBody = await readTextBody(req, 120_000);
+          payload = Object.fromEntries(new URLSearchParams(rawBody).entries());
+        }
+      }
+
+      if (USSD_SHARED_SECRET) {
+        const providedSecret = clean(
+          req.headers['x-ussd-secret'] ||
+          payload.secret ||
+          reqUrl.searchParams.get('secret')
+        );
+        if (!secureEquals(providedSecret, USSD_SHARED_SECRET)) {
+          json(res, 403, { error: 'Unauthorized USSD events request' });
+          return;
+        }
+      }
+
+      const store = readStore();
+      addActivity(store, {
+        actor: 'ussd-gateway',
+        role: 'system',
+        action: 'ussd.event',
+        entity: 'ussd',
+        details: `USSD event received: ${clean(payload.status || payload.event || payload.sessionStatus || 'unknown')}`
+      });
+      writeStore(store);
+
+      json(res, 200, { data: { ok: true } });
+    } catch (error) {
+      json(res, 400, { error: error.message });
     }
     return;
   }

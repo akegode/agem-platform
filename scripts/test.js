@@ -658,11 +658,10 @@ async function run() {
       'USSD callback should reject requests without shared secret header'
     );
 
-    const ussdMenu = await request(baseUrl, '/api/ussd/callback', {
+    const ussdMenu = await request(baseUrl, `/api/ussd/callback?secret=${encodeURIComponent(ussdSecret)}`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'x-ussd-secret': ussdSecret
+        'Content-Type': 'application/x-www-form-urlencoded'
       },
       bodyRaw: new URLSearchParams({
         sessionId: 'sess-menu',
@@ -675,6 +674,18 @@ async function run() {
     });
     assert.ok(ussdMenu.startsWith('CON '), 'USSD menu should keep session open');
     assert.ok(ussdMenu.includes('1. Payment Status'), 'USSD menu missing payment option');
+
+    await request(baseUrl, `/api/ussd/events?secret=${encodeURIComponent(ussdSecret)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'evt-1',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        status: 'Completed'
+      }).toString(),
+      expectStatus: 200
+    });
 
     const ussdPaymentStatus = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
