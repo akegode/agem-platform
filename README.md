@@ -4,6 +4,8 @@ This project is now a full working web application with authentication, role-bas
 
 ## What is implemented
 - Secure sign-in sessions with private staff accounts (admin, agent roles)
+- Signed-in password change flow
+- Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards)
 - Produce collection tracking
 - Payment logging and payment status management
@@ -35,6 +37,8 @@ This project is now a full working web application with authentication, role-bas
    export ADMIN_PASSWORD="your-strong-admin-password"
    export AGENT_USERNAME="your-agent-username"
    export AGENT_PASSWORD="your-strong-agent-password"
+   export ADMIN_RECOVERY_CODE="your-admin-recovery-code"
+   export AGENT_RECOVERY_CODE="your-agent-recovery-code"
    export ALLOW_DEMO_USERS="false"
    ```
 3. Run:
@@ -63,6 +67,7 @@ This is the easiest path if you are new to deployment.
    - `ALLOW_DEMO_USERS=false`
    - `ADMIN_USERNAME` + `ADMIN_PASSWORD`
    - `AGENT_USERNAME` + `AGENT_PASSWORD`
+   - `ADMIN_RECOVERY_CODE` + `AGENT_RECOVERY_CODE`
 5. In Render service settings, add a custom domain like `portal.yourdomain.com`.
 6. In your DNS provider, add the DNS record Render asks for.
 7. In your existing website, add a button/link to `https://portal.yourdomain.com`.

@@ -13,6 +13,7 @@ const STORE_PATH = process.env.STORE_PATH || path.join(DATA_ROOT, 'store.json');
 const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const ACTIVITY_CAP = 1000;
+const MIN_PASSWORD_LENGTH = 10;
 
 function envValue(key) {
   return String(process.env[key] || '').trim();
@@ -22,12 +23,17 @@ const RUNNING_ON_RENDER = Boolean(envValue('RENDER'));
 const ALLOW_DEMO_USERS =
   envValue('ALLOW_DEMO_USERS') === 'true' ||
   (!RUNNING_ON_RENDER && envValue('ALLOW_DEMO_USERS') !== 'false');
+const SYNC_PASSWORDS_FROM_ENV = envValue('SYNC_PASSWORDS_FROM_ENV') === 'true';
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
   { username: 'agent', password: 'agent123', role: 'agent', name: 'Field Agent' },
   { username: 'farmer', password: 'farmer123', role: 'farmer', name: 'Registered Farmer' }
 ];
+const RECOVERY_CODE_BY_ROLE = {
+  admin: 'ADMIN_RECOVERY_CODE',
+  agent: 'AGENT_RECOVERY_CODE'
+};
 
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -73,6 +79,24 @@ function verifyPassword(plain, saved) {
   const right = Buffer.from(derived, 'hex');
   if (left.length !== right.length) return false;
   return crypto.timingSafeEqual(left, right);
+}
+
+function secureEquals(left, right) {
+  const leftBuf = Buffer.from(String(left || ''), 'utf-8');
+  const rightBuf = Buffer.from(String(right || ''), 'utf-8');
+  if (leftBuf.length !== rightBuf.length) return false;
+  return crypto.timingSafeEqual(leftBuf, rightBuf);
+}
+
+function validateNewPassword(password) {
+  const value = String(password || '');
+  if (value.length < MIN_PASSWORD_LENGTH) {
+    return `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.`;
+  }
+  if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
+    return 'Password must include at least one letter and one number.';
+  }
+  return '';
 }
 
 function seededDemoUsers() {
@@ -166,13 +190,18 @@ function upsertConfiguredStaffUsers(store) {
     const roleChanged = existing.role !== account.role;
     const nameChanged = existing.name !== account.name;
     const statusChanged = existing.status !== 'active';
-    const passwordChanged = !verifyPassword(account.password, existing.password);
+    const hasPasswordHash = Boolean(existing.password && existing.password.hash);
+    const passwordChanged = SYNC_PASSWORDS_FROM_ENV && hasPasswordHash
+      ? !verifyPassword(account.password, existing.password)
+      : false;
 
-    if (roleChanged || nameChanged || statusChanged || passwordChanged) {
+    if (roleChanged || nameChanged || statusChanged || passwordChanged || !hasPasswordHash) {
       existing.role = account.role;
       existing.name = account.name;
       existing.status = 'active';
-      existing.password = hashPassword(account.password);
+      if (!hasPasswordHash || passwordChanged) {
+        existing.password = hashPassword(account.password);
+      }
       existing.updatedAt = nowIso();
       changed = true;
     }
@@ -194,6 +223,24 @@ function applyUserPolicy(store) {
 
   changed = upsertConfiguredStaffUsers(store) || changed;
   return changed;
+}
+
+function accountByRole(store, role) {
+  return store.users.find((user) => user && user.status === 'active' && user.role === role);
+}
+
+function recoveryCodeForRole(role) {
+  const envKey = RECOVERY_CODE_BY_ROLE[role];
+  if (!envKey) return '';
+  return process.env[envKey] || '';
+}
+
+function invalidateUserSessions(store, userId, exceptToken = '') {
+  for (const [token, session] of Object.entries(store.sessions)) {
+    if (!session || session.userId !== userId) continue;
+    if (token === exceptToken) continue;
+    delete store.sessions[token];
+  }
 }
 
 function freshStore() {
@@ -653,6 +700,205 @@ const server = http.createServer(async (req, res) => {
             role: user.role,
             name: user.name
           }
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/change-password' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const currentPassword = String(payload.currentPassword || '');
+      const newPassword = String(payload.newPassword || '');
+      const confirmPassword = payload.confirmPassword === undefined
+        ? newPassword
+        : String(payload.confirmPassword || '');
+
+      if (!currentPassword || !newPassword) {
+        json(res, 422, { error: 'Current and new password are required.' });
+        return;
+      }
+      if (!secureEquals(newPassword, confirmPassword)) {
+        json(res, 422, { error: 'New password and confirmation do not match.' });
+        return;
+      }
+      if (secureEquals(currentPassword, newPassword)) {
+        json(res, 422, { error: 'New password must be different from current password.' });
+        return;
+      }
+
+      const invalidPassword = validateNewPassword(newPassword);
+      if (invalidPassword) {
+        json(res, 422, { error: invalidPassword });
+        return;
+      }
+
+      const user = store.users.find((row) => row.id === auth.session.userId && row.status === 'active');
+      if (!user) {
+        json(res, 401, { error: 'Session is no longer valid. Please sign in again.' });
+        return;
+      }
+      if (!verifyPassword(currentPassword, user.password)) {
+        json(res, 401, { error: 'Current password is incorrect.' });
+        return;
+      }
+
+      user.password = hashPassword(newPassword);
+      user.updatedAt = nowIso();
+
+      const currentToken = extractToken(req);
+      invalidateUserSessions(store, user.id, currentToken);
+
+      addActivity(store, {
+        actor: user.username,
+        role: user.role,
+        action: 'auth.password_change',
+        entity: 'user',
+        entityId: user.id,
+        details: 'Password changed by signed-in user.'
+      });
+
+      writeStore(store);
+      json(res, 200, { data: { success: true } });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/recover-username' && req.method === 'POST') {
+    try {
+      const payload = await readBody(req);
+      const role = clean(payload.role).toLowerCase();
+      const recoveryCode = String(payload.recoveryCode || '');
+
+      if (!role || !RECOVERY_CODE_BY_ROLE[role]) {
+        json(res, 422, { error: 'Role must be admin or agent.' });
+        return;
+      }
+      if (!recoveryCode) {
+        json(res, 422, { error: 'Recovery code is required.' });
+        return;
+      }
+
+      const expectedCode = recoveryCodeForRole(role);
+      if (!expectedCode) {
+        json(res, 503, { error: `Recovery is not configured for role "${role}".` });
+        return;
+      }
+      if (!secureEquals(recoveryCode, expectedCode)) {
+        json(res, 401, { error: 'Recovery code is invalid.' });
+        return;
+      }
+
+      const store = readStore();
+      const user = accountByRole(store, role);
+      if (!user) {
+        json(res, 404, { error: `No active ${role} account found.` });
+        return;
+      }
+
+      addActivity(store, {
+        actor: `${role}:recovery`,
+        role,
+        action: 'auth.recover_username',
+        entity: 'user',
+        entityId: user.id,
+        details: `Username recovery completed for ${role} account.`
+      });
+      writeStore(store);
+
+      json(res, 200, {
+        data: {
+          username: user.username,
+          role: user.role
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/recover-password' && req.method === 'POST') {
+    try {
+      const payload = await readBody(req);
+      const role = clean(payload.role).toLowerCase();
+      const recoveryCode = String(payload.recoveryCode || '');
+      const newPassword = String(payload.newPassword || '');
+      const confirmPassword = payload.confirmPassword === undefined
+        ? newPassword
+        : String(payload.confirmPassword || '');
+
+      if (!role || !RECOVERY_CODE_BY_ROLE[role]) {
+        json(res, 422, { error: 'Role must be admin or agent.' });
+        return;
+      }
+      if (!recoveryCode) {
+        json(res, 422, { error: 'Recovery code is required.' });
+        return;
+      }
+      if (!newPassword) {
+        json(res, 422, { error: 'New password is required.' });
+        return;
+      }
+      if (!secureEquals(newPassword, confirmPassword)) {
+        json(res, 422, { error: 'New password and confirmation do not match.' });
+        return;
+      }
+
+      const invalidPassword = validateNewPassword(newPassword);
+      if (invalidPassword) {
+        json(res, 422, { error: invalidPassword });
+        return;
+      }
+
+      const expectedCode = recoveryCodeForRole(role);
+      if (!expectedCode) {
+        json(res, 503, { error: `Recovery is not configured for role "${role}".` });
+        return;
+      }
+      if (!secureEquals(recoveryCode, expectedCode)) {
+        json(res, 401, { error: 'Recovery code is invalid.' });
+        return;
+      }
+
+      const store = readStore();
+      const user = accountByRole(store, role);
+      if (!user) {
+        json(res, 404, { error: `No active ${role} account found.` });
+        return;
+      }
+
+      user.password = hashPassword(newPassword);
+      user.updatedAt = nowIso();
+      invalidateUserSessions(store, user.id);
+
+      addActivity(store, {
+        actor: `${role}:recovery`,
+        role,
+        action: 'auth.recover_password',
+        entity: 'user',
+        entityId: user.id,
+        details: `Password reset completed for ${role} account.`
+      });
+      writeStore(store);
+
+      json(res, 200, {
+        data: {
+          success: true,
+          username: user.username,
+          role: user.role
         }
       });
     } catch (error) {

@@ -62,8 +62,12 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${port}`;
   const adminUsername = 'opsadmin';
   const adminPassword = 'OpsAdmin#2026!';
+  const adminPasswordUpdated = 'OpsAdmin#2026!X2';
+  const adminRecoveryCode = 'AdminRecovery#2026';
   const agentUsername = 'fieldagent';
   const agentPassword = 'FieldAgent#2026!';
+  const agentPasswordUpdated = 'FieldAgent#2026!X2';
+  const agentRecoveryCode = 'AgentRecovery#2026';
 
   const server = spawn('node', ['backend/server.js'], {
     cwd: root,
@@ -76,7 +80,9 @@ async function run() {
       ADMIN_USERNAME: adminUsername,
       ADMIN_PASSWORD: adminPassword,
       AGENT_USERNAME: agentUsername,
-      AGENT_PASSWORD: agentPassword
+      AGENT_PASSWORD: agentPassword,
+      ADMIN_RECOVERY_CODE: adminRecoveryCode,
+      AGENT_RECOVERY_CODE: agentRecoveryCode
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -96,7 +102,7 @@ async function run() {
       body: { username: adminUsername, password: adminPassword },
       expectStatus: 200
     });
-    const adminToken = adminLogin.data.token;
+    let adminToken = adminLogin.data.token;
     assert.ok(adminToken, 'Admin token missing');
 
     const agentLogin = await request(baseUrl, '/api/auth/login', {
@@ -104,7 +110,63 @@ async function run() {
       body: { username: agentUsername, password: agentPassword },
       expectStatus: 200
     });
-    const agentToken = agentLogin.data.token;
+    let agentToken = agentLogin.data.token;
+
+    const recoveredAdminUsername = await request(baseUrl, '/api/auth/recover-username', {
+      method: 'POST',
+      body: { role: 'admin', recoveryCode: adminRecoveryCode },
+      expectStatus: 200
+    });
+    assert.strictEqual(recoveredAdminUsername.data.username, adminUsername);
+
+    await request(baseUrl, '/api/auth/change-password', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        currentPassword: adminPassword,
+        newPassword: adminPasswordUpdated,
+        confirmPassword: adminPasswordUpdated
+      },
+      expectStatus: 200
+    });
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: adminUsername, password: adminPassword },
+      expectStatus: 401
+    });
+
+    const adminLoginUpdated = await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: adminUsername, password: adminPasswordUpdated },
+      expectStatus: 200
+    });
+    adminToken = adminLoginUpdated.data.token;
+
+    const recoverAgentPassword = await request(baseUrl, '/api/auth/recover-password', {
+      method: 'POST',
+      body: {
+        role: 'agent',
+        recoveryCode: agentRecoveryCode,
+        newPassword: agentPasswordUpdated,
+        confirmPassword: agentPasswordUpdated
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(recoverAgentPassword.data.username, agentUsername);
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: agentUsername, password: agentPassword },
+      expectStatus: 401
+    });
+
+    const agentLoginUpdated = await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: agentUsername, password: agentPasswordUpdated },
+      expectStatus: 200
+    });
+    agentToken = agentLoginUpdated.data.token;
 
     const farmer = await request(baseUrl, '/api/farmers', {
       method: 'POST',

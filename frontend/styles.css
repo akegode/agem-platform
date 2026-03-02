@@ -122,11 +122,37 @@ body {
   gap: 8px;
 }
 
+.auth-divider {
+  border-top: 1px dashed #d3d3cf;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
 .auth-help {
   margin: 8px 0 0;
   color: #5d5d5d;
   font-size: 0.73rem;
   line-height: 1.35;
+}
+
+.recovery {
+  margin-top: 10px;
+  border-top: 1px dashed #d3d3cf;
+  padding-top: 8px;
+}
+
+.recovery summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.recovery[open] summary {
+  margin-bottom: 8px;
+}
+
+.recovery-form {
+  margin-top: 4px;
 }
 
 .role {

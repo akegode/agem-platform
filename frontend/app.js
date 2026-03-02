@@ -17,7 +17,21 @@ const elements = {
   loginForm: document.getElementById('loginForm'),
   loginUsername: document.getElementById('loginUsername'),
   loginPassword: document.getElementById('loginPassword'),
+  changePasswordForm: document.getElementById('changePasswordForm'),
+  currentPassword: document.getElementById('currentPassword'),
+  newPassword: document.getElementById('newPassword'),
+  confirmNewPassword: document.getElementById('confirmNewPassword'),
+  changePasswordMsg: document.getElementById('changePasswordMsg'),
   logoutBtn: document.getElementById('logoutBtn'),
+  recoveryPanel: document.getElementById('recoveryPanel'),
+  recoveryForm: document.getElementById('recoveryForm'),
+  recoveryRole: document.getElementById('recoveryRole'),
+  recoveryCode: document.getElementById('recoveryCode'),
+  recoverUsernameBtn: document.getElementById('recoverUsernameBtn'),
+  recoveryNewPassword: document.getElementById('recoveryNewPassword'),
+  recoveryConfirmPassword: document.getElementById('recoveryConfirmPassword'),
+  recoverPasswordBtn: document.getElementById('recoverPasswordBtn'),
+  recoveryMsg: document.getElementById('recoveryMsg'),
   authMsg: document.getElementById('authMsg'),
 
   seedBtn: document.getElementById('seedBtn'),
@@ -177,6 +191,105 @@ function bindAuth() {
     }
   });
 
+  elements.changePasswordForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+
+    if (!API.enabled) {
+      elements.changePasswordMsg.textContent = 'Password updates require backend mode.';
+      return;
+    }
+    if (!isAuthenticated()) {
+      elements.changePasswordMsg.textContent = 'Sign in first to change your password.';
+      return;
+    }
+
+    const currentPassword = elements.currentPassword.value;
+    const newPassword = elements.newPassword.value;
+    const confirmPassword = elements.confirmNewPassword.value;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      elements.changePasswordMsg.textContent = 'All password fields are required.';
+      return;
+    }
+
+    try {
+      await apiRequest('/api/auth/change-password', {
+        method: 'POST',
+        body: { currentPassword, newPassword, confirmPassword }
+      });
+
+      elements.changePasswordForm.reset();
+      elements.changePasswordMsg.textContent = 'Password updated successfully.';
+    } catch (error) {
+      elements.changePasswordMsg.textContent = error.message;
+    }
+  });
+
+  elements.recoverUsernameBtn.addEventListener('click', async () => {
+    clearMessages();
+
+    if (!API.enabled) {
+      elements.recoveryMsg.textContent = 'Recovery requires backend mode.';
+      return;
+    }
+
+    const role = elements.recoveryRole.value;
+    const recoveryCode = elements.recoveryCode.value.trim();
+
+    if (!recoveryCode) {
+      elements.recoveryMsg.textContent = 'Recovery code is required.';
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/api/auth/recover-username', {
+        method: 'POST',
+        auth: false,
+        body: { role, recoveryCode }
+      });
+
+      elements.loginUsername.value = response.data.username;
+      elements.recoveryMsg.textContent = `Username recovered: ${response.data.username}`;
+    } catch (error) {
+      elements.recoveryMsg.textContent = error.message;
+    }
+  });
+
+  elements.recoverPasswordBtn.addEventListener('click', async () => {
+    clearMessages();
+
+    if (!API.enabled) {
+      elements.recoveryMsg.textContent = 'Recovery requires backend mode.';
+      return;
+    }
+
+    const role = elements.recoveryRole.value;
+    const recoveryCode = elements.recoveryCode.value.trim();
+    const newPassword = elements.recoveryNewPassword.value;
+    const confirmPassword = elements.recoveryConfirmPassword.value;
+
+    if (!recoveryCode || !newPassword || !confirmPassword) {
+      elements.recoveryMsg.textContent = 'Recovery code and both password fields are required.';
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/api/auth/recover-password', {
+        method: 'POST',
+        auth: false,
+        body: { role, recoveryCode, newPassword, confirmPassword }
+      });
+
+      elements.recoveryNewPassword.value = '';
+      elements.recoveryConfirmPassword.value = '';
+      elements.loginUsername.value = response.data.username;
+      elements.recoveryMsg.textContent = `Password reset complete for ${response.data.username}.`;
+    } catch (error) {
+      elements.recoveryMsg.textContent = error.message;
+    }
+  });
+
   elements.logoutBtn.addEventListener('click', async () => {
     clearMessages();
 
@@ -190,6 +303,7 @@ function bindAuth() {
 
     state.auth = { token: '', user: null, expiresAt: '' };
     persist();
+    elements.changePasswordForm.reset();
 
     updateAuthUi();
     updatePermissionUi();
@@ -921,6 +1035,8 @@ function updateAuthUi() {
     elements.authState.textContent = `Signed in: ${state.auth.user.username} (${state.auth.user.role})`;
     elements.loginForm.hidden = true;
     elements.loginForm.style.display = 'none';
+    elements.changePasswordForm.hidden = false;
+    elements.changePasswordForm.style.display = 'grid';
     elements.logoutBtn.hidden = false;
     elements.logoutBtn.style.display = 'block';
     elements.roleSelect.disabled = true;
@@ -930,6 +1046,8 @@ function updateAuthUi() {
     elements.authState.textContent = 'Not signed in';
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
+    elements.changePasswordForm.hidden = true;
+    elements.changePasswordForm.style.display = 'none';
     elements.logoutBtn.hidden = true;
     elements.logoutBtn.style.display = 'none';
     elements.roleSelect.disabled = false;
@@ -1437,6 +1555,8 @@ function notifySync(message) {
 
 function clearMessages() {
   elements.authMsg.textContent = '';
+  elements.changePasswordMsg.textContent = '';
+  elements.recoveryMsg.textContent = '';
   elements.farmerMsg.textContent = '';
   elements.produceMsg.textContent = '';
   elements.paymentMsg.textContent = '';

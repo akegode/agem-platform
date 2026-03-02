@@ -31,8 +31,33 @@
           <button class="primary" type="submit">Sign In</button>
         </form>
 
+        <form id="changePasswordForm" class="auth-form auth-divider" hidden>
+          <input id="currentPassword" type="password" placeholder="Current password" autocomplete="current-password">
+          <input id="newPassword" type="password" placeholder="New password (min 10 chars)" autocomplete="new-password">
+          <input id="confirmNewPassword" type="password" placeholder="Confirm new password" autocomplete="new-password">
+          <button class="secondary" type="submit">Change Password</button>
+        </form>
+        <div class="success" id="changePasswordMsg"></div>
+
         <button class="secondary full" type="button" id="logoutBtn" hidden>Sign Out</button>
         <p class="auth-help">Private staff access only. Contact Agem admin for your secure login.</p>
+
+        <details class="recovery" id="recoveryPanel">
+          <summary>Forgot username or password?</summary>
+          <form id="recoveryForm" class="auth-form recovery-form">
+            <select id="recoveryRole">
+              <option value="admin">Administrator account</option>
+              <option value="agent">Agent account</option>
+            </select>
+            <input id="recoveryCode" type="password" placeholder="Recovery code">
+            <button class="secondary" id="recoverUsernameBtn" type="button">Recover Username</button>
+            <input id="recoveryNewPassword" type="password" placeholder="New password for reset">
+            <input id="recoveryConfirmPassword" type="password" placeholder="Confirm new password">
+            <button class="secondary" id="recoverPasswordBtn" type="button">Reset Password</button>
+          </form>
+          <div class="success" id="recoveryMsg"></div>
+        </details>
+
         <div class="success" id="authMsg"></div>
       </section>
 
