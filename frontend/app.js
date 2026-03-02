@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'agem_platform_state_v1';
+const MAX_PROFILE_PHOTO_BYTES = 1_500_000;
 
 const API = {
   enabled: false
@@ -7,6 +8,9 @@ const API = {
 const state = loadState();
 
 const elements = {
+  authShell: document.getElementById('authShell'),
+  appShell: document.getElementById('appShell'),
+
   tabs: document.querySelectorAll('#tabs button'),
   panes: document.querySelectorAll('.pane'),
 
@@ -14,6 +18,7 @@ const elements = {
   roleSelect: document.getElementById('roleSelect'),
 
   authState: document.getElementById('authState'),
+  dashboardWelcome: document.getElementById('dashboardWelcome'),
   loginForm: document.getElementById('loginForm'),
   loginUsername: document.getElementById('loginUsername'),
   loginPassword: document.getElementById('loginPassword'),
@@ -32,6 +37,10 @@ const elements = {
   confirmNewPassword: document.getElementById('confirmNewPassword'),
   changePasswordMsg: document.getElementById('changePasswordMsg'),
   logoutBtn: document.getElementById('logoutBtn'),
+  profilePhoto: document.getElementById('profilePhoto'),
+  profilePhotoFallback: document.getElementById('profilePhotoFallback'),
+  profilePhotoInput: document.getElementById('profilePhotoInput'),
+  clearPhotoBtn: document.getElementById('clearPhotoBtn'),
   recoveryPanel: document.getElementById('recoveryPanel'),
   recoveryForm: document.getElementById('recoveryForm'),
   recoveryRole: document.getElementById('recoveryRole'),
@@ -111,6 +120,7 @@ async function init() {
   bindExports();
 
   hydrateFarmerSelectors();
+  syncCurrentUserPhotoFromState();
   updateAuthUi();
   renderAll();
 
@@ -187,6 +197,7 @@ function bindAuth() {
         expiresAt: response.data.expiresAt
       };
       state.role = response.data.user.role;
+      syncCurrentUserPhotoFromState();
 
       elements.loginForm.reset();
       elements.authMsg.textContent = `Signed in as ${response.data.user.username}.`;
@@ -245,6 +256,7 @@ function bindAuth() {
         expiresAt: response.data.expiresAt
       };
       state.role = response.data.user.role;
+      syncCurrentUserPhotoFromState();
       persist();
 
       elements.registerForm.reset();
@@ -371,6 +383,7 @@ function bindAuth() {
     state.auth = { token: '', user: null, expiresAt: '' };
     persist();
     elements.changePasswordForm.reset();
+    elements.profilePhotoInput.value = '';
     elements.registrationPanel.open = false;
     elements.recoveryPanel.open = false;
 
@@ -383,6 +396,49 @@ function bindAuth() {
     } else {
       notifySync('Signed out. Local mode active.');
     }
+  });
+
+  elements.profilePhotoInput.addEventListener('change', async (event) => {
+    clearMessages();
+    if (!isAuthenticated()) {
+      elements.authMsg.textContent = 'Sign in to upload a profile photo.';
+      event.target.value = '';
+      return;
+    }
+
+    const [file] = event.target.files || [];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      elements.changePasswordMsg.textContent = 'Please choose an image file (PNG, JPG, or GIF).';
+      event.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_PROFILE_PHOTO_BYTES) {
+      elements.changePasswordMsg.textContent = 'Image is too large. Please upload a file under 1.5MB.';
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setCurrentUserPhoto(dataUrl);
+      renderDashboardAccount();
+      elements.changePasswordMsg.textContent = 'Profile photo updated.';
+    } catch {
+      elements.changePasswordMsg.textContent = 'Could not read this image. Please try another file.';
+    } finally {
+      event.target.value = '';
+    }
+  });
+
+  elements.clearPhotoBtn.addEventListener('click', () => {
+    clearMessages();
+    if (!isAuthenticated()) return;
+    setCurrentUserPhoto('');
+    renderDashboardAccount();
+    elements.changePasswordMsg.textContent = 'Profile photo removed.';
   });
 }
 
@@ -984,6 +1040,7 @@ async function restoreSession() {
     state.auth.user = response.data.user;
     state.auth.expiresAt = response.data.expiresAt;
     state.role = response.data.user.role;
+    syncCurrentUserPhotoFromState();
     persist();
     updateAuthUi();
     return true;
@@ -1101,19 +1158,25 @@ async function apiRequest(path, options = {}) {
 
 function updateAuthUi() {
   if (isAuthenticated()) {
+    elements.authShell.hidden = true;
+    elements.appShell.hidden = false;
     elements.authState.textContent = `Signed in: ${state.auth.user.username} (${state.auth.user.role})`;
-    elements.loginForm.hidden = true;
-    elements.loginForm.style.display = 'none';
-    elements.registrationPanel.hidden = true;
+    elements.loginForm.hidden = false;
+    elements.loginForm.style.display = 'grid';
+    elements.registrationPanel.hidden = false;
     elements.changePasswordForm.hidden = false;
     elements.changePasswordForm.style.display = 'grid';
     elements.logoutBtn.hidden = false;
     elements.logoutBtn.style.display = 'block';
-    elements.recoveryPanel.hidden = true;
+    elements.recoveryPanel.hidden = false;
     elements.roleSelect.disabled = true;
     elements.roleSelect.value = state.auth.user.role;
     state.role = state.auth.user.role;
+    elements.registrationPanel.open = false;
+    elements.recoveryPanel.open = false;
   } else {
+    elements.authShell.hidden = false;
+    elements.appShell.hidden = true;
     elements.authState.textContent = 'Not signed in';
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
@@ -1127,6 +1190,7 @@ function updateAuthUi() {
     elements.roleSelect.value = state.role;
   }
 
+  renderDashboardAccount();
   updateRoleHint();
 }
 
@@ -1177,6 +1241,7 @@ function updateRoleHint() {
 }
 
 function renderAll() {
+  renderDashboardAccount();
   renderOverview();
   renderFarmers();
   renderProduce();
@@ -1622,6 +1687,79 @@ function isAuthenticated() {
   return Boolean(state.auth && state.auth.token && state.auth.user);
 }
 
+function currentUserPhotoKey() {
+  if (!isAuthenticated()) return '';
+  return String(state.auth.user.username || '')
+    .trim()
+    .toLowerCase();
+}
+
+function syncCurrentUserPhotoFromState() {
+  if (!isAuthenticated()) return;
+  const key = currentUserPhotoKey();
+  if (!key) return;
+  const stored = state.profilePhotos?.[key] || '';
+  state.auth.user.photo = stored;
+}
+
+function setCurrentUserPhoto(dataUrl) {
+  if (!isAuthenticated()) return;
+  const key = currentUserPhotoKey();
+  if (!key) return;
+  if (!state.profilePhotos || typeof state.profilePhotos !== 'object') {
+    state.profilePhotos = {};
+  }
+
+  if (dataUrl) {
+    state.profilePhotos[key] = dataUrl;
+    state.auth.user.photo = dataUrl;
+  } else {
+    delete state.profilePhotos[key];
+    state.auth.user.photo = '';
+  }
+
+  persist();
+}
+
+function renderDashboardAccount() {
+  if (!isAuthenticated()) {
+    elements.dashboardWelcome.textContent = 'Welcome back.';
+    elements.profilePhoto.hidden = true;
+    elements.profilePhoto.removeAttribute('src');
+    elements.profilePhotoFallback.hidden = false;
+    elements.profilePhotoFallback.textContent = 'A';
+    elements.clearPhotoBtn.disabled = true;
+    return;
+  }
+
+  const name = state.auth.user.name || state.auth.user.username || 'User';
+  elements.dashboardWelcome.textContent = `Welcome back, ${name}.`;
+
+  const firstLetter = String(name).trim().charAt(0).toUpperCase() || 'A';
+  const photo = state.auth.user.photo || '';
+  if (photo) {
+    elements.profilePhoto.src = photo;
+    elements.profilePhoto.hidden = false;
+    elements.profilePhotoFallback.hidden = true;
+    elements.clearPhotoBtn.disabled = false;
+  } else {
+    elements.profilePhoto.hidden = true;
+    elements.profilePhoto.removeAttribute('src');
+    elements.profilePhotoFallback.hidden = false;
+    elements.profilePhotoFallback.textContent = firstLetter;
+    elements.clearPhotoBtn.disabled = true;
+  }
+}
+
+async function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 function notifySync(message) {
   elements.syncStatus.textContent = message;
 }
@@ -1669,6 +1807,7 @@ function loadState() {
       summary: parsed.summary || null,
       agentStats: Array.isArray(parsed.agentStats) ? parsed.agentStats : [],
       backups: Array.isArray(parsed.backups) ? parsed.backups : [],
+      profilePhotos: parsed.profilePhotos && typeof parsed.profilePhotos === 'object' ? parsed.profilePhotos : {},
       editingFarmerId: ''
     };
   } catch {
@@ -1687,6 +1826,7 @@ function freshState() {
     summary: null,
     agentStats: [],
     backups: [],
+    profilePhotos: {},
     editingFarmerId: ''
   };
 }
