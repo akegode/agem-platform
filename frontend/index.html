@@ -136,6 +136,7 @@
           <select id="paneSelect">
             <option value="overview">Overview</option>
             <option value="farmers">Farmers</option>
+            <option value="agents">Agents</option>
             <option value="produce">Produce</option>
             <option value="payments">Payments</option>
             <option value="sms">SMS</option>
@@ -150,6 +151,7 @@
           <nav class="nav" id="tabs">
             <button class="active" data-pane="overview">Overview</button>
             <button data-pane="farmers">Farmers</button>
+            <button data-pane="agents">Agents</button>
             <button data-pane="produce">Produce</button>
             <button data-pane="payments">Payments</button>
             <button data-pane="sms">SMS</button>
@@ -254,6 +256,41 @@
               <summary>Registered Farmers</summary>
               <div class="dropdown-body">
                 <div id="farmerTableWrap"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <section class="pane" id="agents">
+          <h2>Agent Management</h2>
+          <div class="grid">
+            <details class="dropdown-card" open>
+              <summary>Create Agent Account</summary>
+              <div class="dropdown-body">
+                <form id="agentForm">
+                  <div class="row">
+                    <input required id="agentName" placeholder="Agent full name">
+                    <input required id="agentUsername" placeholder="Agent username">
+                  </div>
+                  <div class="row">
+                    <input required id="agentPassword" type="password" placeholder="Temporary password">
+                    <input required id="agentConfirmPassword" type="password" placeholder="Confirm password">
+                  </div>
+                  <button class="primary" type="submit">Create Agent</button>
+                  <div class="success" id="agentMsg"></div>
+                </form>
+                <p class="meta compact">Agents created here can sign in immediately and then update their own password.</p>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
+              <summary>Registered Agents</summary>
+              <div class="dropdown-body">
+                <div class="row">
+                  <input id="agentSearch" placeholder="Search by name, username, or status">
+                  <button class="secondary" id="agentRefreshBtn" type="button">Search</button>
+                </div>
+                <div id="agentTableWrap"></div>
               </div>
             </details>
           </div>

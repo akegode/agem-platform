@@ -37,6 +37,9 @@ const elements = {
 
   tabs: document.querySelectorAll('#tabs button'),
   panes: document.querySelectorAll('.pane'),
+  agentsNavBtn: document.querySelector('#tabs button[data-pane="agents"]'),
+  agentsPane: document.getElementById('agents'),
+  agentsPaneOption: document.querySelector('#paneSelect option[value="agents"]'),
 
   roleHint: document.getElementById('roleHint'),
   roleSelect: document.getElementById('roleSelect'),
@@ -117,6 +120,15 @@ const elements = {
   farmerImportSummary: document.getElementById('farmerImportSummary'),
   farmerImportErrors: document.getElementById('farmerImportErrors'),
   farmerTableWrap: document.getElementById('farmerTableWrap'),
+  agentForm: document.getElementById('agentForm'),
+  agentName: document.getElementById('agentName'),
+  agentUsername: document.getElementById('agentUsername'),
+  agentPassword: document.getElementById('agentPassword'),
+  agentConfirmPassword: document.getElementById('agentConfirmPassword'),
+  agentMsg: document.getElementById('agentMsg'),
+  agentSearch: document.getElementById('agentSearch'),
+  agentRefreshBtn: document.getElementById('agentRefreshBtn'),
+  agentTableWrap: document.getElementById('agentTableWrap'),
 
   produceForm: document.getElementById('produceForm'),
   produceFarmer: document.getElementById('produceFarmer'),
@@ -210,6 +222,7 @@ async function init() {
   bindAreaConverters();
   bindScrollTools();
   bindFarmers();
+  bindAgents();
   bindProduce();
   bindProducePurchases();
   bindPayments();
@@ -693,6 +706,7 @@ function bindAuth() {
     smsPicker.rows = [];
     smsPicker.total = 0;
     smsPicker.offset = 0;
+    state.agents = [];
     elements.registrationPanel.open = false;
     elements.recoveryPanel.open = false;
 
@@ -996,6 +1010,80 @@ function bindFarmers() {
       } catch (error) {
         elements.farmerMsg.textContent = error.message;
       }
+    }
+  });
+}
+
+function bindAgents() {
+  if (!elements.agentForm) return;
+
+  elements.agentForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+
+    if (currentRole() !== 'admin') {
+      elements.agentMsg.textContent = 'Only administrators can create agent accounts.';
+      return;
+    }
+    if (!API.enabled) {
+      elements.agentMsg.textContent = 'Agent management requires backend mode.';
+      return;
+    }
+    if (!isAuthenticated()) {
+      elements.agentMsg.textContent = 'Sign in first to create agents.';
+      return;
+    }
+
+    const name = elements.agentName.value.trim();
+    const username = elements.agentUsername.value.trim().toLowerCase();
+    const password = elements.agentPassword.value;
+    const confirmPassword = elements.agentConfirmPassword.value;
+
+    if (!name || !username || !password || !confirmPassword) {
+      elements.agentMsg.textContent = 'Name, username, and both password fields are required.';
+      return;
+    }
+    if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+      elements.agentMsg.textContent =
+        'Username must be 3-32 characters using letters, numbers, dot, underscore, or dash.';
+      return;
+    }
+    if (password !== confirmPassword) {
+      elements.agentMsg.textContent = 'Password confirmation does not match.';
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/api/agents', {
+        method: 'POST',
+        body: { name, username, password, confirmPassword }
+      });
+      elements.agentForm.reset();
+      elements.agentMsg.textContent = `Agent account created: ${response.data.username}`;
+      await loadAgentAccounts();
+    } catch (error) {
+      elements.agentMsg.textContent = error.message;
+    }
+  });
+
+  elements.agentRefreshBtn.addEventListener('click', async () => {
+    clearMessages();
+    try {
+      await loadAgentAccounts();
+      elements.agentMsg.textContent = `Loaded ${state.agents.length} agent account(s).`;
+    } catch (error) {
+      elements.agentMsg.textContent = error.message;
+    }
+  });
+
+  elements.agentSearch.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    clearMessages();
+    try {
+      await loadAgentAccounts();
+    } catch (error) {
+      elements.agentMsg.textContent = error.message;
     }
   });
 }
@@ -2390,7 +2478,7 @@ async function fetchAllData() {
   }
 
   try {
-    const [farmers, produce, producePurchases, payments, sms, summary, agents] = await Promise.all([
+    const [farmers, produce, producePurchases, payments, sms, summary, agentStats] = await Promise.all([
       apiRequest('/api/farmers'),
       apiRequest('/api/produce'),
       apiRequest('/api/produce-purchases'),
@@ -2400,13 +2488,20 @@ async function fetchAllData() {
       apiRequest('/api/reports/agents')
     ]);
 
+    let managedAgents = [];
+    if (currentRole() === 'admin') {
+      const agentAccounts = await apiRequest('/api/agents?includeDisabled=true&limit=500');
+      managedAgents = Array.isArray(agentAccounts.data) ? agentAccounts.data : [];
+    }
+
     state.farmers = farmers.data || [];
     state.produce = produce.data || [];
     state.producePurchases = producePurchases.data || [];
     state.payments = payments.data || [];
     state.smsLogs = sms.data || [];
     state.summary = summary.data || null;
-    state.agentStats = agents.data || [];
+    state.agentStats = agentStats.data || [];
+    state.agents = managedAgents;
 
     hydrateFarmerSelectors();
     renderAll();
@@ -2421,6 +2516,29 @@ async function fetchAllData() {
   } catch (error) {
     notifySync(error.message);
   }
+}
+
+async function loadAgentAccounts() {
+  if (currentRole() !== 'admin') {
+    state.agents = [];
+    renderAgents();
+    return;
+  }
+
+  if (!API.enabled || !isAuthenticated()) {
+    state.agents = [];
+    renderAgents();
+    return;
+  }
+
+  const params = new URLSearchParams({ includeDisabled: 'true', limit: '500' });
+  const query = String(elements.agentSearch?.value || '').trim();
+  if (query) params.set('q', query);
+
+  const response = await apiRequest(`/api/agents?${params.toString()}`);
+  state.agents = Array.isArray(response.data) ? response.data : [];
+  renderAgents();
+  persist();
 }
 
 async function apiRequest(path, options = {}) {
@@ -2556,11 +2674,29 @@ function updatePermissionUi() {
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
+  const agentManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
 
   elements.farmerSubmitBtn.disabled = !farmersAllowed;
   elements.farmerCancelEditBtn.disabled = !farmersAllowed;
   elements.farmerImportBtn.disabled = !importAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
+  elements.agentName.disabled = !agentManageAllowed;
+  elements.agentUsername.disabled = !agentManageAllowed;
+  elements.agentPassword.disabled = !agentManageAllowed;
+  elements.agentConfirmPassword.disabled = !agentManageAllowed;
+  elements.agentRefreshBtn.disabled = !agentManageAllowed;
+  elements.agentSearch.disabled = !agentManageAllowed;
+  elements.agentForm.querySelector('button[type="submit"]').disabled = !agentManageAllowed;
+
+  if (elements.agentsNavBtn) {
+    elements.agentsNavBtn.hidden = !agentManageAllowed;
+  }
+  if (elements.agentsPaneOption) {
+    elements.agentsPaneOption.hidden = !agentManageAllowed;
+  }
+  if (!agentManageAllowed && elements.agentsPane?.classList.contains('active')) {
+    setActivePane('overview');
+  }
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
   elements.purchaseForm.querySelector('button[type="submit"]').disabled = !producePurchaseAllowed;
@@ -2613,6 +2749,7 @@ function renderAll() {
   renderDashboardAccount();
   renderOverview();
   renderFarmers();
+  renderAgents();
   renderProduce();
   renderProducePurchases();
   renderPayments();
@@ -2710,6 +2847,51 @@ function renderFarmers() {
           <th>Trees</th>
           <th>Updated</th>
           <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderAgents() {
+  if (currentRole() !== 'admin') {
+    elements.agentTableWrap.innerHTML = '<div class="empty">Sign in as admin to manage agent accounts.</div>';
+    return;
+  }
+
+  if (!API.enabled) {
+    elements.agentTableWrap.innerHTML = '<div class="empty">Agent management is available in backend mode only.</div>';
+    return;
+  }
+
+  if (!state.agents.length) {
+    elements.agentTableWrap.innerHTML = '<div class="empty">No agent accounts found. Create one above.</div>';
+    return;
+  }
+
+  const rows = state.agents
+    .slice(0, 500)
+    .map((agent) => `
+      <tr>
+        <td>${escapeHtml(agent.name || '-')}</td>
+        <td>${escapeHtml(agent.username || '-')}</td>
+        <td>${escapeHtml(agent.status || '-')}</td>
+        <td>${escapeHtml(agent.provisioning === 'environment' ? 'Environment' : 'Admin')}</td>
+        <td>${escapeHtml(dateShort(agent.updatedAt || agent.createdAt))}</td>
+      </tr>
+    `)
+    .join('');
+
+  elements.agentTableWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Username</th>
+          <th>Status</th>
+          <th>Source</th>
+          <th>Updated</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -3884,6 +4066,7 @@ function clearMessages() {
   elements.farmerImportSummary.textContent = '';
   elements.farmerImportErrors.innerHTML = '';
   elements.farmerImportErrors.classList.remove('import-errors');
+  elements.agentMsg.textContent = '';
   elements.produceMsg.textContent = '';
   elements.purchaseMsg.textContent = '';
   elements.owedMsg.textContent = '';
@@ -3951,6 +4134,7 @@ function loadState() {
         expiresAt: parsed.auth?.expiresAt || ''
       },
       farmers: Array.isArray(parsed.farmers) ? parsed.farmers.map(normalizeLocalFarmerRow) : [],
+      agents: Array.isArray(parsed.agents) ? parsed.agents : [],
       produce: Array.isArray(parsed.produce) ? parsed.produce : [],
       producePurchases: Array.isArray(parsed.producePurchases) ? parsed.producePurchases : [],
       payments: Array.isArray(parsed.payments) ? parsed.payments : [],
@@ -3971,6 +4155,7 @@ function freshState() {
     role: 'admin',
     auth: { token: '', user: null, expiresAt: '' },
     farmers: [],
+    agents: [],
     produce: [],
     producePurchases: [],
     payments: [],

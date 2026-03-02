@@ -184,6 +184,7 @@ function upsertConfiguredStaffUsers(store) {
         role: account.role,
         status: 'active',
         password: hashPassword(account.password),
+        provisioning: 'environment',
         createdAt: nowIso(),
         updatedAt: nowIso()
       });
@@ -203,6 +204,7 @@ function upsertConfiguredStaffUsers(store) {
       existing.role = account.role;
       existing.name = account.name;
       existing.status = 'active';
+      existing.provisioning = 'environment';
       if (!hasPasswordHash || passwordChanged) {
         existing.password = hashPassword(account.password);
       }
@@ -210,13 +212,15 @@ function upsertConfiguredStaffUsers(store) {
       changed = true;
     }
 
-    for (const user of store.users) {
-      if (!user || user.id === existing.id) continue;
-      if (user.role !== account.role) continue;
-      if (user.status !== 'active') continue;
-      user.status = 'disabled';
-      user.updatedAt = nowIso();
-      changed = true;
+    if (account.role === 'admin') {
+      for (const user of store.users) {
+        if (!user || user.id === existing.id) continue;
+        if (user.role !== account.role) continue;
+        if (user.status !== 'active') continue;
+        user.status = 'disabled';
+        user.updatedAt = nowIso();
+        changed = true;
+      }
     }
   }
 
@@ -493,6 +497,19 @@ function normalizedUsername(value) {
 function findUserByUsername(store, username) {
   const target = normalizedUsername(username);
   return store.users.find((row) => normalizedUsername(row.username) === target);
+}
+
+function agentView(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    name: user.name || '',
+    role: user.role || 'agent',
+    status: user.status || 'active',
+    provisioning: user.provisioning || 'admin',
+    createdAt: user.createdAt || '',
+    updatedAt: user.updatedAt || user.createdAt || ''
+  };
 }
 
 function parseNumber(value) {
@@ -1653,6 +1670,128 @@ const server = http.createServer(async (req, res) => {
     }
 
     json(res, 200, { data: { success: true } });
+    return;
+  }
+
+  if (pathname === '/api/agents' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const includeDisabled = reqUrl.searchParams.get('includeDisabled') === 'true';
+    const query = clean(reqUrl.searchParams.get('q')).toLowerCase();
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
+    const offset = safeQueryOffset(reqUrl.searchParams, 'offset', 0, 2000000);
+
+    let rows = store.users.filter((row) => {
+      if (!row || row.role !== 'agent') return false;
+      if (!includeDisabled && row.status !== 'active') return false;
+      return true;
+    });
+
+    if (query) {
+      rows = rows.filter((row) =>
+        [row.username, row.name, row.status, row.provisioning].some((field) =>
+          clean(field).toLowerCase().includes(query)
+        )
+      );
+    }
+
+    rows = rows.sort((a, b) => {
+      const left = clean(a.updatedAt || a.createdAt);
+      const right = clean(b.updatedAt || b.createdAt);
+      if (left === right) {
+        return clean(a.username).localeCompare(clean(b.username));
+      }
+      return left > right ? -1 : 1;
+    });
+
+    const total = rows.length;
+    const paged = rows.slice(offset, offset + limit).map(agentView);
+
+    json(res, 200, {
+      data: paged,
+      meta: {
+        total,
+        limit,
+        offset,
+        includeDisabled
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/agents' && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const name = clean(payload.name);
+      const username = normalizedUsername(payload.username);
+      const password = String(payload.password || '');
+      const confirmPassword = payload.confirmPassword === undefined
+        ? password
+        : String(payload.confirmPassword || '');
+
+      if (!name || !username || !password || !confirmPassword) {
+        json(res, 422, { error: 'name, username, password, and confirmPassword are required.' });
+        return;
+      }
+      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+        json(res, 422, { error: 'Username must be 3-32 chars and contain only letters, numbers, dot, underscore, or dash.' });
+        return;
+      }
+      if (!secureEquals(password, confirmPassword)) {
+        json(res, 422, { error: 'Password confirmation does not match.' });
+        return;
+      }
+
+      const invalidPassword = validateNewPassword(password);
+      if (invalidPassword) {
+        json(res, 422, { error: invalidPassword });
+        return;
+      }
+
+      if (findUserByUsername(store, username)) {
+        json(res, 409, { error: 'Username is already taken.' });
+        return;
+      }
+
+      const agent = {
+        id: id('USR'),
+        username,
+        name,
+        role: 'agent',
+        status: 'active',
+        password: hashPassword(password),
+        provisioning: 'admin',
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      store.users.push(agent);
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'agent.create',
+        entity: 'user',
+        entityId: agent.id,
+        details: `Created agent account ${agent.username}`
+      });
+
+      writeStore(store);
+      json(res, 201, { data: agentView(agent) });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
     return;
   }
 

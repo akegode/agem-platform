@@ -67,6 +67,8 @@ async function run() {
   const agentUsername = 'fieldagent';
   const agentPassword = 'FieldAgent#2026!';
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
+  const additionalAgentUsername = 'fieldagent2';
+  const additionalAgentPassword = 'FieldAgent2#2026!';
   const agentRecoveryCode = 'AgentRecovery#2026';
   const farmerSelfUsername = 'grower01';
   const farmerSelfPassword = 'GrowerPass#2026!';
@@ -169,6 +171,52 @@ async function run() {
       expectStatus: 200
     });
     agentToken = agentLoginUpdated.data.token;
+
+    await request(baseUrl, '/api/agents', {
+      token: agentToken,
+      expectStatus: 403
+    });
+
+    const createAgent = await request(baseUrl, '/api/agents', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Mary Wanjiku',
+        username: additionalAgentUsername,
+        password: additionalAgentPassword,
+        confirmPassword: additionalAgentPassword
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(createAgent.data.role, 'agent');
+    assert.strictEqual(createAgent.data.username, additionalAgentUsername);
+
+    await request(baseUrl, '/api/agents', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Duplicate Agent',
+        username: additionalAgentUsername,
+        password: additionalAgentPassword,
+        confirmPassword: additionalAgentPassword
+      },
+      expectStatus: 409
+    });
+
+    const agentsList = await request(baseUrl, '/api/agents?includeDisabled=true&limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(agentsList.data), 'Expected list of agents');
+    const agentUsernames = new Set((agentsList.data || []).map((row) => row.username));
+    assert.ok(agentUsernames.has(agentUsername), 'Expected env agent in list');
+    assert.ok(agentUsernames.has(additionalAgentUsername), 'Expected created agent in list');
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: additionalAgentUsername, password: additionalAgentPassword },
+      expectStatus: 200
+    });
 
     const selfRegister = await request(baseUrl, '/api/auth/register-farmer', {
       method: 'POST',
