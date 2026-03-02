@@ -163,6 +163,18 @@ body.dashboard-open {
   background: #fafaf8;
 }
 
+.settings-toggle {
+  margin-bottom: 12px;
+}
+
+.account-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .profile-row {
   display: grid;
   grid-template-columns: 68px 1fr;
@@ -285,6 +297,49 @@ body.dashboard-open {
 .pane-jump label {
   font-size: 0.8rem;
   opacity: 0.9;
+}
+
+.menu-dropdown {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafaf8;
+  margin-bottom: 12px;
+}
+
+.menu-dropdown summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.92rem;
+  font-weight: 700;
+  padding: 10px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.menu-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+
+.menu-dropdown summary::after {
+  content: '+';
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  background: #efefec;
+}
+
+.menu-dropdown[open] summary::after {
+  content: '-';
+}
+
+.menu-dropdown .nav {
+  margin-top: 0;
+  border-top: 1px solid #ecece9;
+  padding: 8px;
 }
 
 .nav {

@@ -19,6 +19,10 @@ const elements = {
   roleHint: document.getElementById('roleHint'),
   roleSelect: document.getElementById('roleSelect'),
   paneSelect: document.getElementById('paneSelect'),
+  menuPanel: document.getElementById('menuPanel'),
+  accountToggleBtn: document.getElementById('accountToggleBtn'),
+  accountPanel: document.getElementById('accountPanel'),
+  accountCloseBtn: document.getElementById('accountCloseBtn'),
 
   authState: document.getElementById('authState'),
   dashboardWelcome: document.getElementById('dashboardWelcome'),
@@ -115,6 +119,7 @@ void init();
 async function init() {
   bindTabs();
   bindRoleSelect();
+  bindAccountSettings();
   bindAuth();
   bindScrollTools();
   bindFarmers();
@@ -146,6 +151,38 @@ async function init() {
   }
 
   updatePermissionUi();
+}
+
+function bindAccountSettings() {
+  if (!elements.accountToggleBtn || !elements.accountPanel) return;
+
+  elements.accountToggleBtn.addEventListener('click', () => {
+    if (elements.accountPanel.hidden) {
+      showAccountPanel();
+    } else {
+      hideAccountPanel();
+    }
+  });
+
+  if (elements.accountCloseBtn) {
+    elements.accountCloseBtn.addEventListener('click', () => {
+      hideAccountPanel();
+    });
+  }
+}
+
+function showAccountPanel() {
+  if (!elements.accountPanel || !elements.accountToggleBtn) return;
+  elements.accountPanel.hidden = false;
+  elements.accountToggleBtn.setAttribute('aria-expanded', 'true');
+  elements.accountToggleBtn.textContent = 'Hide Account Settings';
+}
+
+function hideAccountPanel() {
+  if (!elements.accountPanel || !elements.accountToggleBtn) return;
+  elements.accountPanel.hidden = true;
+  elements.accountToggleBtn.setAttribute('aria-expanded', 'false');
+  elements.accountToggleBtn.textContent = 'Account Settings';
 }
 
 function bindScrollTools() {
@@ -195,6 +232,10 @@ function setActivePane(paneId, resetScroll = false) {
 
   if (elements.paneSelect) {
     elements.paneSelect.value = paneId;
+  }
+
+  if (elements.menuPanel) {
+    elements.menuPanel.open = false;
   }
 
   if (resetScroll && elements.dashboardMain) {
@@ -1209,6 +1250,9 @@ function updateAuthUi() {
     elements.authShell.hidden = true;
     elements.appShell.hidden = false;
     document.body.classList.add('dashboard-open');
+    if (elements.accountToggleBtn) {
+      elements.accountToggleBtn.hidden = false;
+    }
     elements.authState.textContent = `Signed in: ${state.auth.user.username} (${state.auth.user.role})`;
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
@@ -1229,6 +1273,13 @@ function updateAuthUi() {
     elements.scrollTopBtn.hidden = true;
     if (elements.dashboardMain) elements.dashboardMain.scrollTop = 0;
     document.body.classList.remove('dashboard-open');
+    hideAccountPanel();
+    if (elements.accountToggleBtn) {
+      elements.accountToggleBtn.hidden = true;
+    }
+    if (elements.menuPanel) {
+      elements.menuPanel.open = false;
+    }
     elements.authState.textContent = 'Not signed in';
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';

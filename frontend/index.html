@@ -80,8 +80,13 @@
         <div class="brand">Agem Portal</div>
         <div class="sub" id="roleHint">Avocado operations command center.</div>
 
-        <section class="auth-card account-card">
-          <h3 class="auth-title">My Account</h3>
+        <button class="secondary full settings-toggle" type="button" id="accountToggleBtn" aria-expanded="false">Account Settings</button>
+
+        <section class="auth-card account-card" id="accountPanel" hidden>
+          <div class="account-head">
+            <h3 class="auth-title">My Account</h3>
+            <button class="table-btn" type="button" id="accountCloseBtn">Close</button>
+          </div>
           <p class="auth-state" id="dashboardWelcome">Welcome back.</p>
 
           <div class="profile-row">
@@ -128,16 +133,19 @@
           </select>
         </div>
 
-        <nav class="nav" id="tabs">
-          <button class="active" data-pane="overview">Overview</button>
-          <button data-pane="farmers">Farmers</button>
-          <button data-pane="produce">Produce</button>
-          <button data-pane="payments">Payments</button>
-          <button data-pane="sms">SMS</button>
-          <button data-pane="reports">Reports</button>
-          <button data-pane="exports">Exports</button>
-          <button data-pane="roadmap">Roadmap</button>
-        </nav>
+        <details class="menu-dropdown" id="menuPanel">
+          <summary>Menu</summary>
+          <nav class="nav" id="tabs">
+            <button class="active" data-pane="overview">Overview</button>
+            <button data-pane="farmers">Farmers</button>
+            <button data-pane="produce">Produce</button>
+            <button data-pane="payments">Payments</button>
+            <button data-pane="sms">SMS</button>
+            <button data-pane="reports">Reports</button>
+            <button data-pane="exports">Exports</button>
+            <button data-pane="roadmap">Roadmap</button>
+          </nav>
+        </details>
 
         <p class="footer-note">Hybrid mode: live backend API when reachable, local browser storage as fallback.</p>
       </aside>
