@@ -242,6 +242,17 @@
                   <p class="meta compact">
                     Required fields: name, phone, national ID, location, total area, and area under avocado (all accept hectares/acres/square feet). Optional: trees, notes. Extra columns are ignored automatically.
                   </p>
+                  <label class="check-inline" for="farmerImportNotifyBySms">
+                    <input id="farmerImportNotifyBySms" type="checkbox">
+                    Notify imported farmers by SMS (USSD access message)
+                  </label>
+                  <textarea
+                    id="farmerImportSmsTemplate"
+                    rows="3"
+                    placeholder="SMS template"
+                    disabled
+                  >Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.</textarea>
+                  <p class="meta compact">Template placeholders: {{name}}, {{phone}}, {{nationalId}}, {{location}}, {{ussd}}, {{portal}}</p>
                   <div class="inline-actions">
                     <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>
                   </div>

@@ -9,7 +9,7 @@ This project is now a full working web application with authentication, role-bas
 - Signed-in password change flow
 - Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards) with mandatory National ID, total farm size + area under avocado, and auto-conversion across hectares, acres, and square feet
-- Bulk farmer import (CSV/Excel) for admin; required fields (including National ID, total area, and area under avocado) are mapped, extra columns ignored, and acreage/square-feet values are converted to hectares
+- Bulk farmer import (CSV/Excel) for admin; required fields (including National ID, total area, and area under avocado) are mapped, extra columns ignored, acreage/square-feet values are converted to hectares, and optional onboarding SMS can be sent to imported farmers
 - Duplicate protection for admin/agent/farmer accounts and farmer phone records (no double registration)
 - Import duplicate handling: choose to keep existing farmer data or overwrite with incoming file data
 - Farm-gate avocado QC capture (Hass/Fuerte): visual grade, dry matter, firmness, fruit weight, size code, lot weight, and QC decision

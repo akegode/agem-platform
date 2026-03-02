@@ -16,6 +16,9 @@ const ACTIVITY_CAP = 1000;
 const HECTARES_PER_ACRE = 0.40468564224;
 const SQFT_PER_HECTARE = 107639.1041671;
 const MIN_PASSWORD_LENGTH = 10;
+const IMPORT_ONBOARDING_SMS_DEFAULT =
+  'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD *483# (once active) for farmer services.';
+const IMPORT_ONBOARDING_SMS_MAX_LENGTH = 500;
 
 function envValue(key) {
   return String(process.env[key] || '').trim();
@@ -488,6 +491,27 @@ function requireSession(req, store, allowedRoles) {
 
 function clean(value) {
   return String(value || '').trim();
+}
+
+function isTruthy(value) {
+  if (typeof value === 'boolean') return value;
+  const lower = clean(value).toLowerCase();
+  return lower === 'true' || lower === '1' || lower === 'yes' || lower === 'on';
+}
+
+function renderImportOnboardingSms(template, farmer) {
+  const rawTemplate = clean(template) || IMPORT_ONBOARDING_SMS_DEFAULT;
+  const values = {
+    name: clean(farmer?.name) || 'farmer',
+    phone: clean(farmer?.phone),
+    nationalId: clean(farmer?.nationalId),
+    location: clean(farmer?.location),
+    ussd: '*483#',
+    portal: 'Agem Portal'
+  };
+
+  const rendered = rawTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] || '');
+  return clean(rendered);
 }
 
 function normalizedUsername(value) {
@@ -1948,6 +1972,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       const onDuplicate = clean(payload.onDuplicate).toLowerCase() === 'overwrite' ? 'overwrite' : 'skip';
+      const sendOnboardingSms = isTruthy(payload.sendOnboardingSms);
+      const onboardingSmsTemplate = clean(payload.onboardingSmsTemplate);
+      if (sendOnboardingSms && onboardingSmsTemplate.length > IMPORT_ONBOARDING_SMS_MAX_LENGTH) {
+        json(res, 422, {
+          error: `onboardingSmsTemplate must be ${IMPORT_ONBOARDING_SMS_MAX_LENGTH} characters or fewer`
+        });
+        return;
+      }
       const farmersByPhone = new Map(
         store.farmers
           .map((row) => [clean(row.phone), row])
@@ -2016,7 +2048,7 @@ const server = http.createServer(async (req, res) => {
 
             farmersByPhone.set(phone, existing);
             farmersByNationalId.set(nationalIdKey, existing);
-            updated.push(existing.id);
+            updated.push(existing);
           } else {
             errors.push({ row: idx + 1, error: 'Duplicate farmer (matching phone or National ID)' });
           }
@@ -2043,7 +2075,34 @@ const server = http.createServer(async (req, res) => {
         created.push(record);
       });
 
-      if (created.length || updated.length) {
+      const importSmsLogs = [];
+      if (sendOnboardingSms && (created.length || updated.length)) {
+        const byPhone = new Map();
+        for (const farmer of created.concat(updated)) {
+          const phone = clean(farmer.phone);
+          if (!phone || byPhone.has(phone)) continue;
+          byPhone.set(phone, farmer);
+        }
+
+        const createdAt = nowIso();
+        for (const [phone, farmer] of byPhone.entries()) {
+          const message = renderImportOnboardingSms(onboardingSmsTemplate, farmer);
+          if (!message) continue;
+          importSmsLogs.push({
+            id: id('SMS'),
+            farmerId: farmer.id || '',
+            farmerName: farmer.name || '',
+            phone,
+            message,
+            provider: 'AfricaTalking(Mock)',
+            status: 'Sent',
+            createdBy: auth.session.username,
+            createdAt
+          });
+        }
+      }
+
+      if (created.length || updated.length || importSmsLogs.length) {
         store.farmers = created.reverse().concat(store.farmers);
         addActivity(store, {
           actor: auth.session.username,
@@ -2054,6 +2113,16 @@ const server = http.createServer(async (req, res) => {
             `Imported ${created.length}, updated ${updated.length}, skipped ${records.length - created.length - updated.length}` +
             ` (duplicate mode: ${onDuplicate})`
         });
+        if (importSmsLogs.length) {
+          store.smsLogs = importSmsLogs.reverse().concat(store.smsLogs);
+          addActivity(store, {
+            actor: auth.session.username,
+            role: auth.session.role,
+            action: 'sms.import_onboarding',
+            entity: 'sms',
+            details: `Sent onboarding SMS to ${importSmsLogs.length} imported farmer mobile numbers`
+          });
+        }
         writeStore(store);
       }
 
@@ -2064,6 +2133,8 @@ const server = http.createServer(async (req, res) => {
           updated: updated.length,
           skipped: records.length - created.length - updated.length,
           duplicateMode: onDuplicate,
+          sendOnboardingSms,
+          smsSent: importSmsLogs.length,
           errors: errors.slice(0, 250)
         }
       });

@@ -591,6 +591,21 @@ form {
   gap: 8px;
 }
 
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  font-size: 0.86rem;
+  color: #242424;
+}
+
+.check-inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
 .row {
   display: grid;
   gap: 8px;

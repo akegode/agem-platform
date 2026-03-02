@@ -336,6 +336,8 @@ async function run() {
       method: 'POST',
       token: adminToken,
       body: {
+        sendOnboardingSms: true,
+        onboardingSmsTemplate: 'Hello {{name}}, you are now on Agem Portal. Dial {{ussd}} when active.',
         records: [
           {
             'Farmer Name': 'Peter Mwangi',
@@ -380,8 +382,19 @@ async function run() {
     assert.strictEqual(importResponse.data.imported, 2);
     assert.strictEqual(importResponse.data.updated || 0, 0);
     assert.strictEqual(importResponse.data.skipped, 2);
+    assert.strictEqual(importResponse.data.smsSent, 2);
     assert.ok(Array.isArray(importResponse.data.errors), 'Expected row errors array');
     assert.ok(importResponse.data.errors.length >= 2, 'Expected duplicate and validation row errors');
+
+    const smsAfterImport = await request(baseUrl, '/api/sms?limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.strictEqual((smsAfterImport.data || []).length, 2, 'Expected two onboarding SMS logs from import');
+    assert.ok(
+      (smsAfterImport.data || []).every((row) => String(row.message || '').includes('Dial *483# when active.')),
+      'Expected onboarding SMS template to be applied with USSD placeholder'
+    );
 
     const farmersAfterImport = await request(baseUrl, '/api/farmers?limit=20', {
       token: adminToken,
@@ -611,7 +624,7 @@ async function run() {
     assert.strictEqual(summary.data.produceRecords, 1);
     assert.strictEqual(summary.data.purchasedRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 3);
-    assert.strictEqual(summary.data.smsSent, 6);
+    assert.strictEqual(summary.data.smsSent, 8);
     assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
     assert.ok(Number(summary.data.totalOwedKes || 0) < 0.01, 'Expected owed balance to be settled');
 

@@ -3,6 +3,9 @@ const MAX_PROFILE_PHOTO_BYTES = 1_500_000;
 const HECTARES_PER_ACRE = 0.40468564224;
 const ACRES_PER_HECTARE = 1 / HECTARES_PER_ACRE;
 const SQFT_PER_HECTARE = 107639.1041671;
+const IMPORT_ONBOARDING_SMS_MAX_LENGTH = 500;
+const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE =
+  'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
 
 const API = {
   enabled: false
@@ -115,6 +118,8 @@ const elements = {
   farmerMsg: document.getElementById('farmerMsg'),
   farmerImportForm: document.getElementById('farmerImportForm'),
   farmerImportFile: document.getElementById('farmerImportFile'),
+  farmerImportNotifyBySms: document.getElementById('farmerImportNotifyBySms'),
+  farmerImportSmsTemplate: document.getElementById('farmerImportSmsTemplate'),
   farmerImportBtn: document.getElementById('farmerImportBtn'),
   farmerImportMsg: document.getElementById('farmerImportMsg'),
   farmerImportSummary: document.getElementById('farmerImportSummary'),
@@ -878,6 +883,13 @@ function bindFarmers() {
     clearMessages();
   });
 
+  if (elements.farmerImportNotifyBySms) {
+    elements.farmerImportNotifyBySms.addEventListener('change', () => {
+      updateFarmerImportSmsUi();
+    });
+  }
+  updateFarmerImportSmsUi();
+
   elements.farmerImportForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     clearMessages();
@@ -916,6 +928,14 @@ function bindFarmers() {
         );
         duplicateMode = overwrite ? 'overwrite' : 'skip';
       }
+      const sendOnboardingSms = Boolean(elements.farmerImportNotifyBySms?.checked);
+      const smsTemplate = String(elements.farmerImportSmsTemplate?.value || '').trim();
+      if (sendOnboardingSms && smsTemplate.length > IMPORT_ONBOARDING_SMS_MAX_LENGTH) {
+        elements.farmerImportMsg.textContent =
+          `SMS template is too long. Keep it under ${IMPORT_ONBOARDING_SMS_MAX_LENGTH} characters.`;
+        return;
+      }
+      const onboardingSmsTemplate = smsTemplate || DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE;
 
       let result = null;
       if (API.enabled) {
@@ -926,12 +946,21 @@ function bindFarmers() {
 
         const response = await apiRequest('/api/farmers/import', {
           method: 'POST',
-          body: { records, onDuplicate: duplicateMode }
+          body: {
+            records,
+            onDuplicate: duplicateMode,
+            sendOnboardingSms,
+            onboardingSmsTemplate
+          }
         });
         result = response.data || {};
         await fetchAllData();
       } else {
-        result = importFarmersLocal(records, { onDuplicate: duplicateMode });
+        result = importFarmersLocal(records, {
+          onDuplicate: duplicateMode,
+          sendOnboardingSms,
+          onboardingSmsTemplate
+        });
         hydrateFarmerSelectors();
         renderAll();
         persist();
@@ -1012,6 +1041,12 @@ function bindFarmers() {
       }
     }
   });
+}
+
+function updateFarmerImportSmsUi() {
+  if (!elements.farmerImportNotifyBySms || !elements.farmerImportSmsTemplate) return;
+  const enabled = !elements.farmerImportNotifyBySms.disabled && elements.farmerImportNotifyBySms.checked;
+  elements.farmerImportSmsTemplate.disabled = !enabled;
 }
 
 function bindAgents() {
@@ -2702,6 +2737,8 @@ function updatePermissionUi() {
   elements.farmerCancelEditBtn.disabled = !farmersAllowed;
   elements.farmerImportBtn.disabled = !importAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
+  elements.farmerImportNotifyBySms.disabled = !importAllowed;
+  updateFarmerImportSmsUi();
   elements.agentName.disabled = !agentManageAllowed;
   elements.agentEmail.disabled = !agentManageAllowed;
   elements.agentRefreshBtn.disabled = !agentManageAllowed;
@@ -3256,17 +3293,20 @@ function renderFarmerImportResult(result) {
   const imported = Number(result?.imported || 0);
   const updated = Number(result?.updated || 0);
   const skipped = Number(result?.skipped || 0);
+  const smsSent = Number(result?.smsSent || 0);
   const duplicateMode = result?.duplicateMode || 'skip';
   const errors = Array.isArray(result?.errors) ? result.errors : [];
 
   if (imported || updated) {
-    elements.farmerImportMsg.textContent = `Import complete. Added ${imported}, updated ${updated}.`;
+    elements.farmerImportMsg.textContent =
+      `Import complete. Added ${imported}, updated ${updated}.` +
+      (smsSent ? ` Onboarding SMS sent: ${smsSent}.` : '');
   } else {
     elements.farmerImportMsg.textContent = 'Import completed with no new farmers added.';
   }
   elements.farmerImportSummary.textContent =
     `Rows processed: ${totalRows}. Imported: ${imported}. Updated: ${updated}. Skipped: ${skipped}. ` +
-    `Duplicate mode: ${duplicateMode}.`;
+    `Duplicate mode: ${duplicateMode}. Onboarding SMS sent: ${smsSent}.`;
 
   if (!errors.length) {
     elements.farmerImportErrors.innerHTML = '';
@@ -3489,6 +3529,26 @@ function cleanNationalIdClient(value) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+function isTruthyClient(value) {
+  if (typeof value === 'boolean') return value;
+  const lower = String(value ?? '').trim().toLowerCase();
+  return lower === 'true' || lower === '1' || lower === 'yes' || lower === 'on';
+}
+
+function renderImportOnboardingSmsTemplateClient(template, farmer) {
+  const rawTemplate = String(template || '').trim() || DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE;
+  const values = {
+    name: String(farmer?.name || '').trim() || 'farmer',
+    phone: String(farmer?.phone || '').trim(),
+    nationalId: String(farmer?.nationalId || '').trim(),
+    location: String(farmer?.location || '').trim(),
+    ussd: '*483#',
+    portal: 'Agem Portal'
+  };
+  const rendered = rawTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] || '');
+  return rendered.trim();
+}
+
 function hasFarmerPhoneConflict(phone, excludeId = '') {
   const target = cleanPhone(phone);
   if (!target) return false;
@@ -3541,6 +3601,8 @@ function findImportDuplicates(records) {
 
 function importFarmersLocal(records, options = {}) {
   const onDuplicate = options.onDuplicate === 'overwrite' ? 'overwrite' : 'skip';
+  const sendOnboardingSms = isTruthyClient(options.sendOnboardingSms);
+  const onboardingSmsTemplate = String(options.onboardingSmsTemplate || '').trim();
   const farmersByPhone = new Map(
     state.farmers
       .map((row) => [cleanPhone(row.phone), row])
@@ -3610,7 +3672,7 @@ function importFarmersLocal(records, options = {}) {
 
         farmersByPhone.set(phone, existing);
         farmersByNationalId.set(nationalIdKey, existing);
-        updated.push(existing.id);
+        updated.push(existing);
       } else {
         errors.push({ row: idx + 1, error: 'Duplicate farmer (matching phone or National ID)' });
       }
@@ -3640,12 +3702,46 @@ function importFarmersLocal(records, options = {}) {
     state.farmers = created.reverse().concat(state.farmers);
   }
 
+  let smsSent = 0;
+  if (sendOnboardingSms && (created.length || updated.length)) {
+    const byPhone = new Map();
+    for (const farmer of created.concat(updated)) {
+      const phone = cleanPhone(farmer.phone);
+      if (!phone || byPhone.has(phone)) continue;
+      byPhone.set(phone, farmer);
+    }
+
+    const nowIso = new Date().toISOString();
+    const logs = [];
+    for (const [phone, farmer] of byPhone.entries()) {
+      const message = renderImportOnboardingSmsTemplateClient(onboardingSmsTemplate, farmer);
+      if (!message) continue;
+      logs.push({
+        id: `SMS-${Date.now()}-${logs.length + 1}`,
+        farmerId: farmer.id || '',
+        farmerName: farmer.name || '',
+        phone,
+        message,
+        provider: 'Local Mock',
+        status: 'Sent',
+        createdBy: 'local',
+        createdAt: nowIso
+      });
+    }
+    if (logs.length) {
+      state.smsLogs = logs.reverse().concat(state.smsLogs);
+      smsSent = logs.length;
+    }
+  }
+
   return {
     totalRows: records.length,
     imported: created.length,
     updated: updated.length,
     skipped: records.length - created.length - updated.length,
     duplicateMode: onDuplicate,
+    sendOnboardingSms,
+    smsSent,
     errors: errors.slice(0, 250)
   };
 }
