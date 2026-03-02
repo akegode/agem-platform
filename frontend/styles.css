@@ -276,6 +276,17 @@ body.dashboard-open {
   opacity: 0.9;
 }
 
+.pane-jump {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.pane-jump label {
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
 .nav {
   display: grid;
   gap: 8px;
@@ -407,6 +418,50 @@ h3,
   border-radius: 12px;
   background: var(--card);
   padding: 13px;
+}
+
+.dropdown-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.dropdown-card > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: "Cormorant Garamond", "freight-text-pro", Georgia, serif;
+  padding: 12px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dropdown-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dropdown-card > summary::after {
+  content: '+';
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: "Source Serif 4", Georgia, serif;
+  font-weight: 700;
+  background: #efefec;
+  color: #1a1a1a;
+}
+
+.dropdown-card[open] > summary::after {
+  content: '-';
+}
+
+.dropdown-body {
+  border-top: 1px solid #ecece9;
+  padding: 12px 13px 13px;
 }
 
 .tag {

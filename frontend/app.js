@@ -18,6 +18,7 @@ const elements = {
 
   roleHint: document.getElementById('roleHint'),
   roleSelect: document.getElementById('roleSelect'),
+  paneSelect: document.getElementById('paneSelect'),
 
   authState: document.getElementById('authState'),
   dashboardWelcome: document.getElementById('dashboardWelcome'),
@@ -162,13 +163,43 @@ function bindScrollTools() {
 function bindTabs() {
   elements.tabs.forEach((button) => {
     button.addEventListener('click', () => {
-      elements.tabs.forEach((item) => item.classList.remove('active'));
-      elements.panes.forEach((pane) => pane.classList.remove('active'));
-      button.classList.add('active');
-      const pane = document.getElementById(button.dataset.pane);
-      if (pane) pane.classList.add('active');
+      setActivePane(button.dataset.pane);
     });
   });
+
+  if (elements.paneSelect) {
+    elements.paneSelect.addEventListener('change', (event) => {
+      setActivePane(event.target.value, true);
+    });
+  }
+
+  const initiallyActiveButton = [...elements.tabs].find((button) => button.classList.contains('active'));
+  setActivePane(initiallyActiveButton?.dataset.pane || 'overview');
+}
+
+function setActivePane(paneId, resetScroll = false) {
+  if (!paneId) return;
+
+  let activeFound = false;
+  elements.tabs.forEach((button) => {
+    const isActive = button.dataset.pane === paneId;
+    button.classList.toggle('active', isActive);
+    if (isActive) activeFound = true;
+  });
+
+  elements.panes.forEach((pane) => {
+    pane.classList.toggle('active', pane.id === paneId);
+  });
+
+  if (!activeFound) return;
+
+  if (elements.paneSelect) {
+    elements.paneSelect.value = paneId;
+  }
+
+  if (resetScroll && elements.dashboardMain) {
+    elements.dashboardMain.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 }
 
 function bindRoleSelect() {
@@ -219,6 +250,7 @@ function bindAuth() {
       persist();
 
       updateAuthUi();
+      setActivePane('overview', true);
       await fetchAllData();
       updatePermissionUi();
     } catch (error) {
@@ -276,6 +308,7 @@ function bindAuth() {
 
       elements.registerForm.reset();
       updateAuthUi();
+      setActivePane('overview', true);
       await fetchAllData();
       updatePermissionUi();
 

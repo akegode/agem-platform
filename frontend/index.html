@@ -114,6 +114,20 @@
           </select>
         </div>
 
+        <div class="pane-jump">
+          <label for="paneSelect">Jump To Section</label>
+          <select id="paneSelect">
+            <option value="overview">Overview</option>
+            <option value="farmers">Farmers</option>
+            <option value="produce">Produce</option>
+            <option value="payments">Payments</option>
+            <option value="sms">SMS</option>
+            <option value="reports">Reports</option>
+            <option value="exports">Exports</option>
+            <option value="roadmap">Roadmap</option>
+          </select>
+        </div>
+
         <nav class="nav" id="tabs">
           <button class="active" data-pane="overview">Overview</button>
           <button data-pane="farmers">Farmers</button>
@@ -162,7 +176,9 @@
         <section class="pane" id="farmers">
           <h2>Farmer Management</h2>
           <div class="grid">
-            <article class="card">
+            <details class="dropdown-card" open>
+              <summary>Register / Edit Farmer</summary>
+              <div class="dropdown-body">
               <form id="farmerForm">
                 <input type="hidden" id="farmerId">
                 <div class="row">
@@ -180,19 +196,24 @@
                 </div>
                 <div class="success" id="farmerMsg"></div>
               </form>
-            </article>
+              </div>
+            </details>
 
-            <article class="card">
-              <h3>Registered Farmers</h3>
-              <div id="farmerTableWrap"></div>
-            </article>
+            <details class="dropdown-card">
+              <summary>Registered Farmers</summary>
+              <div class="dropdown-body">
+                <div id="farmerTableWrap"></div>
+              </div>
+            </details>
           </div>
         </section>
 
         <section class="pane" id="produce">
           <h2>Produce Collection</h2>
           <div class="grid">
-            <article class="card">
+            <details class="dropdown-card" open>
+              <summary>Record Produce</summary>
+              <div class="dropdown-body">
               <form id="produceForm">
                 <div class="row">
                   <select required id="produceFarmer"></select>
@@ -206,19 +227,24 @@
                 <button class="primary" type="submit">Record Produce</button>
                 <div class="success" id="produceMsg"></div>
               </form>
-            </article>
+              </div>
+            </details>
 
-            <article class="card">
-              <h3>Recent Produce Entries</h3>
-              <div id="produceTableWrap"></div>
-            </article>
+            <details class="dropdown-card">
+              <summary>Recent Produce Entries</summary>
+              <div class="dropdown-body">
+                <div id="produceTableWrap"></div>
+              </div>
+            </details>
           </div>
         </section>
 
         <section class="pane" id="payments">
           <h2>Payments & M-PESA</h2>
           <div class="grid">
-            <article class="card">
+            <details class="dropdown-card" open>
+              <summary>Log Payment / Disbursement</summary>
+              <div class="dropdown-body">
               <form id="paymentForm">
                 <div class="row">
                   <select required id="paymentFarmer"></select>
@@ -239,19 +265,24 @@
                 </div>
                 <div class="success" id="paymentMsg"></div>
               </form>
-            </article>
+              </div>
+            </details>
 
-            <article class="card">
-              <h3>Payment Transactions</h3>
-              <div id="paymentTableWrap"></div>
-            </article>
+            <details class="dropdown-card">
+              <summary>Payment Transactions</summary>
+              <div class="dropdown-body">
+                <div id="paymentTableWrap"></div>
+              </div>
+            </details>
           </div>
         </section>
 
         <section class="pane" id="sms">
           <h2>SMS Communications</h2>
           <div class="grid">
-            <article class="card">
+            <details class="dropdown-card" open>
+              <summary>Send SMS</summary>
+              <div class="dropdown-body">
               <form id="smsForm">
                 <div class="row">
                   <select id="smsFarmer"></select>
@@ -261,12 +292,15 @@
                 <button class="primary" type="submit">Send SMS</button>
                 <div class="success" id="smsMsg"></div>
               </form>
-            </article>
+              </div>
+            </details>
 
-            <article class="card">
-              <h3>SMS Log</h3>
-              <div id="smsTableWrap"></div>
-            </article>
+            <details class="dropdown-card">
+              <summary>SMS Log</summary>
+              <div class="dropdown-body">
+                <div id="smsTableWrap"></div>
+              </div>
+            </details>
           </div>
         </section>
 
@@ -275,33 +309,40 @@
           <div class="kpis" id="reportMetrics"></div>
 
           <div class="grid">
-            <article class="card">
-              <h3>Readiness Narrative</h3>
-              <p class="meta" id="reportNarrative"></p>
-            </article>
+            <details class="dropdown-card" open>
+              <summary>Readiness Narrative</summary>
+              <div class="dropdown-body">
+                <p class="meta" id="reportNarrative"></p>
+              </div>
+            </details>
 
-            <article class="card">
-              <h3>Agent Performance</h3>
-              <div id="agentStatsWrap"></div>
-            </article>
+            <details class="dropdown-card">
+              <summary>Agent Performance</summary>
+              <div class="dropdown-body">
+                <div id="agentStatsWrap"></div>
+              </div>
+            </details>
           </div>
         </section>
 
         <section class="pane" id="exports">
           <h2>Exports & Admin Tools</h2>
 
-          <article class="card">
-            <h3>CSV Exports</h3>
+          <details class="dropdown-card" open>
+            <summary>CSV Exports</summary>
+            <div class="dropdown-body">
             <div class="inline-actions wrap">
               <button class="secondary export-btn" data-export="farmers">Export Farmers CSV</button>
               <button class="secondary export-btn" data-export="produce">Export Produce CSV</button>
               <button class="secondary export-btn" data-export="payments">Export Payments CSV</button>
               <button class="secondary export-btn" data-export="activity">Export Activity CSV</button>
             </div>
-          </article>
+            </div>
+          </details>
 
-          <article class="card">
-            <h3>Admin Actions</h3>
+          <details class="dropdown-card">
+            <summary>Admin Actions</summary>
+            <div class="dropdown-body">
             <div class="inline-actions wrap">
               <button class="secondary" id="backupBtn" type="button">Create Backup Snapshot</button>
               <button class="secondary" id="listBackupsBtn" type="button">List Backups</button>
@@ -309,7 +350,8 @@
             </div>
             <div class="success" id="exportsMsg"></div>
             <div id="backupListWrap"></div>
-          </article>
+            </div>
+          </details>
         </section>
 
         <section class="pane" id="roadmap">
