@@ -31,6 +31,20 @@
           <button class="primary" type="submit">Sign In</button>
         </form>
 
+        <details class="recovery" id="registrationPanel">
+          <summary>New farmer? Register here</summary>
+          <form id="registerForm" class="auth-form recovery-form">
+            <input id="registerName" placeholder="Full name">
+            <input id="registerPhone" placeholder="Phone (e.g. 2547xxxxxxx)">
+            <input id="registerLocation" placeholder="Location / Ward">
+            <input id="registerUsername" placeholder="Choose username">
+            <input id="registerPassword" type="password" placeholder="Choose password">
+            <input id="registerConfirmPassword" type="password" placeholder="Confirm password">
+            <button class="primary" type="submit">Create Farmer Account</button>
+          </form>
+          <div class="success" id="registerMsg"></div>
+        </details>
+
         <form id="changePasswordForm" class="auth-form auth-divider" hidden>
           <input id="currentPassword" type="password" placeholder="Current password" autocomplete="current-password">
           <input id="newPassword" type="password" placeholder="New password (min 10 chars)" autocomplete="new-password">
@@ -40,7 +54,7 @@
         <div class="success" id="changePasswordMsg"></div>
 
         <button class="secondary full" type="button" id="logoutBtn" hidden>Sign Out</button>
-        <p class="auth-help">Private staff access only. Contact Agem admin for your secure login.</p>
+        <p class="auth-help">Staff logins are managed by Agem admin. Farmers can self-register below.</p>
 
         <details class="recovery" id="recoveryPanel">
           <summary>Forgot username or password?</summary>

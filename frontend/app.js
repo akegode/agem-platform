@@ -17,6 +17,15 @@ const elements = {
   loginForm: document.getElementById('loginForm'),
   loginUsername: document.getElementById('loginUsername'),
   loginPassword: document.getElementById('loginPassword'),
+  registrationPanel: document.getElementById('registrationPanel'),
+  registerForm: document.getElementById('registerForm'),
+  registerName: document.getElementById('registerName'),
+  registerPhone: document.getElementById('registerPhone'),
+  registerLocation: document.getElementById('registerLocation'),
+  registerUsername: document.getElementById('registerUsername'),
+  registerPassword: document.getElementById('registerPassword'),
+  registerConfirmPassword: document.getElementById('registerConfirmPassword'),
+  registerMsg: document.getElementById('registerMsg'),
   changePasswordForm: document.getElementById('changePasswordForm'),
   currentPassword: document.getElementById('currentPassword'),
   newPassword: document.getElementById('newPassword'),
@@ -191,6 +200,64 @@ function bindAuth() {
     }
   });
 
+  elements.registerForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+
+    if (!API.enabled) {
+      elements.registerMsg.textContent = 'Registration requires backend mode.';
+      return;
+    }
+    if (isAuthenticated()) {
+      elements.registerMsg.textContent = 'Sign out first if you want to register a new account.';
+      return;
+    }
+
+    const name = elements.registerName.value.trim();
+    const phone = elements.registerPhone.value.trim();
+    const location = elements.registerLocation.value.trim();
+    const username = elements.registerUsername.value.trim();
+    const password = elements.registerPassword.value;
+    const confirmPassword = elements.registerConfirmPassword.value;
+
+    if (!name || !phone || !location || !username || !password || !confirmPassword) {
+      elements.registerMsg.textContent = 'All registration fields are required.';
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/api/auth/register-farmer', {
+        method: 'POST',
+        auth: false,
+        body: {
+          name,
+          phone,
+          location,
+          username,
+          password,
+          confirmPassword
+        }
+      });
+
+      state.auth = {
+        token: response.data.token,
+        user: response.data.user,
+        expiresAt: response.data.expiresAt
+      };
+      state.role = response.data.user.role;
+      persist();
+
+      elements.registerForm.reset();
+      updateAuthUi();
+      await fetchAllData();
+      updatePermissionUi();
+
+      elements.authMsg.textContent = `Welcome ${response.data.user.name}. Your account is active.`;
+    } catch (error) {
+      elements.registerMsg.textContent = error.message;
+    }
+  });
+
   elements.changePasswordForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     clearMessages();
@@ -304,6 +371,8 @@ function bindAuth() {
     state.auth = { token: '', user: null, expiresAt: '' };
     persist();
     elements.changePasswordForm.reset();
+    elements.registrationPanel.open = false;
+    elements.recoveryPanel.open = false;
 
     updateAuthUi();
     updatePermissionUi();
@@ -1035,10 +1104,12 @@ function updateAuthUi() {
     elements.authState.textContent = `Signed in: ${state.auth.user.username} (${state.auth.user.role})`;
     elements.loginForm.hidden = true;
     elements.loginForm.style.display = 'none';
+    elements.registrationPanel.hidden = true;
     elements.changePasswordForm.hidden = false;
     elements.changePasswordForm.style.display = 'grid';
     elements.logoutBtn.hidden = false;
     elements.logoutBtn.style.display = 'block';
+    elements.recoveryPanel.hidden = true;
     elements.roleSelect.disabled = true;
     elements.roleSelect.value = state.auth.user.role;
     state.role = state.auth.user.role;
@@ -1046,10 +1117,12 @@ function updateAuthUi() {
     elements.authState.textContent = 'Not signed in';
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
+    elements.registrationPanel.hidden = false;
     elements.changePasswordForm.hidden = true;
     elements.changePasswordForm.style.display = 'none';
     elements.logoutBtn.hidden = true;
     elements.logoutBtn.style.display = 'none';
+    elements.recoveryPanel.hidden = false;
     elements.roleSelect.disabled = false;
     elements.roleSelect.value = state.role;
   }
@@ -1555,6 +1628,7 @@ function notifySync(message) {
 
 function clearMessages() {
   elements.authMsg.textContent = '';
+  elements.registerMsg.textContent = '';
   elements.changePasswordMsg.textContent = '';
   elements.recoveryMsg.textContent = '';
   elements.farmerMsg.textContent = '';

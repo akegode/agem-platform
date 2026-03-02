@@ -23,6 +23,7 @@ const RUNNING_ON_RENDER = Boolean(envValue('RENDER'));
 const ALLOW_DEMO_USERS =
   envValue('ALLOW_DEMO_USERS') === 'true' ||
   (!RUNNING_ON_RENDER && envValue('ALLOW_DEMO_USERS') !== 'false');
+const ALLOW_FARMER_REGISTRATION = envValue('ALLOW_FARMER_REGISTRATION') !== 'false';
 const SYNC_PASSWORDS_FROM_ENV = envValue('SYNC_PASSWORDS_FROM_ENV') === 'true';
 
 const INSECURE_DEMO_ACCOUNTS = [
@@ -457,6 +458,15 @@ function clean(value) {
   return String(value || '').trim();
 }
 
+function normalizedUsername(value) {
+  return clean(value).toLowerCase();
+}
+
+function findUserByUsername(store, username) {
+  const target = normalizedUsername(username);
+  return store.users.find((row) => normalizedUsername(row.username) === target);
+}
+
 function parseNumber(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : NaN;
@@ -650,7 +660,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const payload = await readBody(req);
-      const username = clean(payload.username);
+      const username = normalizedUsername(payload.username);
       const password = String(payload.password || '');
       const store = readStore();
 
@@ -662,8 +672,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const user = store.users.find((row) => row.username === username && row.status === 'active');
-      if (!user || !verifyPassword(password, user.password)) {
+      const user = findUserByUsername(store, username);
+      if (!user || user.status !== 'active' || !verifyPassword(password, user.password)) {
         json(res, 401, { error: 'Invalid username or password' });
         return;
       }
@@ -700,6 +710,128 @@ const server = http.createServer(async (req, res) => {
             role: user.role,
             name: user.name
           }
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/register-farmer' && req.method === 'POST') {
+    try {
+      if (!ALLOW_FARMER_REGISTRATION) {
+        json(res, 403, { error: 'Farmer self-registration is disabled.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const name = clean(payload.name);
+      const phone = clean(payload.phone);
+      const location = clean(payload.location);
+      const username = normalizedUsername(payload.username);
+      const password = String(payload.password || '');
+      const confirmPassword = String(payload.confirmPassword || '');
+      const notes = clean(payload.notes);
+      const treesValue = payload.trees === undefined ? 0 : parseNumber(payload.trees);
+      const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
+
+      if (!name || !phone || !location || !username || !password || !confirmPassword) {
+        json(res, 422, { error: 'name, phone, location, username, password, and confirmPassword are required.' });
+        return;
+      }
+      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
+        json(res, 422, { error: 'Username must be 3-32 chars and contain only letters, numbers, dot, underscore, or dash.' });
+        return;
+      }
+      if (!secureEquals(password, confirmPassword)) {
+        json(res, 422, { error: 'Password confirmation does not match.' });
+        return;
+      }
+      if (!Number.isFinite(trees) || trees < 0) {
+        json(res, 422, { error: 'trees must be a number greater than or equal to 0.' });
+        return;
+      }
+
+      const invalidPassword = validateNewPassword(password);
+      if (invalidPassword) {
+        json(res, 422, { error: invalidPassword });
+        return;
+      }
+
+      const store = readStore();
+      if (findUserByUsername(store, username)) {
+        json(res, 409, { error: 'Username is already taken.' });
+        return;
+      }
+
+      const user = {
+        id: id('USR'),
+        username,
+        name,
+        role: 'farmer',
+        status: 'active',
+        password: hashPassword(password),
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      store.users.push(user);
+
+      const farmer = {
+        id: id('F'),
+        name,
+        phone,
+        location,
+        trees,
+        notes,
+        createdBy: user.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      store.farmers.unshift(farmer);
+
+      const token = randomToken();
+      const createdAt = nowIso();
+      const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+      store.sessions[token] = {
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        name: user.name,
+        createdAt,
+        expiresAt
+      };
+
+      addActivity(store, {
+        actor: user.username,
+        role: user.role,
+        action: 'auth.register',
+        entity: 'user',
+        entityId: user.id,
+        details: `Self-registered farmer account ${user.username}`
+      });
+      addActivity(store, {
+        actor: user.username,
+        role: user.role,
+        action: 'farmer.create',
+        entity: 'farmer',
+        entityId: farmer.id,
+        details: `Self-registered farmer profile ${farmer.name}`
+      });
+
+      writeStore(store);
+      json(res, 201, {
+        data: {
+          token,
+          expiresAt,
+          user: {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            name: user.name
+          },
+          farmerId: farmer.id
         }
       });
     } catch (error) {

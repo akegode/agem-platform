@@ -68,6 +68,8 @@ async function run() {
   const agentPassword = 'FieldAgent#2026!';
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
   const agentRecoveryCode = 'AgentRecovery#2026';
+  const farmerSelfUsername = 'grower01';
+  const farmerSelfPassword = 'GrowerPass#2026!';
 
   const server = spawn('node', ['backend/server.js'], {
     cwd: root,
@@ -168,6 +170,46 @@ async function run() {
     });
     agentToken = agentLoginUpdated.data.token;
 
+    const selfRegister = await request(baseUrl, '/api/auth/register-farmer', {
+      method: 'POST',
+      body: {
+        name: 'Self Grower',
+        phone: '254700111222',
+        location: 'Muranga',
+        username: farmerSelfUsername,
+        password: farmerSelfPassword,
+        confirmPassword: farmerSelfPassword
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(selfRegister.data.user.role, 'farmer');
+    assert.ok(selfRegister.data.farmerId, 'Farmer ID missing after self-registration');
+
+    await request(baseUrl, '/api/auth/register-farmer', {
+      method: 'POST',
+      body: {
+        name: 'Duplicate Grower',
+        phone: '254799000111',
+        location: 'Muranga',
+        username: farmerSelfUsername,
+        password: farmerSelfPassword,
+        confirmPassword: farmerSelfPassword
+      },
+      expectStatus: 409
+    });
+
+    const farmerLogin = await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: farmerSelfUsername.toUpperCase(), password: farmerSelfPassword },
+      expectStatus: 200
+    });
+    const farmerToken = farmerLogin.data.token;
+    const farmerMe = await request(baseUrl, '/api/auth/me', {
+      token: farmerToken,
+      expectStatus: 200
+    });
+    assert.strictEqual(farmerMe.data.user.username, farmerSelfUsername);
+
     const farmer = await request(baseUrl, '/api/farmers', {
       method: 'POST',
       token: adminToken,
@@ -236,7 +278,7 @@ async function run() {
       token: adminToken,
       expectStatus: 200
     });
-    assert.strictEqual(summary.data.farmers, 1);
+    assert.strictEqual(summary.data.farmers, 2);
     assert.strictEqual(summary.data.produceRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 1);
     assert.strictEqual(summary.data.smsSent, 1);
