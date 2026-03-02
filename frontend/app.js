@@ -44,6 +44,7 @@ const elements = {
   registerForm: document.getElementById('registerForm'),
   registerName: document.getElementById('registerName'),
   registerPhone: document.getElementById('registerPhone'),
+  registerNationalId: document.getElementById('registerNationalId'),
   registerLocation: document.getElementById('registerLocation'),
   registerAreaHectares: document.getElementById('registerAreaHectares'),
   registerAreaAcres: document.getElementById('registerAreaAcres'),
@@ -82,6 +83,7 @@ const elements = {
   farmerId: document.getElementById('farmerId'),
   farmerName: document.getElementById('farmerName'),
   farmerPhone: document.getElementById('farmerPhone'),
+  farmerNationalId: document.getElementById('farmerNationalId'),
   farmerLocation: document.getElementById('farmerLocation'),
   treeCount: document.getElementById('treeCount'),
   farmerAreaHectares: document.getElementById('farmerAreaHectares'),
@@ -426,6 +428,7 @@ function bindAuth() {
 
     const name = elements.registerName.value.trim();
     const phone = elements.registerPhone.value.trim();
+    const nationalId = elements.registerNationalId.value.trim();
     const location = elements.registerLocation.value.trim();
     const areaHectares = elements.registerAreaHectares.value.trim();
     const areaAcres = elements.registerAreaAcres.value.trim();
@@ -434,7 +437,16 @@ function bindAuth() {
     const password = elements.registerPassword.value;
     const confirmPassword = elements.registerConfirmPassword.value;
 
-    if (!name || !phone || !location || (!areaHectares && !areaAcres && !areaSquareFeet) || !username || !password || !confirmPassword) {
+    if (
+      !name ||
+      !phone ||
+      !nationalId ||
+      !location ||
+      (!areaHectares && !areaAcres && !areaSquareFeet) ||
+      !username ||
+      !password ||
+      !confirmPassword
+    ) {
       elements.registerMsg.textContent = 'All registration fields are required.';
       return;
     }
@@ -446,6 +458,7 @@ function bindAuth() {
         body: {
           name,
           phone,
+          nationalId,
           location,
           ...buildAreaPayload(areaHectares, areaAcres, areaSquareFeet),
           username,
@@ -665,6 +678,7 @@ function bindFarmers() {
     const payload = {
       name: elements.farmerName.value.trim(),
       phone: elements.farmerPhone.value.trim(),
+      nationalId: cleanNationalIdClient(elements.farmerNationalId.value),
       location: elements.farmerLocation.value.trim(),
       trees: Number(elements.treeCount.value || 0),
       ...buildAreaPayload(
@@ -701,8 +715,9 @@ function bindFarmers() {
         return;
       }
 
-      if (hasFarmerPhoneConflict(payload.phone, state.editingFarmerId)) {
-        elements.farmerMsg.textContent = 'A farmer with this phone number already exists.';
+      const duplicateError = localFarmerDuplicateError(payload, state.editingFarmerId);
+      if (duplicateError) {
+        elements.farmerMsg.textContent = duplicateError;
         return;
       }
 
@@ -763,11 +778,13 @@ function bindFarmers() {
         return;
       }
 
-      const duplicatePhones = findImportDuplicatePhones(records);
+      const duplicates = findImportDuplicates(records);
+      const duplicatePhoneCount = duplicates.phones.length;
+      const duplicateNationalIdCount = duplicates.nationalIds.length;
       let duplicateMode = 'skip';
-      if (duplicatePhones.length) {
+      if (duplicatePhoneCount || duplicateNationalIdCount) {
         const overwrite = confirm(
-          `${duplicatePhones.length} farmer(s) from this file already exist in the database.\n\n` +
+          `Duplicate matches found: ${duplicatePhoneCount} by phone, ${duplicateNationalIdCount} by National ID.\n\n` +
           'Click OK to overwrite old farmer info with new file info.\n' +
           'Click Cancel to keep old info and skip duplicates.'
         );
@@ -816,6 +833,7 @@ function bindFarmers() {
       elements.farmerId.value = farmer.id;
       elements.farmerName.value = farmer.name || '';
       elements.farmerPhone.value = farmer.phone || '';
+      elements.farmerNationalId.value = farmer.nationalId || '';
       elements.farmerLocation.value = farmer.location || '';
       elements.treeCount.value = farmer.trees || 0;
       fillAreaInputsFromHectares(
@@ -1365,7 +1383,7 @@ async function loadSmsRecipients(reset = false) {
     if (q) {
       const needle = q.toLowerCase();
       rows = rows.filter((row) => {
-        const text = `${row.id || ''} ${row.name || ''} ${row.phone || ''} ${row.location || ''} ${row.notes || ''}`.toLowerCase();
+        const text = `${row.id || ''} ${row.name || ''} ${row.phone || ''} ${row.nationalId || ''} ${row.location || ''} ${row.notes || ''}`.toLowerCase();
         return text.includes(needle);
       });
     }
@@ -1375,6 +1393,7 @@ async function loadSmsRecipients(reset = false) {
       id: row.id,
       name: row.name,
       phone: row.phone,
+      nationalId: row.nationalId,
       location: row.location
     }));
 
@@ -1423,6 +1442,7 @@ function renderSmsRecipientList() {
           </td>
           <td>${escapeHtml(row.name || '-')}</td>
           <td>${escapeHtml(row.phone || '-')}</td>
+          <td>${escapeHtml(row.nationalId || '-')}</td>
           <td>${escapeHtml(row.location || '-')}</td>
         </tr>
       `
@@ -1436,6 +1456,7 @@ function renderSmsRecipientList() {
           <th>Select</th>
           <th>Name</th>
           <th>Phone</th>
+          <th>National ID</th>
           <th>Location</th>
         </tr>
       </thead>
@@ -1891,6 +1912,7 @@ function renderFarmers() {
           <td>${escapeHtml(farmer.id)}</td>
           <td>${escapeHtml(farmer.name)}</td>
           <td>${escapeHtml(farmer.phone)}</td>
+          <td>${escapeHtml(farmer.nationalId || '-')}</td>
           <td>${escapeHtml(farmer.location)}</td>
           <td>${escapeHtml(formatHectares(farmer.hectares))}</td>
           <td>${escapeHtml(formatAcres(farmer.hectares))}</td>
@@ -1910,6 +1932,7 @@ function renderFarmers() {
           <th>ID</th>
           <th>Name</th>
           <th>Phone</th>
+          <th>National ID</th>
           <th>Location</th>
           <th>Hectares</th>
           <th>Acres</th>
@@ -2317,6 +2340,15 @@ function mapFarmerImportRecordClient(raw) {
     flat.msisdn,
     flat.contactnumber
   ]);
+  const nationalId = firstNonEmptyClient([
+    flat.nationalid,
+    flat.nationalidnumber,
+    flat.idnumber,
+    flat.idno,
+    flat.nationalidno,
+    flat.governmentid,
+    flat.governmentidnumber
+  ]);
   const location = firstNonEmptyClient([flat.location, flat.area, flat.ward, flat.county, flat.village, flat.region]);
   const notes = firstNonEmptyClient([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
   const treesRaw = firstNonEmptyClient([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
@@ -2336,6 +2368,7 @@ function mapFarmerImportRecordClient(raw) {
   return {
     name,
     phone,
+    nationalId: cleanNationalIdClient(nationalId),
     location,
     hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw, squareFeetRaw),
     trees: parseTreeCountClient(treesRaw),
@@ -2346,6 +2379,7 @@ function mapFarmerImportRecordClient(raw) {
 function validateImportedFarmer(mapped) {
   if (!mapped.name) return 'name is required';
   if (!mapped.phone) return 'phone is required';
+  if (!mapped.nationalId) return 'nationalId is required';
   if (!mapped.location) return 'location is required';
   if (!Number.isFinite(mapped.hectares)) return 'hectares/acres/square feet is required';
   if (mapped.hectares <= 0) return 'hectares must be greater than 0';
@@ -2357,25 +2391,65 @@ function cleanPhone(value) {
   return String(value ?? '').trim();
 }
 
+function normalizeNationalIdClient(value) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]/g, '');
+}
+
+function cleanNationalIdClient(value) {
+  return String(value ?? '').trim().toUpperCase();
+}
+
 function hasFarmerPhoneConflict(phone, excludeId = '') {
   const target = cleanPhone(phone);
   if (!target) return false;
   return state.farmers.some((row) => cleanPhone(row.phone) === target && row.id !== excludeId);
 }
 
-function findImportDuplicatePhones(records) {
+function hasFarmerNationalIdConflict(nationalId, excludeId = '') {
+  const target = normalizeNationalIdClient(nationalId);
+  if (!target) return false;
+  return state.farmers.some(
+    (row) => normalizeNationalIdClient(row.nationalId) === target && row.id !== excludeId
+  );
+}
+
+function localFarmerDuplicateError(payload, excludeId = '') {
+  if (hasFarmerPhoneConflict(payload.phone, excludeId)) {
+    return 'A farmer with this phone number already exists.';
+  }
+  if (hasFarmerNationalIdConflict(payload.nationalId, excludeId)) {
+    return 'A farmer with this National ID already exists.';
+  }
+  return '';
+}
+
+function findImportDuplicates(records) {
   const existingPhones = new Set(state.farmers.map((row) => cleanPhone(row.phone)).filter(Boolean));
-  const duplicates = new Set();
+  const existingNationalIds = new Set(
+    state.farmers.map((row) => normalizeNationalIdClient(row.nationalId)).filter(Boolean)
+  );
+  const duplicatePhones = new Set();
+  const duplicateNationalIds = new Set();
 
   records.forEach((raw) => {
     const mapped = mapFarmerImportRecordClient(raw);
     const phone = cleanPhone(mapped.phone);
+    const nationalId = normalizeNationalIdClient(mapped.nationalId);
     if (phone && existingPhones.has(phone)) {
-      duplicates.add(phone);
+      duplicatePhones.add(phone);
+    }
+    if (nationalId && existingNationalIds.has(nationalId)) {
+      duplicateNationalIds.add(nationalId);
     }
   });
 
-  return [...duplicates];
+  return {
+    phones: [...duplicatePhones],
+    nationalIds: [...duplicateNationalIds]
+  };
 }
 
 function importFarmersLocal(records, options = {}) {
@@ -2384,6 +2458,11 @@ function importFarmersLocal(records, options = {}) {
     state.farmers
       .map((row) => [cleanPhone(row.phone), row])
       .filter(([phone]) => Boolean(phone))
+  );
+  const farmersByNationalId = new Map(
+    state.farmers
+      .map((row) => [normalizeNationalIdClient(row.nationalId), row])
+      .filter(([nationalId]) => Boolean(nationalId))
   );
   const created = [];
   const updated = [];
@@ -2404,19 +2483,48 @@ function importFarmersLocal(records, options = {}) {
     }
 
     const phone = cleanPhone(mapped.phone);
-    const existing = farmersByPhone.get(phone);
+    const nationalId = cleanNationalIdClient(mapped.nationalId);
+    const nationalIdKey = normalizeNationalIdClient(nationalId);
+    const existingByNationalId = farmersByNationalId.get(nationalIdKey);
+    const existingByPhone = farmersByPhone.get(phone);
+    const existing = existingByNationalId || existingByPhone;
     if (existing) {
       if (onDuplicate === 'overwrite') {
+        if (
+          existingByNationalId &&
+          existingByPhone &&
+          existingByNationalId.id !== existingByPhone.id
+        ) {
+          errors.push({
+            row: idx + 1,
+            error: 'Conflicting duplicate match: phone and National ID belong to different farmers'
+          });
+          return;
+        }
+
+        const oldPhoneKey = cleanPhone(existing.phone);
+        const oldNationalIdKey = normalizeNationalIdClient(existing.nationalId);
+        if (oldPhoneKey && farmersByPhone.get(oldPhoneKey)?.id === existing.id) {
+          farmersByPhone.delete(oldPhoneKey);
+        }
+        if (oldNationalIdKey && farmersByNationalId.get(oldNationalIdKey)?.id === existing.id) {
+          farmersByNationalId.delete(oldNationalIdKey);
+        }
+
         existing.name = mapped.name;
         existing.phone = phone;
+        existing.nationalId = nationalId;
         existing.location = mapped.location;
         existing.hectares = Number(mapped.hectares.toFixed(3));
         existing.trees = Number(mapped.trees.toFixed(2));
         existing.notes = mapped.notes;
         existing.updatedAt = new Date().toISOString();
+
+        farmersByPhone.set(phone, existing);
+        farmersByNationalId.set(nationalIdKey, existing);
         updated.push(existing.id);
       } else {
-        errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+        errors.push({ row: idx + 1, error: 'Duplicate farmer (matching phone or National ID)' });
       }
       return;
     }
@@ -2425,6 +2533,7 @@ function importFarmersLocal(records, options = {}) {
       id: `F-${now}-${idx + 1}`,
       name: mapped.name,
       phone,
+      nationalId,
       location: mapped.location,
       hectares: Number(mapped.hectares.toFixed(3)),
       trees: Number(mapped.trees.toFixed(2)),
@@ -2434,6 +2543,7 @@ function importFarmersLocal(records, options = {}) {
       updatedAt: new Date().toISOString()
     };
     farmersByPhone.set(phone, record);
+    farmersByNationalId.set(nationalIdKey, record);
     created.push(record);
   });
 
@@ -2621,6 +2731,7 @@ function seedLocalData() {
     id: `F-${Date.now()}-01`,
     name: 'Mercy Achieng',
     phone: '254712330001',
+    nationalId: '28643197',
     location: 'Muranga',
     hectares: 1.9,
     trees: 48,
@@ -2634,6 +2745,7 @@ function seedLocalData() {
     id: `F-${Date.now()}-02`,
     name: 'David Mwangi',
     phone: '254712330002',
+    nationalId: '30984522',
     location: 'Nyeri',
     hectares: 2.4,
     trees: 62,

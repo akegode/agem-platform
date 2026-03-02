@@ -175,6 +175,7 @@ async function run() {
       body: {
         name: 'Self Grower',
         phone: '254700111222',
+        nationalId: '11223344',
         location: 'Muranga',
         hectares: 1.2,
         username: farmerSelfUsername,
@@ -191,6 +192,7 @@ async function run() {
       body: {
         name: 'Duplicate Grower',
         phone: '254700111222',
+        nationalId: '55443322',
         location: 'Muranga',
         hectares: 1.1,
         username: 'grower02',
@@ -218,6 +220,7 @@ async function run() {
       body: {
         name: 'Grace Njoki',
         phone: '254711223344',
+        nationalId: '87654321',
         location: 'Kiambu',
         hectares: 2.35,
         trees: 44,
@@ -234,7 +237,8 @@ async function run() {
       token: adminToken,
       body: {
         name: 'Grace Duplicate',
-        phone: '254711223344',
+        phone: '254711223345',
+        nationalId: '87654321',
         location: 'Kiambu',
         hectares: 1.2,
         trees: 10
@@ -260,6 +264,7 @@ async function run() {
           {
             name: 'Agent Attempt',
             phone: '254700000001',
+            nationalId: '10000111',
             location: 'Nakuru',
             hectares: 1.4
           }
@@ -276,6 +281,7 @@ async function run() {
           {
             'Farmer Name': 'Peter Mwangi',
             'Mobile Number': '254700123456',
+            'National ID Number': '23597146',
             Ward: 'Kirinyaga',
             acreage: '4.5',
             'Tree Count': '30',
@@ -284,6 +290,7 @@ async function run() {
           {
             name: 'Duplicate Grace',
             phone: '254711223344',
+            nationalId: '87654321',
             location: 'Kiambu',
             hectares: 1.1,
             trees: 55
@@ -291,11 +298,13 @@ async function run() {
           {
             Name: '',
             Phone: '254722000001',
+            'ID No': '29988777',
             Location: 'Nyandarua'
           },
           {
             'Full Name': 'Alice Otieno',
             MSISDN: '254733445566',
+            'ID No': '30011223',
             County: 'Nyeri',
             'Square Feet': '107639.1',
             'Number of Trees': '14',
@@ -336,7 +345,8 @@ async function run() {
         records: [
           {
             name: 'Peter Mwangi Updated',
-            phone: '254700123456',
+            phone: '254700999999',
+            nationalId: '23597146',
             location: 'Embu',
             hectares: 2.2,
             trees: 33,
@@ -355,8 +365,9 @@ async function run() {
       token: adminToken,
       expectStatus: 200
     });
-    const updatedPeter = (farmersAfterOverwrite.data || []).find((row) => row.phone === '254700123456');
-    assert.ok(updatedPeter, 'Expected updated farmer by phone');
+    const updatedPeter = (farmersAfterOverwrite.data || []).find((row) => row.nationalId === '23597146');
+    assert.ok(updatedPeter, 'Expected updated farmer by National ID');
+    assert.strictEqual(updatedPeter.phone, '254700999999');
     assert.strictEqual(updatedPeter.location, 'Embu');
     assert.ok(Math.abs(Number(updatedPeter.hectares) - 2.2) < 0.01);
 
@@ -462,7 +473,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(farmersCsv.includes('name,phone,location,hectares,acres,squareFeet'), 'Farmers CSV header missing');
+    assert.ok(farmersCsv.includes('name,phone,nationalId,location,hectares,acres,squareFeet'), 'Farmers CSV header missing');
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
 
     await request(baseUrl, '/api/admin/backup', {

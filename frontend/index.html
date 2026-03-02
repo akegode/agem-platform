@@ -37,6 +37,7 @@
           <form id="registerForm" class="auth-form recovery-form">
             <input id="registerName" placeholder="Full name">
             <input id="registerPhone" placeholder="Phone (e.g. 2547xxxxxxx)">
+            <input id="registerNationalId" placeholder="National ID number">
             <input id="registerLocation" placeholder="Location / Ward">
             <div class="area-grid">
               <input id="registerAreaHectares" type="number" min="0.01" step="0.01" placeholder="Hectares">
@@ -201,8 +202,9 @@
                 </div>
                 <div class="row">
                   <input required id="farmerLocation" placeholder="Location / Ward">
-                  <input required id="treeCount" type="number" min="0" step="1" placeholder="Tree count">
+                  <input required id="farmerNationalId" placeholder="National ID number">
                 </div>
+                <input required id="treeCount" type="number" min="0" step="1" placeholder="Tree count">
                 <div class="area-grid">
                   <input required id="farmerAreaHectares" type="number" min="0.01" step="0.01" placeholder="Hectares">
                   <input id="farmerAreaAcres" type="number" min="0.01" step="0.01" placeholder="Acres">
@@ -224,7 +226,7 @@
                 <form id="farmerImportForm">
                   <input id="farmerImportFile" type="file" accept=".csv,.xlsx,.xls">
                   <p class="meta compact">
-                    Required fields: name, phone, location, and area (hectares/acres/square feet). Optional: trees, notes. Extra columns are ignored automatically.
+                    Required fields: name, phone, national ID, location, and area (hectares/acres/square feet). Optional: trees, notes. Extra columns are ignored automatically.
                   </p>
                   <div class="inline-actions">
                     <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>

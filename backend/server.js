@@ -531,6 +531,22 @@ function findFarmerByPhone(list, phone, excludeId = '') {
   return list.find((row) => clean(row.phone) === target && row.id !== excludeId) || null;
 }
 
+function normalizedNationalId(value) {
+  return clean(value)
+    .toUpperCase()
+    .replace(/[\s-]/g, '');
+}
+
+function cleanNationalId(value) {
+  return clean(value).toUpperCase();
+}
+
+function findFarmerByNationalId(list, nationalId, excludeId = '') {
+  const target = normalizedNationalId(nationalId);
+  if (!target) return null;
+  return list.find((row) => normalizedNationalId(row.nationalId) === target && row.id !== excludeId) || null;
+}
+
 function safeQueryInt(searchParams, key, fallback, max = 1000) {
   const raw = searchParams.get(key);
   if (!raw) return fallback;
@@ -560,6 +576,7 @@ function filterByQuery(list, searchParams, fields) {
 function validateFarmer(payload) {
   if (!clean(payload.name)) return 'name is required';
   if (!clean(payload.phone)) return 'phone is required';
+  if (!clean(payload.nationalId)) return 'nationalId is required';
   if (!clean(payload.location)) return 'location is required';
   if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
   const hectares = resolveHectares(payload);
@@ -619,6 +636,15 @@ function mapFarmerImportRecord(raw) {
     flat.msisdn,
     flat.contactnumber
   ]);
+  const nationalId = firstNonEmpty([
+    flat.nationalid,
+    flat.nationalidnumber,
+    flat.idnumber,
+    flat.idno,
+    flat.nationalidno,
+    flat.governmentid,
+    flat.governmentidnumber
+  ]);
   const location = firstNonEmpty([
     flat.location,
     flat.area,
@@ -647,6 +673,7 @@ function mapFarmerImportRecord(raw) {
   return {
     name,
     phone,
+    nationalId,
     location,
     trees,
     hectares,
@@ -868,6 +895,7 @@ const server = http.createServer(async (req, res) => {
       const payload = await readBody(req);
       const name = clean(payload.name);
       const phone = clean(payload.phone);
+      const nationalId = cleanNationalId(payload.nationalId);
       const location = clean(payload.location);
       const username = normalizedUsername(payload.username);
       const password = String(payload.password || '');
@@ -877,8 +905,8 @@ const server = http.createServer(async (req, res) => {
       const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
       const hectares = resolveHectares(payload);
 
-      if (!name || !phone || !location || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, phone, location, hectares/acres/square feet, username, password, and confirmPassword are required.' });
+      if (!name || !phone || !nationalId || !location || !username || !password || !confirmPassword) {
+        json(res, 422, { error: 'name, phone, nationalId, location, hectares/acres/square feet, username, password, and confirmPassword are required.' });
         return;
       }
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
@@ -913,6 +941,10 @@ const server = http.createServer(async (req, res) => {
         json(res, 409, { error: 'A farmer with this phone number already exists.' });
         return;
       }
+      if (findFarmerByNationalId(store.farmers, nationalId)) {
+        json(res, 409, { error: 'A farmer with this National ID already exists.' });
+        return;
+      }
 
       const user = {
         id: id('USR'),
@@ -930,6 +962,7 @@ const server = http.createServer(async (req, res) => {
         id: id('F'),
         name,
         phone,
+        nationalId,
         location,
         trees,
         hectares: Number(hectares.toFixed(3)),
@@ -1241,7 +1274,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     let rows = [...store.farmers];
-    rows = filterByQuery(rows, reqUrl.searchParams, ['name', 'phone', 'location', 'notes']);
+    rows = filterByQuery(rows, reqUrl.searchParams, ['name', 'phone', 'nationalId', 'location', 'notes']);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
     rows = rows.slice(0, limit);
@@ -1268,11 +1301,16 @@ const server = http.createServer(async (req, res) => {
         json(res, 409, { error: 'A farmer with this phone number already exists.' });
         return;
       }
+      if (findFarmerByNationalId(store.farmers, payload.nationalId)) {
+        json(res, 409, { error: 'A farmer with this National ID already exists.' });
+        return;
+      }
 
       const record = {
         id: id('F'),
         name: clean(payload.name),
         phone: clean(payload.phone),
+        nationalId: cleanNationalId(payload.nationalId),
         location: clean(payload.location),
         trees: Number(parseTrees(payload.trees).toFixed(2)),
         hectares: Number(resolveHectares(payload).toFixed(3)),
@@ -1321,6 +1359,11 @@ const server = http.createServer(async (req, res) => {
           .map((row) => [clean(row.phone), row])
           .filter(([phone]) => Boolean(phone))
       );
+      const farmersByNationalId = new Map(
+        store.farmers
+          .map((row) => [normalizedNationalId(row.nationalId), row])
+          .filter(([nationalId]) => Boolean(nationalId))
+      );
       const created = [];
       const updated = [];
       const errors = [];
@@ -1339,19 +1382,48 @@ const server = http.createServer(async (req, res) => {
         }
 
         const phone = clean(mapped.phone);
-        const existing = farmersByPhone.get(phone);
+        const nationalId = cleanNationalId(mapped.nationalId);
+        const nationalIdKey = normalizedNationalId(nationalId);
+        const existingByNationalId = farmersByNationalId.get(nationalIdKey);
+        const existingByPhone = farmersByPhone.get(phone);
+        const existing = existingByNationalId || existingByPhone;
         if (existing) {
           if (onDuplicate === 'overwrite') {
+            if (
+              existingByNationalId &&
+              existingByPhone &&
+              existingByNationalId.id !== existingByPhone.id
+            ) {
+              errors.push({
+                row: idx + 1,
+                error: 'Conflicting duplicate match: phone and National ID belong to different farmers'
+              });
+              return;
+            }
+
+            const oldPhoneKey = clean(existing.phone);
+            const oldNationalIdKey = normalizedNationalId(existing.nationalId);
+            if (oldPhoneKey && farmersByPhone.get(oldPhoneKey)?.id === existing.id) {
+              farmersByPhone.delete(oldPhoneKey);
+            }
+            if (oldNationalIdKey && farmersByNationalId.get(oldNationalIdKey)?.id === existing.id) {
+              farmersByNationalId.delete(oldNationalIdKey);
+            }
+
             existing.name = clean(mapped.name);
             existing.phone = phone;
+            existing.nationalId = nationalId;
             existing.location = clean(mapped.location);
             existing.trees = Number(parseTrees(mapped.trees).toFixed(2));
             existing.hectares = Number(resolveHectares(mapped).toFixed(3));
             existing.notes = clean(mapped.notes);
             existing.updatedAt = nowIso();
+
+            farmersByPhone.set(phone, existing);
+            farmersByNationalId.set(nationalIdKey, existing);
             updated.push(existing.id);
           } else {
-            errors.push({ row: idx + 1, error: 'Duplicate phone number' });
+            errors.push({ row: idx + 1, error: 'Duplicate farmer (matching phone or National ID)' });
           }
           return;
         }
@@ -1360,6 +1432,7 @@ const server = http.createServer(async (req, res) => {
           id: id('F'),
           name: clean(mapped.name),
           phone,
+          nationalId,
           location: clean(mapped.location),
           trees: Number(parseTrees(mapped.trees).toFixed(2)),
           hectares: Number(resolveHectares(mapped).toFixed(3)),
@@ -1370,6 +1443,7 @@ const server = http.createServer(async (req, res) => {
         };
 
         farmersByPhone.set(phone, record);
+        farmersByNationalId.set(nationalIdKey, record);
         created.push(record);
       });
 
@@ -1448,10 +1522,30 @@ const server = http.createServer(async (req, res) => {
       }
 
       const payload = await readBody(req);
-      if (payload.name !== undefined) farmer.name = clean(payload.name);
-      if (payload.phone !== undefined) farmer.phone = clean(payload.phone);
-      if (payload.location !== undefined) farmer.location = clean(payload.location);
-      if (payload.notes !== undefined) farmer.notes = clean(payload.notes);
+      const nextName = payload.name !== undefined ? clean(payload.name) : clean(farmer.name);
+      const nextPhone = payload.phone !== undefined ? clean(payload.phone) : clean(farmer.phone);
+      const nextNationalId =
+        payload.nationalId !== undefined ? cleanNationalId(payload.nationalId) : cleanNationalId(farmer.nationalId);
+      const nextLocation = payload.location !== undefined ? clean(payload.location) : clean(farmer.location);
+      const nextNotes = payload.notes !== undefined ? clean(payload.notes) : clean(farmer.notes);
+
+      if (!nextName) {
+        json(res, 422, { error: 'name is required' });
+        return;
+      }
+      if (!nextPhone) {
+        json(res, 422, { error: 'phone is required' });
+        return;
+      }
+      if (!nextNationalId) {
+        json(res, 422, { error: 'nationalId is required' });
+        return;
+      }
+      if (!nextLocation) {
+        json(res, 422, { error: 'location is required' });
+        return;
+      }
+
       if (payload.trees !== undefined) {
         const trees = parseTrees(payload.trees);
         if (!Number.isFinite(trees)) {
@@ -1460,12 +1554,15 @@ const server = http.createServer(async (req, res) => {
         }
         farmer.trees = Number(trees.toFixed(2));
       }
-      if (payload.phone !== undefined) {
-        const duplicate = findFarmerByPhone(store.farmers, payload.phone, farmer.id);
-        if (duplicate) {
-          json(res, 409, { error: 'A farmer with this phone number already exists.' });
-          return;
-        }
+      const duplicatePhone = findFarmerByPhone(store.farmers, nextPhone, farmer.id);
+      if (duplicatePhone) {
+        json(res, 409, { error: 'A farmer with this phone number already exists.' });
+        return;
+      }
+      const duplicateNationalId = findFarmerByNationalId(store.farmers, nextNationalId, farmer.id);
+      if (duplicateNationalId) {
+        json(res, 409, { error: 'A farmer with this National ID already exists.' });
+        return;
       }
       if (
         payload.hectares !== undefined ||
@@ -1483,6 +1580,11 @@ const server = http.createServer(async (req, res) => {
         }
         farmer.hectares = Number(hectares.toFixed(3));
       }
+      farmer.name = nextName;
+      farmer.phone = nextPhone;
+      farmer.nationalId = nextNationalId;
+      farmer.location = nextLocation;
+      farmer.notes = nextNotes;
       farmer.updatedAt = nowIso();
 
       addActivity(store, {
@@ -1773,13 +1875,14 @@ const server = http.createServer(async (req, res) => {
     const offset = safeQueryOffset(reqUrl.searchParams, 'offset', 0, 2_000_000);
 
     let recipients = store.farmers.filter((row) => clean(row.phone));
-    recipients = filterByTextQuery(recipients, q, ['id', 'name', 'phone', 'location', 'notes']);
+    recipients = filterByTextQuery(recipients, q, ['id', 'name', 'phone', 'nationalId', 'location', 'notes']);
 
     const total = recipients.length;
     const rows = recipients.slice(offset, offset + limit).map((row) => ({
       id: row.id,
       name: row.name,
       phone: row.phone,
+      nationalId: row.nationalId,
       location: row.location
     }));
 
@@ -2064,6 +2167,7 @@ const server = http.createServer(async (req, res) => {
       { key: 'id', label: 'id' },
       { key: 'name', label: 'name' },
       { key: 'phone', label: 'phone' },
+      { key: 'nationalId', label: 'nationalId' },
       { key: 'location', label: 'location' },
       { key: 'hectares', label: 'hectares' },
       { key: 'acres', label: 'acres' },
@@ -2263,6 +2367,7 @@ const server = http.createServer(async (req, res) => {
       id: id('F'),
       name: 'Mercy Achieng',
       phone: '254712330001',
+      nationalId: '28643197',
       location: 'Muranga',
       hectares: 1.9,
       trees: 48,
@@ -2275,6 +2380,7 @@ const server = http.createServer(async (req, res) => {
       id: id('F'),
       name: 'David Mwangi',
       phone: '254712330002',
+      nationalId: '30984522',
       location: 'Nyeri',
       hectares: 2.4,
       trees: 62,
