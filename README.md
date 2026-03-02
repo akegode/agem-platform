@@ -7,8 +7,8 @@ This project is now a full working web application with authentication, role-bas
 - Farmer self-registration from the sign-in card (creates farmer account + farmer profile)
 - Signed-in password change flow
 - Recovery endpoints for forgotten username/password via role recovery codes
-- Farmer management (create, edit, view, delete with safeguards)
-- Bulk farmer import (CSV/Excel) for admin; required fields are mapped, extra columns ignored
+- Farmer management (create, edit, view, delete with safeguards), including farm size in hectares
+- Bulk farmer import (CSV/Excel) for admin; required fields are mapped, extra columns ignored, and acreage is converted to hectares
 - Produce collection tracking
 - Payment logging and payment status management
 - M-PESA disbursement simulation endpoint

@@ -13,6 +13,7 @@ const STORE_PATH = process.env.STORE_PATH || path.join(DATA_ROOT, 'store.json');
 const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const ACTIVITY_CAP = 1000;
+const HECTARES_PER_ACRE = 0.40468564224;
 const MIN_PASSWORD_LENGTH = 10;
 
 function envValue(key) {
@@ -479,6 +480,28 @@ function parseTrees(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
+function parseArea(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return NaN;
+  const num = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(num) ? num : NaN;
+}
+
+function resolveHectares(payload) {
+  const hectaresRaw = payload?.hectares;
+  const acresRaw = payload?.acres;
+  const hasHectares = clean(hectaresRaw) !== '';
+  const hasAcres = clean(acresRaw) !== '';
+
+  if (hasHectares) return parseArea(hectaresRaw);
+  if (hasAcres) {
+    const acres = parseArea(acresRaw);
+    if (!Number.isFinite(acres)) return NaN;
+    return acres * HECTARES_PER_ACRE;
+  }
+  return NaN;
+}
+
 function findById(list, entityId) {
   return list.find((row) => row.id === entityId);
 }
@@ -514,6 +537,9 @@ function validateFarmer(payload) {
   if (!clean(payload.phone)) return 'phone is required';
   if (!clean(payload.location)) return 'location is required';
   if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
+  const hectares = resolveHectares(payload);
+  if (!Number.isFinite(hectares)) return 'hectares (or acres) is required';
+  if (hectares <= 0) return 'hectares must be greater than 0';
   return '';
 }
 
@@ -579,12 +605,16 @@ function mapFarmerImportRecord(raw) {
   const notes = firstNonEmpty([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
   const treesRaw = firstNonEmpty([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
   const trees = parseTrees(treesRaw);
+  const hectaresRaw = firstNonEmpty([flat.hectares, flat.hectare, flat.farmsizeha, flat.farmsizehectares, flat.landsizehectares]);
+  const acresRaw = firstNonEmpty([flat.acres, flat.acre, flat.acreage, flat.farmsizeacres, flat.landsizeacres]);
+  const hectares = resolveHectares({ hectares: hectaresRaw, acres: acresRaw });
 
   return {
     name,
     phone,
     location,
     trees,
+    hectares,
     notes
   };
 }
@@ -810,9 +840,10 @@ const server = http.createServer(async (req, res) => {
       const notes = clean(payload.notes);
       const treesValue = payload.trees === undefined ? 0 : parseTrees(payload.trees);
       const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
+      const hectares = resolveHectares(payload);
 
       if (!name || !phone || !location || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, phone, location, username, password, and confirmPassword are required.' });
+        json(res, 422, { error: 'name, phone, location, hectares/acres, username, password, and confirmPassword are required.' });
         return;
       }
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
@@ -825,6 +856,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (!Number.isFinite(trees) || trees < 0) {
         json(res, 422, { error: 'trees must be a number greater than or equal to 0.' });
+        return;
+      }
+      if (!Number.isFinite(hectares) || hectares <= 0) {
+        json(res, 422, { error: 'hectares (or acres) must be a number greater than 0.' });
         return;
       }
 
@@ -858,6 +893,7 @@ const server = http.createServer(async (req, res) => {
         phone,
         location,
         trees,
+        hectares: Number(hectares.toFixed(3)),
         notes,
         createdBy: user.username,
         createdAt: nowIso(),
@@ -1196,6 +1232,7 @@ const server = http.createServer(async (req, res) => {
         phone: clean(payload.phone),
         location: clean(payload.location),
         trees: Number(parseTrees(payload.trees).toFixed(2)),
+        hectares: Number(resolveHectares(payload).toFixed(3)),
         notes: clean(payload.notes),
         createdBy: auth.session.username,
         createdAt: nowIso(),
@@ -1264,6 +1301,7 @@ const server = http.createServer(async (req, res) => {
           phone,
           location: clean(mapped.location),
           trees: Number(parseTrees(mapped.trees).toFixed(2)),
+          hectares: Number(resolveHectares(mapped).toFixed(3)),
           notes: clean(mapped.notes),
           createdBy: auth.session.username,
           createdAt: nowIso(),
@@ -1356,6 +1394,14 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         farmer.trees = Number(trees.toFixed(2));
+      }
+      if (payload.hectares !== undefined || payload.acres !== undefined) {
+        const hectares = resolveHectares(payload);
+        if (!Number.isFinite(hectares) || hectares <= 0) {
+          json(res, 422, { error: 'hectares (or acres) must be greater than 0' });
+          return;
+        }
+        farmer.hectares = Number(hectares.toFixed(3));
       }
       farmer.updatedAt = nowIso();
 
@@ -1927,6 +1973,7 @@ const server = http.createServer(async (req, res) => {
       { key: 'name', label: 'name' },
       { key: 'phone', label: 'phone' },
       { key: 'location', label: 'location' },
+      { key: 'hectares', label: 'hectares' },
       { key: 'trees', label: 'trees' },
       { key: 'notes', label: 'notes' },
       { key: 'createdBy', label: 'createdBy' },
@@ -2123,6 +2170,7 @@ const server = http.createServer(async (req, res) => {
       name: 'Mercy Achieng',
       phone: '254712330001',
       location: 'Muranga',
+      hectares: 1.9,
       trees: 48,
       notes: 'Group A',
       createdBy: auth.session.username,
@@ -2134,6 +2182,7 @@ const server = http.createServer(async (req, res) => {
       name: 'David Mwangi',
       phone: '254712330002',
       location: 'Nyeri',
+      hectares: 2.4,
       trees: 62,
       notes: 'Organic',
       createdBy: auth.session.username,

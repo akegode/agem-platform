@@ -176,6 +176,7 @@ async function run() {
         name: 'Self Grower',
         phone: '254700111222',
         location: 'Muranga',
+        hectares: 1.2,
         username: farmerSelfUsername,
         password: farmerSelfPassword,
         confirmPassword: farmerSelfPassword
@@ -191,6 +192,7 @@ async function run() {
         name: 'Duplicate Grower',
         phone: '254799000111',
         location: 'Muranga',
+        hectares: 1.1,
         username: farmerSelfUsername,
         password: farmerSelfPassword,
         confirmPassword: farmerSelfPassword
@@ -217,6 +219,7 @@ async function run() {
         name: 'Grace Njoki',
         phone: '254711223344',
         location: 'Kiambu',
+        hectares: 2.35,
         trees: 44,
         notes: 'Integration test farmer'
       },
@@ -234,7 +237,8 @@ async function run() {
           {
             name: 'Agent Attempt',
             phone: '254700000001',
-            location: 'Nakuru'
+            location: 'Nakuru',
+            hectares: 1.4
           }
         ]
       },
@@ -250,6 +254,7 @@ async function run() {
             'Farmer Name': 'Peter Mwangi',
             'Mobile Number': '254700123456',
             Ward: 'Kirinyaga',
+            acreage: '4.5',
             'Tree Count': '30',
             'Random Extra Column': 'ignore this'
           },
@@ -257,6 +262,7 @@ async function run() {
             name: 'Duplicate Grace',
             phone: '254711223344',
             location: 'Kiambu',
+            hectares: 1.1,
             trees: 55
           },
           {
@@ -268,6 +274,7 @@ async function run() {
             'Full Name': 'Alice Otieno',
             MSISDN: '254733445566',
             County: 'Nyeri',
+            hectares: '1.75',
             'Number of Trees': '14',
             Remarks: 'Excel alias columns'
           }
@@ -285,9 +292,16 @@ async function run() {
       token: adminToken,
       expectStatus: 200
     });
-    const farmerPhones = new Set((farmersAfterImport.data || []).map((row) => row.phone));
+    const farmersByPhone = new Map((farmersAfterImport.data || []).map((row) => [row.phone, row]));
+    const farmerPhones = new Set(farmersByPhone.keys());
     assert.ok(farmerPhones.has('254700123456'), 'Imported CSV row missing');
     assert.ok(farmerPhones.has('254733445566'), 'Imported alias row missing');
+
+    const peter = farmersByPhone.get('254700123456');
+    const alice = farmersByPhone.get('254733445566');
+    assert.ok(peter && Number.isFinite(Number(peter.hectares)), 'Expected hectares for Peter');
+    assert.ok(alice && Number.isFinite(Number(alice.hectares)), 'Expected hectares for Alice');
+    assert.ok(Math.abs(Number(peter.hectares) - 1.821) < 0.02, 'Acreage to hectares conversion should be applied');
 
     await request(baseUrl, '/api/produce', {
       method: 'POST',
@@ -391,7 +405,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(farmersCsv.includes('name,phone,location'), 'Farmers CSV header missing');
+    assert.ok(farmersCsv.includes('name,phone,location,hectares'), 'Farmers CSV header missing');
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
 
     await request(baseUrl, '/api/admin/backup', {

@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'agem_platform_state_v1';
 const MAX_PROFILE_PHOTO_BYTES = 1_500_000;
+const HECTARES_PER_ACRE = 0.40468564224;
 
 const API = {
   enabled: false
@@ -42,6 +43,8 @@ const elements = {
   registerName: document.getElementById('registerName'),
   registerPhone: document.getElementById('registerPhone'),
   registerLocation: document.getElementById('registerLocation'),
+  registerHectares: document.getElementById('registerHectares'),
+  registerAreaUnit: document.getElementById('registerAreaUnit'),
   registerUsername: document.getElementById('registerUsername'),
   registerPassword: document.getElementById('registerPassword'),
   registerConfirmPassword: document.getElementById('registerConfirmPassword'),
@@ -78,6 +81,8 @@ const elements = {
   farmerPhone: document.getElementById('farmerPhone'),
   farmerLocation: document.getElementById('farmerLocation'),
   treeCount: document.getElementById('treeCount'),
+  farmerHectares: document.getElementById('farmerHectares'),
+  farmerAreaUnit: document.getElementById('farmerAreaUnit'),
   farmerNotes: document.getElementById('farmerNotes'),
   farmerSubmitBtn: document.getElementById('farmerSubmitBtn'),
   farmerCancelEditBtn: document.getElementById('farmerCancelEditBtn'),
@@ -340,11 +345,13 @@ function bindAuth() {
     const name = elements.registerName.value.trim();
     const phone = elements.registerPhone.value.trim();
     const location = elements.registerLocation.value.trim();
+    const farmSize = elements.registerHectares.value.trim();
+    const areaUnit = elements.registerAreaUnit.value;
     const username = elements.registerUsername.value.trim();
     const password = elements.registerPassword.value;
     const confirmPassword = elements.registerConfirmPassword.value;
 
-    if (!name || !phone || !location || !username || !password || !confirmPassword) {
+    if (!name || !phone || !location || !farmSize || !username || !password || !confirmPassword) {
       elements.registerMsg.textContent = 'All registration fields are required.';
       return;
     }
@@ -357,6 +364,7 @@ function bindAuth() {
           name,
           phone,
           location,
+          ...buildAreaPayload(farmSize, areaUnit),
           username,
           password,
           confirmPassword
@@ -576,6 +584,7 @@ function bindFarmers() {
       phone: elements.farmerPhone.value.trim(),
       location: elements.farmerLocation.value.trim(),
       trees: Number(elements.treeCount.value || 0),
+      ...buildAreaPayload(elements.farmerHectares.value.trim(), elements.farmerAreaUnit.value),
       notes: elements.farmerNotes.value.trim()
     };
 
@@ -706,6 +715,8 @@ function bindFarmers() {
       elements.farmerPhone.value = farmer.phone || '';
       elements.farmerLocation.value = farmer.location || '';
       elements.treeCount.value = farmer.trees || 0;
+      elements.farmerHectares.value = farmer.hectares ?? '';
+      elements.farmerAreaUnit.value = 'hectares';
       elements.farmerNotes.value = farmer.notes || '';
 
       elements.farmerSubmitBtn.textContent = 'Update Farmer';
@@ -1772,6 +1783,7 @@ function renderFarmers() {
           <td>${escapeHtml(farmer.name)}</td>
           <td>${escapeHtml(farmer.phone)}</td>
           <td>${escapeHtml(farmer.location)}</td>
+          <td>${escapeHtml(formatHectares(farmer.hectares))}</td>
           <td>${escapeHtml(String(farmer.trees ?? '0'))}</td>
           <td>${escapeHtml(dateShort(farmer.updatedAt || farmer.createdAt))}</td>
           <td class="actions">${actions}</td>
@@ -1788,6 +1800,7 @@ function renderFarmers() {
           <th>Name</th>
           <th>Phone</th>
           <th>Location</th>
+          <th>Hectares</th>
           <th>Trees</th>
           <th>Updated</th>
           <th>Actions</th>
@@ -2090,6 +2103,37 @@ function parseTreeCountClient(value) {
   return Number.isFinite(num) ? num : NaN;
 }
 
+function parseAreaClient(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return NaN;
+  const num = Number(raw.replace(/,/g, ''));
+  return Number.isFinite(num) ? num : NaN;
+}
+
+function buildAreaPayload(rawValue, areaUnit) {
+  const parsed = parseAreaClient(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return { hectares: rawValue };
+  }
+
+  const hectares = areaUnit === 'acres' ? parsed * HECTARES_PER_ACRE : parsed;
+  return { hectares: Number(hectares.toFixed(3)) };
+}
+
+function toHectaresFromInputsClient(hectaresInput, acresInput) {
+  const hectaresText = String(hectaresInput ?? '').trim();
+  if (hectaresText) return parseAreaClient(hectaresText);
+
+  const acresText = String(acresInput ?? '').trim();
+  if (acresText) {
+    const acres = parseAreaClient(acresText);
+    if (!Number.isFinite(acres)) return NaN;
+    return acres * HECTARES_PER_ACRE;
+  }
+
+  return NaN;
+}
+
 function mapFarmerImportRecordClient(raw) {
   const flat = {};
   Object.entries(raw || {}).forEach(([key, value]) => {
@@ -2108,11 +2152,14 @@ function mapFarmerImportRecordClient(raw) {
   const location = firstNonEmptyClient([flat.location, flat.area, flat.ward, flat.county, flat.village, flat.region]);
   const notes = firstNonEmptyClient([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
   const treesRaw = firstNonEmptyClient([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
+  const hectaresRaw = firstNonEmptyClient([flat.hectares, flat.hectare, flat.farmsizeha, flat.farmsizehectares, flat.landsizehectares]);
+  const acresRaw = firstNonEmptyClient([flat.acres, flat.acre, flat.acreage, flat.farmsizeacres, flat.landsizeacres]);
 
   return {
     name,
     phone,
     location,
+    hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw),
     trees: parseTreeCountClient(treesRaw),
     notes
   };
@@ -2122,6 +2169,8 @@ function validateImportedFarmer(mapped) {
   if (!mapped.name) return 'name is required';
   if (!mapped.phone) return 'phone is required';
   if (!mapped.location) return 'location is required';
+  if (!Number.isFinite(mapped.hectares)) return 'hectares (or acres) is required';
+  if (mapped.hectares <= 0) return 'hectares must be greater than 0';
   if (Number.isNaN(mapped.trees)) return 'trees must be a number';
   return '';
 }
@@ -2161,6 +2210,7 @@ function importFarmersLocal(records) {
       name: mapped.name,
       phone,
       location: mapped.location,
+      hectares: Number(mapped.hectares.toFixed(3)),
       trees: Number(mapped.trees.toFixed(2)),
       notes: mapped.notes,
       createdBy: 'local',
@@ -2352,6 +2402,7 @@ function seedLocalData() {
     name: 'Mercy Achieng',
     phone: '254712330001',
     location: 'Muranga',
+    hectares: 1.9,
     trees: 48,
     notes: 'Group A',
     createdBy: 'local',
@@ -2364,6 +2415,7 @@ function seedLocalData() {
     name: 'David Mwangi',
     phone: '254712330002',
     location: 'Nyeri',
+    hectares: 2.4,
     trees: 62,
     notes: 'Organic',
     createdBy: 'local',
@@ -2560,6 +2612,12 @@ function clearMessages() {
 
 function formatCurrency(value) {
   return Number(value || 0).toLocaleString('en-US');
+}
+
+function formatHectares(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return '-';
+  return num.toFixed(2);
 }
 
 function dateShort(value) {
