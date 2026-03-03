@@ -623,6 +623,18 @@
               <button class="secondary export-btn" data-export="sms">Export SMS CSV</button>
               <button class="secondary export-btn" data-export="activity">Export Activity CSV</button>
             </div>
+            <div class="row">
+              <select id="smsExportRange">
+                <option value="today">SMS Export Range: Today</option>
+                <option value="last7">SMS Export Range: Last 7 Days</option>
+                <option value="custom">SMS Export Range: Custom Date Range</option>
+              </select>
+              <input id="smsExportFrom" type="date" hidden>
+              <input id="smsExportTo" type="date" hidden>
+            </div>
+            <p class="meta compact">
+              SMS export uses the range above only when you click <strong>Export SMS CSV</strong>.
+            </p>
             </div>
           </details>
 

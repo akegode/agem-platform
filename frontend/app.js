@@ -227,6 +227,9 @@ const elements = {
   agentStatsWrap: document.getElementById('agentStatsWrap'),
 
   exportButtons: document.querySelectorAll('.export-btn'),
+  smsExportRange: document.getElementById('smsExportRange'),
+  smsExportFrom: document.getElementById('smsExportFrom'),
+  smsExportTo: document.getElementById('smsExportTo'),
   backupBtn: document.getElementById('backupBtn'),
   listBackupsBtn: document.getElementById('listBackupsBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -1850,6 +1853,64 @@ function parseDateBound(value, isEnd) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function formatDateInputValue(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function syncSmsExportFilterUi() {
+  if (!elements.smsExportRange || !elements.smsExportFrom || !elements.smsExportTo) return;
+  const range = String(elements.smsExportRange.value || 'today').trim().toLowerCase();
+  const custom = range === 'custom';
+  elements.smsExportFrom.hidden = !custom;
+  elements.smsExportTo.hidden = !custom;
+  elements.smsExportFrom.disabled = !custom;
+  elements.smsExportTo.disabled = !custom;
+}
+
+function buildSmsExportQueryParams() {
+  const params = new URLSearchParams();
+  if (!elements.smsExportRange) return params;
+
+  const range = String(elements.smsExportRange.value || 'today').trim().toLowerCase();
+  params.set('period', range);
+
+  if (range === 'today') {
+    const today = formatDateInputValue(new Date());
+    params.set('from', today);
+    params.set('to', today);
+    return params;
+  }
+
+  if (range === 'last7') {
+    const toDate = new Date();
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - 6);
+    params.set('from', formatDateInputValue(fromDate));
+    params.set('to', formatDateInputValue(toDate));
+    return params;
+  }
+
+  if (range === 'custom') {
+    let from = String(elements.smsExportFrom?.value || '').trim();
+    let to = String(elements.smsExportTo?.value || '').trim();
+    if (!from || !to) {
+      throw new Error('For custom SMS export, choose both start and end date.');
+    }
+    if (from > to) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+    params.set('from', from);
+    params.set('to', to);
+  }
+
+  return params;
+}
+
 function resolveOwedFilters() {
   const period = String(elements.owedPeriod.value || 'month').toLowerCase();
   let from = parseDateBound(elements.owedFromDate.value, false);
@@ -2601,6 +2662,25 @@ function renderSmsRecipientList() {
 }
 
 function bindExports() {
+  if (elements.smsExportRange) {
+    const today = formatDateInputValue(new Date());
+    const last7Start = new Date();
+    last7Start.setDate(last7Start.getDate() - 6);
+
+    if (elements.smsExportFrom && !elements.smsExportFrom.value) {
+      elements.smsExportFrom.value = formatDateInputValue(last7Start);
+    }
+    if (elements.smsExportTo && !elements.smsExportTo.value) {
+      elements.smsExportTo.value = today;
+    }
+
+    elements.smsExportRange.addEventListener('change', () => {
+      syncSmsExportFilterUi();
+    });
+
+    syncSmsExportFilterUi();
+  }
+
   elements.exportButtons.forEach((button) => {
     button.addEventListener('click', async () => {
       clearMessages();
@@ -2618,7 +2698,17 @@ function bindExports() {
       }
 
       try {
-        const content = await apiRequest(`/api/exports/${encodeURIComponent(type)}.csv`, {
+        let endpoint = `/api/exports/${encodeURIComponent(type)}.csv`;
+        let fileSuffix = '';
+        if (type === 'sms') {
+          const params = buildSmsExportQueryParams();
+          const query = params.toString();
+          if (query) endpoint = `${endpoint}?${query}`;
+          const period = params.get('period');
+          if (period) fileSuffix = `-${period}`;
+        }
+
+        const content = await apiRequest(endpoint, {
           method: 'GET',
           response: 'text'
         });
@@ -2627,7 +2717,7 @@ function bindExports() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${type}-${new Date().toISOString().slice(0, 10)}.csv`;
+        a.download = `${type}${fileSuffix}-${new Date().toISOString().slice(0, 10)}.csv`;
         document.body.appendChild(a);
         a.click();
         a.remove();

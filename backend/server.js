@@ -4447,7 +4447,36 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const smsRows = store.smsLogs.map((row) => ({
+    const period = clean(reqUrl.searchParams.get('period')).toLowerCase();
+    let fromMs = parseDateBound(reqUrl.searchParams.get('from'), false);
+    let toMs = parseDateBound(reqUrl.searchParams.get('to'), true);
+
+    if (fromMs !== null && toMs !== null && fromMs > toMs) {
+      const swap = fromMs;
+      fromMs = toMs;
+      toMs = swap;
+    }
+
+    if (fromMs === null && toMs === null) {
+      const now = new Date();
+      if (period === 'today') {
+        fromMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
+        toMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999);
+      } else if (period === 'last7') {
+        fromMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6, 0, 0, 0, 0);
+        toMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999);
+      }
+    }
+
+    let smsRows = [...store.smsLogs];
+    if (fromMs !== null) {
+      smsRows = smsRows.filter((row) => dateMs(row.createdAt) >= fromMs);
+    }
+    if (toMs !== null) {
+      smsRows = smsRows.filter((row) => dateMs(row.createdAt) <= toMs);
+    }
+
+    smsRows = smsRows.map((row) => ({
       ...row,
       ownerCostKes: smsOwnerCostKes(row),
       billable: smsOwnerCostKes(row) > 0 ? 'yes' : 'no'

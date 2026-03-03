@@ -1098,6 +1098,21 @@ async function run() {
     );
     assert.ok(smsCsv.includes('0.25'), 'SMS CSV should include owner SMS cost values');
 
+    const smsCsvToday = await request(baseUrl, '/api/exports/sms.csv?period=today', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(smsCsvToday.includes('ownerCostKes,billable'), 'SMS today export should include cost columns');
+
+    const smsCsvFuture = await request(baseUrl, '/api/exports/sms.csv?period=custom&from=2099-01-01&to=2099-01-02', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    const smsCsvFutureLines = smsCsvFuture.trim().split('\n');
+    assert.strictEqual(smsCsvFutureLines.length, 1, 'Future-range SMS export should return header only');
+
     await request(baseUrl, '/api/admin/backup', {
       method: 'POST',
       token: adminToken,
