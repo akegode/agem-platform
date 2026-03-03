@@ -16,8 +16,11 @@ const ACTIVITY_CAP = 1000;
 const HECTARES_PER_ACRE = 0.40468564224;
 const SQFT_PER_HECTARE = 107639.1041671;
 const MIN_PASSWORD_LENGTH = 10;
-const IMPORT_ONBOARDING_SMS_DEFAULT =
-  'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD *483# (once active) for farmer services.';
+const DEFAULT_LANGUAGE = 'en';
+const IMPORT_ONBOARDING_SMS_DEFAULT_EN =
+  'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
+const IMPORT_ONBOARDING_SMS_DEFAULT_SW =
+  'Agem Portal: Habari {{name}}. Umesajiliwa kwenye mfumo wa wakulima wa AGEM. Tumia USSD {{ussd}} (ukishawashwa) kupata huduma.';
 const IMPORT_ONBOARDING_SMS_MAX_LENGTH = 500;
 
 function envValue(key) {
@@ -310,6 +313,9 @@ function normalizeStore(raw) {
 
   for (const farmer of store.farmers) {
     if (!farmer || typeof farmer !== 'object') continue;
+    farmer.phone = clean(farmer.phone);
+    farmer.nationalId = cleanNationalId(farmer.nationalId);
+    farmer.preferredLanguage = languageOrDefault(farmer.preferredLanguage);
     const totalHectares = Number(farmer.hectares);
     if (!Number.isFinite(totalHectares) || totalHectares <= 0) continue;
 
@@ -511,6 +517,37 @@ function clean(value) {
   return String(value || '').trim();
 }
 
+function normalizeLanguage(value) {
+  const lower = clean(value).toLowerCase();
+  if (['2', 'sw', 'kiswahili', 'swahili'].includes(lower)) return 'sw';
+  if (['1', 'en', 'english'].includes(lower)) return 'en';
+  return '';
+}
+
+function languageOrDefault(value) {
+  return normalizeLanguage(value) || DEFAULT_LANGUAGE;
+}
+
+function parsePreferredLanguage(value) {
+  const raw = clean(value);
+  if (!raw) {
+    return { value: DEFAULT_LANGUAGE, valid: true };
+  }
+  const normalized = normalizeLanguage(raw);
+  if (!normalized) {
+    return { value: DEFAULT_LANGUAGE, valid: false };
+  }
+  return { value: normalized, valid: true };
+}
+
+function languageLabel(value) {
+  return languageOrDefault(value) === 'sw' ? 'Kiswahili' : 'English';
+}
+
+function inLanguage(lang, englishText, kiswahiliText) {
+  return languageOrDefault(lang) === 'sw' ? kiswahiliText : englishText;
+}
+
 function normalizePhone(value) {
   const digits = clean(value).replace(/[^\d]/g, '');
   if (!digits) return '';
@@ -526,14 +563,19 @@ function isTruthy(value) {
   return lower === 'true' || lower === '1' || lower === 'yes' || lower === 'on';
 }
 
+function defaultOnboardingSmsTemplate(lang) {
+  return languageOrDefault(lang) === 'sw' ? IMPORT_ONBOARDING_SMS_DEFAULT_SW : IMPORT_ONBOARDING_SMS_DEFAULT_EN;
+}
+
 function renderImportOnboardingSms(template, farmer) {
-  const rawTemplate = clean(template) || IMPORT_ONBOARDING_SMS_DEFAULT;
+  const lang = languageOrDefault(farmer?.preferredLanguage);
+  const rawTemplate = clean(template) || defaultOnboardingSmsTemplate(lang);
   const values = {
     name: clean(farmer?.name) || 'farmer',
     phone: clean(farmer?.phone),
     nationalId: clean(farmer?.nationalId),
     location: clean(farmer?.location),
-    ussd: '*483#',
+    ussd: USSD_CODE,
     portal: 'Agem Portal'
   };
 
@@ -710,6 +752,14 @@ function findById(list, entityId) {
 function findFarmerByPhone(list, phone, excludeId = '') {
   const target = clean(phone);
   if (!target) return null;
+
+  const normalizedTarget = normalizePhone(target);
+  if (normalizedTarget) {
+    return (
+      list.find((row) => normalizePhone(row.phone) === normalizedTarget && row.id !== excludeId) || null
+    );
+  }
+
   return list.find((row) => clean(row.phone) === target && row.id !== excludeId) || null;
 }
 
@@ -766,6 +816,7 @@ function validateFarmer(payload) {
   if (!clean(payload.phone)) return 'phone is required';
   if (!clean(payload.nationalId)) return 'nationalId is required';
   if (!clean(payload.location)) return 'location is required';
+  if (!parsePreferredLanguage(payload.preferredLanguage).valid) return 'preferredLanguage must be en or sw';
   if (Number.isNaN(parseTrees(payload.trees))) return 'trees must be a number';
   const hectares = resolveHectares(payload);
   const avocadoHectares = resolveAvocadoHectares(payload);
@@ -961,6 +1012,15 @@ function mapFarmerImportRecord(raw) {
     flat.areaunderavocadosquarefeet,
     flat.areaunderavocadosqft
   ]);
+  const preferredLanguageRaw = firstNonEmpty([
+    flat.preferredlanguage,
+    flat.language,
+    flat.farmerlanguage,
+    flat.smslanguage,
+    flat.ussdlanguage,
+    flat.lugha
+  ]);
+  const preferredLanguage = parsePreferredLanguage(preferredLanguageRaw).value;
   const hectares = resolveHectares({ hectares: hectaresRaw, acres: acresRaw, squareFeet: squareFeetRaw });
   const avocadoHectares = resolveAvocadoHectares({
     avocadoHectares: avocadoHectaresRaw,
@@ -970,12 +1030,13 @@ function mapFarmerImportRecord(raw) {
 
   return {
     name,
-    phone,
+    phone: normalizePhone(phone) || phone,
     nationalId,
     location,
     trees,
     hectares,
     avocadoHectares,
+    preferredLanguage,
     notes
   };
 }
@@ -1037,7 +1098,25 @@ function ussdReply(res, textBody, closeSession = false) {
   text(res, 200, `${prefix}${textBody}`);
 }
 
-function ussdMainMenu() {
+function ussdLanguageMenu() {
+  return [
+    'Agem Portal',
+    'Choose language / Chagua lugha',
+    '1. English',
+    '2. Kiswahili'
+  ].join('\n');
+}
+
+function ussdMainMenu(lang = DEFAULT_LANGUAGE) {
+  if (languageOrDefault(lang) === 'sw') {
+    return [
+      'Agem Portal',
+      '1. Hali ya Malipo',
+      '2. QC ya Mazao ya Hivi Karibuni',
+      '3. Wasifu Wangu',
+      '4. Msaada'
+    ].join('\n');
+  }
   return [
     'Agem Portal',
     '1. Payment Status',
@@ -1047,10 +1126,133 @@ function ussdMainMenu() {
   ].join('\n');
 }
 
-function ussdPaymentMessage(store, farmer) {
+function ussdUnregisteredMenu(lang = DEFAULT_LANGUAGE) {
+  if (languageOrDefault(lang) === 'sw') {
+    return [
+      'Agem Portal',
+      'Nambari hii haijasajiliwa.',
+      '1. Jisajili Sasa',
+      '2. Msaada'
+    ].join('\n');
+  }
+  return [
+    'Agem Portal',
+    'This number is not registered.',
+    '1. Register Now',
+    '2. Help'
+  ].join('\n');
+}
+
+function ussdHelpMessage(lang = DEFAULT_LANGUAGE) {
+  return inLanguage(
+    lang,
+    `Agem Portal Help\nUse ${USSD_CODE} to check payment, QC status, and profile.\nSupport: ${USSD_HELP_PHONE}`,
+    `Msaada wa Agem Portal\nTumia ${USSD_CODE} kuangalia malipo, QC, na wasifu.\nMsaada: ${USSD_HELP_PHONE}`
+  );
+}
+
+function ussdRegistrationPrompt(lang, stepNumber) {
+  if (languageOrDefault(lang) === 'sw') {
+    if (stepNumber === 1) return 'Usajili (Hatua 1/5)\nWeka jina lako kamili:';
+    if (stepNumber === 2) return 'Usajili (Hatua 2/5)\nWeka nambari ya kitambulisho (National ID):';
+    if (stepNumber === 3) return 'Usajili (Hatua 3/5)\nWeka eneo lako (mtaa/kata):';
+    if (stepNumber === 4) return 'Usajili (Hatua 4/5)\nWeka ukubwa wa shamba kwa acres:';
+    return 'Usajili (Hatua 5/5)\nWeka eneo la parachichi kwa acres:';
+  }
+
+  if (stepNumber === 1) return 'Registration (Step 1/5)\nEnter your full name:';
+  if (stepNumber === 2) return 'Registration (Step 2/5)\nEnter your National ID number:';
+  if (stepNumber === 3) return 'Registration (Step 3/5)\nEnter your location (ward/area):';
+  if (stepNumber === 4) return 'Registration (Step 4/5)\nEnter total farm size in acres:';
+  return 'Registration (Step 5/5)\nEnter area under avocado in acres:';
+}
+
+function ussdRegistrationSmsMessage(farmer, lang = DEFAULT_LANGUAGE) {
+  return inLanguage(
+    lang,
+    `Agem Portal: Hello ${farmer.name}. Registration complete. Dial ${USSD_CODE} for payment status, QC updates, and profile.`,
+    `Agem Portal: Habari ${farmer.name}. Usajili umekamilika. Piga ${USSD_CODE} kuona malipo, taarifa za QC, na wasifu wako.`
+  );
+}
+
+function ussdRegistrationCompleteMessage(farmer, lang = DEFAULT_LANGUAGE) {
+  return inLanguage(
+    lang,
+    `Registration complete for ${farmer.name}.\nDial ${USSD_CODE} any time for payment status, QC updates, and profile.`,
+    `Usajili umekamilika kwa ${farmer.name}.\nPiga ${USSD_CODE} wakati wowote kuona malipo, taarifa za QC, na wasifu.`
+  );
+}
+
+function registerFarmerFromUssd(store, payload) {
+  const lang = languageOrDefault(payload.language);
+  const phone = normalizePhone(payload.phoneNumber) || clean(payload.phoneNumber);
+  const name = clean(payload.name);
+  const nationalId = cleanNationalId(payload.nationalId);
+  const location = clean(payload.location);
+  const totalAcres = Number(payload.totalAcres);
+  const avocadoAcres = Number(payload.avocadoAcres);
+  const totalHectares = totalAcres * HECTARES_PER_ACRE;
+  const avocadoHectares = avocadoAcres * HECTARES_PER_ACRE;
+
+  const record = {
+    id: id('F'),
+    name,
+    phone,
+    nationalId,
+    location,
+    trees: 0,
+    hectares: Number(totalHectares.toFixed(3)),
+    avocadoHectares: Number(avocadoHectares.toFixed(3)),
+    preferredLanguage: lang,
+    notes: `Registered via USSD (${languageLabel(lang)})`,
+    createdBy: 'ussd',
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  store.farmers.unshift(record);
+
+  addActivity(store, {
+    actor: phone || 'ussd',
+    role: 'farmer',
+    action: 'farmer.ussd_register',
+    entity: 'farmer',
+    entityId: record.id,
+    details: `USSD registration completed for ${record.name}`
+  });
+
+  const smsLog = {
+    id: id('SMS'),
+    farmerId: record.id,
+    farmerName: record.name,
+    phone: record.phone,
+    message: ussdRegistrationSmsMessage(record, lang),
+    provider: 'AfricaTalking(Mock)',
+    status: 'Sent',
+    createdBy: 'ussd',
+    createdAt: nowIso()
+  };
+
+  store.smsLogs.unshift(smsLog);
+  addActivity(store, {
+    actor: phone || 'ussd',
+    role: 'farmer',
+    action: 'sms.ussd_registration',
+    entity: 'sms',
+    entityId: smsLog.id,
+    details: `Sent USSD registration confirmation SMS to ${record.phone}`
+  });
+
+  return record;
+}
+
+function ussdPaymentMessage(store, farmer, lang = DEFAULT_LANGUAGE) {
   const purchases = store.producePurchases.filter((row) => row.farmerId === farmer.id);
   if (!purchases.length) {
-    return 'No produce purchases found yet. Contact your AGEM agent for assistance.';
+    return inLanguage(
+      lang,
+      'No produce purchases found yet. Contact your AGEM agent for assistance.',
+      'Hakuna rekodi ya manunuzi ya mazao bado. Wasiliana na afisa wa AGEM kwa msaada.'
+    );
   }
 
   const totalPurchasedKes = purchases.reduce((sum, row) => sum + valueFromPurchase(row), 0);
@@ -1064,53 +1266,58 @@ function ussdPaymentMessage(store, farmer) {
     .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))[0];
 
   const lines = [
-    `Farmer: ${farmer.name}`,
-    `Total Purchased: KES ${formatKes(totalPurchasedKes)}`,
-    `Total Paid: KES ${formatKes(totalPaidKes)}`,
-    `Balance: KES ${formatKes(balanceKes)}`
+    `${inLanguage(lang, 'Farmer', 'Mkulima')}: ${farmer.name}`,
+    `${inLanguage(lang, 'Total Purchased', 'Jumla Ilinunuliwa')}: KES ${formatKes(totalPurchasedKes)}`,
+    `${inLanguage(lang, 'Total Paid', 'Jumla Iliyolipwa')}: KES ${formatKes(totalPaidKes)}`,
+    `${inLanguage(lang, 'Balance', 'Salio')}: KES ${formatKes(balanceKes)}`
   ];
 
   if (lastPayment) {
     lines.push(
-      `Last Payment: ${clean(lastPayment.ref) || '-'} (${normalizePaymentStatus(lastPayment.status)}) ${dateShort(lastPayment.createdAt)}`
+      `${inLanguage(lang, 'Last Payment', 'Malipo ya Mwisho')}: ${clean(lastPayment.ref) || '-'} ` +
+      `(${normalizePaymentStatus(lastPayment.status)}) ${dateShort(lastPayment.createdAt)}`
     );
   }
   return lines.join('\n');
 }
 
-function ussdQcMessage(store, farmer) {
+function ussdQcMessage(store, farmer, lang = DEFAULT_LANGUAGE) {
   const latestQc = [...store.produce]
     .filter((row) => row.farmerId === farmer.id)
     .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))[0];
 
   if (!latestQc) {
-    return 'No farm-gate QC entry found yet. Your next delivery will appear here after inspection.';
+    return inLanguage(
+      lang,
+      'No farm-gate QC entry found yet. Your next delivery will appear here after inspection.',
+      'Hakuna rekodi ya QC ya shambani bado. Uwasilishaji wako unaofuata utaonekana hapa baada ya ukaguzi.'
+    );
   }
 
   const dryMatter = clean(latestQc.dryMatterPct) ? `${latestQc.dryMatterPct}%` : 'N/A';
   const firmness = clean(latestQc.firmnessValue) ? `${latestQc.firmnessValue} ${latestQc.firmnessUnit || ''}`.trim() : 'N/A';
   return [
-    `Farmer: ${farmer.name}`,
-    `Variety: ${clean(latestQc.variety) || 'N/A'}`,
-    `Visual: ${clean(latestQc.visualGrade) || 'N/A'}`,
-    `Dry Matter: ${dryMatter}`,
-    `Firmness: ${firmness}`,
-    `Decision: ${clean(latestQc.qcDecision) || 'N/A'}`,
-    `Date: ${dateShort(latestQc.createdAt)}`
+    `${inLanguage(lang, 'Farmer', 'Mkulima')}: ${farmer.name}`,
+    `${inLanguage(lang, 'Variety', 'Aina')}: ${clean(latestQc.variety) || 'N/A'}`,
+    `${inLanguage(lang, 'Visual', 'Mwonekano')}: ${clean(latestQc.visualGrade) || 'N/A'}`,
+    `${inLanguage(lang, 'Dry Matter', 'Dry Matter')}: ${dryMatter}`,
+    `${inLanguage(lang, 'Firmness', 'Ugumu')}: ${firmness}`,
+    `${inLanguage(lang, 'Decision', 'Uamuzi')}: ${clean(latestQc.qcDecision) || 'N/A'}`,
+    `${inLanguage(lang, 'Date', 'Tarehe')}: ${dateShort(latestQc.createdAt)}`
   ].join('\n');
 }
 
-function ussdProfileMessage(farmer) {
+function ussdProfileMessage(farmer, lang = DEFAULT_LANGUAGE) {
   const acres = Number(farmer.hectares || 0) / HECTARES_PER_ACRE;
   const avocadoAcres = Number(farmer.avocadoHectares || 0) / HECTARES_PER_ACRE;
   return [
-    `Name: ${clean(farmer.name) || '-'}`,
-    `Phone: ${clean(farmer.phone) || '-'}`,
-    `National ID: ${clean(farmer.nationalId) || '-'}`,
-    `Location: ${clean(farmer.location) || '-'}`,
-    `Farm Size: ${Number(farmer.hectares || 0).toFixed(3)} ha (${acres.toFixed(2)} acres)`,
-    `Avocado Area: ${Number(farmer.avocadoHectares || 0).toFixed(3)} ha (${avocadoAcres.toFixed(2)} acres)`,
-    `Trees: ${Number(farmer.trees || 0).toFixed(0)}`
+    `${inLanguage(lang, 'Name', 'Jina')}: ${clean(farmer.name) || '-'}`,
+    `${inLanguage(lang, 'Phone', 'Simu')}: ${clean(farmer.phone) || '-'}`,
+    `${inLanguage(lang, 'National ID', 'Kitambulisho')}: ${clean(farmer.nationalId) || '-'}`,
+    `${inLanguage(lang, 'Location', 'Eneo')}: ${clean(farmer.location) || '-'}`,
+    `${inLanguage(lang, 'Farm Size', 'Ukubwa wa Shamba')}: ${Number(farmer.hectares || 0).toFixed(3)} ha (${acres.toFixed(2)} acres)`,
+    `${inLanguage(lang, 'Avocado Area', 'Eneo la Parachichi')}: ${Number(farmer.avocadoHectares || 0).toFixed(3)} ha (${avocadoAcres.toFixed(2)} acres)`,
+    `${inLanguage(lang, 'Trees', 'Miti')}: ${Number(farmer.trees || 0).toFixed(0)}`
   ].join('\n');
 }
 
@@ -1484,7 +1691,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      const phoneNumber = clean(payload.phoneNumber || payload.phonenumber || payload.msisdn);
+      const rawPhoneNumber = clean(payload.phoneNumber || payload.phonenumber || payload.msisdn);
+      const phoneNumber = normalizePhone(rawPhoneNumber) || rawPhoneNumber;
       const inputText = clean(payload.text || payload.input || payload.ussdText);
       if (!phoneNumber) {
         ussdReply(res, 'Phone number is missing from the request.', true);
@@ -1492,49 +1700,221 @@ const server = http.createServer(async (req, res) => {
       }
 
       const store = readStore();
-      const farmer = findFarmerByPhoneNormalized(store.farmers, phoneNumber);
-      if (!farmer) {
-        ussdReply(
-          res,
-          `Your number is not yet registered on Agem Portal.\nPlease contact AGEM support: ${USSD_HELP_PHONE}`,
-          true
-        );
-        return;
-      }
-
       const parts = inputText
         .split('*')
         .map((part) => clean(part))
         .filter(Boolean);
-      const option = parts[0] || '';
-
-      if (!option) {
-        ussdReply(res, ussdMainMenu(), false);
+      if (!parts.length) {
+        ussdReply(res, ussdLanguageMenu(), false);
         return;
       }
 
-      if (option === '1') {
-        ussdReply(res, ussdPaymentMessage(store, farmer), true);
-        return;
-      }
-      if (option === '2') {
-        ussdReply(res, ussdQcMessage(store, farmer), true);
-        return;
-      }
-      if (option === '3') {
-        ussdReply(res, ussdProfileMessage(farmer), true);
-        return;
-      }
-      if (option === '4') {
+      const lang = normalizeLanguage(parts[0]);
+      if (!lang) {
         ussdReply(
           res,
-          `Agem Portal Help\nUse ${USSD_CODE} to check payment, QC status, and profile.\nSupport: ${USSD_HELP_PHONE}`,
-          true
+          `Invalid option / Chaguo si sahihi.\n${ussdLanguageMenu()}`,
+          false
         );
         return;
       }
 
-      ussdReply(res, `Invalid option.\n${ussdMainMenu()}`, false);
+      const farmer = findFarmerByPhoneNormalized(store.farmers, phoneNumber);
+      const menuParts = parts.slice(1);
+
+      if (!farmer) {
+        if (!menuParts.length) {
+          ussdReply(res, ussdUnregisteredMenu(lang), false);
+          return;
+        }
+
+        const option = menuParts[0] || '';
+        if (option === '2') {
+          ussdReply(res, ussdHelpMessage(lang), true);
+          return;
+        }
+        if (option !== '1') {
+          ussdReply(
+            res,
+            `${inLanguage(lang, 'Invalid option.', 'Chaguo si sahihi.')}\n${ussdUnregisteredMenu(lang)}`,
+            false
+          );
+          return;
+        }
+
+        const registrationValues = menuParts.slice(1);
+        if (!registrationValues.length) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 1), false);
+          return;
+        }
+
+        const name = clean(registrationValues[0]);
+        if (name.length < 3) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'Name must be at least 3 characters. Please dial again to restart registration.',
+              'Jina lazima liwe na angalau herufi 3. Tafadhali piga tena kuanza usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+        if (registrationValues.length === 1) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 2), false);
+          return;
+        }
+
+        const nationalId = cleanNationalId(registrationValues[1]);
+        if (nationalId.length < 4) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'National ID looks invalid. Please dial again and restart registration.',
+              'Nambari ya kitambulisho si sahihi. Tafadhali piga tena na uanze usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+        if (registrationValues.length === 2) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 3), false);
+          return;
+        }
+
+        const location = clean(registrationValues[2]);
+        if (location.length < 2) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'Location is required. Please dial again and restart registration.',
+              'Eneo linahitajika. Tafadhali piga tena na uanze usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+        if (registrationValues.length === 3) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 4), false);
+          return;
+        }
+
+        const totalAcres = parseArea(registrationValues[3]);
+        if (!Number.isFinite(totalAcres) || totalAcres <= 0) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'Farm size must be a number greater than 0. Please dial again and restart registration.',
+              'Ukubwa wa shamba lazima uwe namba kubwa kuliko 0. Tafadhali piga tena kuanza usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+        if (registrationValues.length === 4) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 5), false);
+          return;
+        }
+
+        const avocadoAcres = parseArea(registrationValues[4]);
+        if (!Number.isFinite(avocadoAcres) || avocadoAcres <= 0) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'Avocado area must be a number greater than 0. Please dial again and restart registration.',
+              'Eneo la parachichi lazima liwe namba kubwa kuliko 0. Tafadhali piga tena kuanza usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+        if (avocadoAcres > totalAcres) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'Avocado area cannot be greater than total farm size. Please dial again and restart registration.',
+              'Eneo la parachichi haliwezi kuzidi ukubwa wa shamba lote. Tafadhali piga tena kuanza usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
+
+        if (findFarmerByPhoneNormalized(store.farmers, phoneNumber)) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `This phone number is already registered.\nSupport: ${USSD_HELP_PHONE}`,
+              `Nambari hii tayari imesajiliwa.\nMsaada: ${USSD_HELP_PHONE}`
+            ),
+            true
+          );
+          return;
+        }
+        if (findFarmerByNationalId(store.farmers, nationalId)) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `This National ID is already registered.\nSupport: ${USSD_HELP_PHONE}`,
+              `Kitambulisho hiki tayari kimesajiliwa.\nMsaada: ${USSD_HELP_PHONE}`
+            ),
+            true
+          );
+          return;
+        }
+
+        const registeredFarmer = registerFarmerFromUssd(store, {
+          phoneNumber,
+          name,
+          nationalId,
+          location,
+          totalAcres,
+          avocadoAcres,
+          language: lang
+        });
+        writeStore(store);
+        ussdReply(res, ussdRegistrationCompleteMessage(registeredFarmer, lang), true);
+        return;
+      }
+
+      if (languageOrDefault(farmer.preferredLanguage) !== lang) {
+        farmer.preferredLanguage = lang;
+        farmer.updatedAt = nowIso();
+        writeStore(store);
+      }
+
+      if (!menuParts.length) {
+        ussdReply(res, ussdMainMenu(lang), false);
+        return;
+      }
+
+      const option = menuParts[0] || '';
+      if (option === '1') {
+        ussdReply(res, ussdPaymentMessage(store, farmer, lang), true);
+        return;
+      }
+      if (option === '2') {
+        ussdReply(res, ussdQcMessage(store, farmer, lang), true);
+        return;
+      }
+      if (option === '3') {
+        ussdReply(res, ussdProfileMessage(farmer, lang), true);
+        return;
+      }
+      if (option === '4') {
+        ussdReply(res, ussdHelpMessage(lang), true);
+        return;
+      }
+
+      ussdReply(res, `${inLanguage(lang, 'Invalid option.', 'Chaguo si sahihi.')}\n${ussdMainMenu(lang)}`, false);
     } catch (error) {
       ussdReply(res, `USSD processing failed: ${error.message}`, true);
     }
@@ -1655,9 +2035,11 @@ const server = http.createServer(async (req, res) => {
 
       const payload = await readBody(req);
       const name = clean(payload.name);
-      const phone = clean(payload.phone);
+      const phone = normalizePhone(payload.phone) || clean(payload.phone);
       const nationalId = cleanNationalId(payload.nationalId);
       const location = clean(payload.location);
+      const preferredLanguageInput = parsePreferredLanguage(payload.preferredLanguage);
+      const preferredLanguage = preferredLanguageInput.value;
       const username = normalizedUsername(payload.username);
       const password = String(payload.password || '');
       const confirmPassword = String(payload.confirmPassword || '');
@@ -1669,6 +2051,10 @@ const server = http.createServer(async (req, res) => {
 
       if (!name || !phone || !nationalId || !location || !username || !password || !confirmPassword) {
         json(res, 422, { error: 'name, phone, nationalId, location, total area, area under avocado, username, password, and confirmPassword are required.' });
+        return;
+      }
+      if (!preferredLanguageInput.valid) {
+        json(res, 422, { error: 'preferredLanguage must be en or sw.' });
         return;
       }
       if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
@@ -1737,6 +2123,7 @@ const server = http.createServer(async (req, res) => {
         trees,
         hectares: Number(hectares.toFixed(3)),
         avocadoHectares: Number(avocadoHectares.toFixed(3)),
+        preferredLanguage,
         notes,
         createdBy: user.username,
         createdAt: nowIso(),
@@ -2160,7 +2547,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     let rows = [...store.farmers];
-    rows = filterByQuery(rows, reqUrl.searchParams, ['name', 'phone', 'nationalId', 'location', 'notes']);
+    rows = filterByQuery(rows, reqUrl.searchParams, ['name', 'phone', 'nationalId', 'location', 'preferredLanguage', 'notes']);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
     rows = rows.slice(0, limit);
@@ -2183,6 +2570,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 422, { error: invalid });
         return;
       }
+      const preferredLanguage = parsePreferredLanguage(payload.preferredLanguage).value;
       if (findFarmerByPhone(store.farmers, payload.phone)) {
         json(res, 409, { error: 'A farmer with this phone number already exists.' });
         return;
@@ -2197,12 +2585,13 @@ const server = http.createServer(async (req, res) => {
       const record = {
         id: id('F'),
         name: clean(payload.name),
-        phone: clean(payload.phone),
+        phone: normalizePhone(payload.phone) || clean(payload.phone),
         nationalId: cleanNationalId(payload.nationalId),
         location: clean(payload.location),
         trees: Number(parseTrees(payload.trees).toFixed(2)),
         hectares: Number(hectares.toFixed(3)),
         avocadoHectares: Number(avocadoHectares.toFixed(3)),
+        preferredLanguage,
         notes: clean(payload.notes),
         createdBy: auth.session.username,
         createdAt: nowIso(),
@@ -2253,7 +2642,7 @@ const server = http.createServer(async (req, res) => {
       }
       const farmersByPhone = new Map(
         store.farmers
-          .map((row) => [clean(row.phone), row])
+          .map((row) => [normalizePhone(row.phone) || clean(row.phone), row])
           .filter(([phone]) => Boolean(phone))
       );
       const farmersByNationalId = new Map(
@@ -2278,7 +2667,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        const phone = clean(mapped.phone);
+        const phone = normalizePhone(mapped.phone) || clean(mapped.phone);
         const nationalId = cleanNationalId(mapped.nationalId);
         const nationalIdKey = normalizedNationalId(nationalId);
         const existingByNationalId = farmersByNationalId.get(nationalIdKey);
@@ -2298,7 +2687,7 @@ const server = http.createServer(async (req, res) => {
               return;
             }
 
-            const oldPhoneKey = clean(existing.phone);
+            const oldPhoneKey = normalizePhone(existing.phone) || clean(existing.phone);
             const oldNationalIdKey = normalizedNationalId(existing.nationalId);
             if (oldPhoneKey && farmersByPhone.get(oldPhoneKey)?.id === existing.id) {
               farmersByPhone.delete(oldPhoneKey);
@@ -2314,6 +2703,7 @@ const server = http.createServer(async (req, res) => {
             existing.trees = Number(parseTrees(mapped.trees).toFixed(2));
             existing.hectares = Number(resolveHectares(mapped).toFixed(3));
             existing.avocadoHectares = Number(resolveAvocadoHectares(mapped).toFixed(3));
+            existing.preferredLanguage = parsePreferredLanguage(mapped.preferredLanguage).value;
             existing.notes = clean(mapped.notes);
             existing.updatedAt = nowIso();
 
@@ -2335,6 +2725,7 @@ const server = http.createServer(async (req, res) => {
           trees: Number(parseTrees(mapped.trees).toFixed(2)),
           hectares: Number(resolveHectares(mapped).toFixed(3)),
           avocadoHectares: Number(resolveAvocadoHectares(mapped).toFixed(3)),
+          preferredLanguage: parsePreferredLanguage(mapped.preferredLanguage).value,
           notes: clean(mapped.notes),
           createdBy: auth.session.username,
           createdAt: nowIso(),
@@ -2463,11 +2854,18 @@ const server = http.createServer(async (req, res) => {
 
       const payload = await readBody(req);
       const nextName = payload.name !== undefined ? clean(payload.name) : clean(farmer.name);
-      const nextPhone = payload.phone !== undefined ? clean(payload.phone) : clean(farmer.phone);
+      const nextPhone =
+        payload.phone !== undefined
+          ? normalizePhone(payload.phone) || clean(payload.phone)
+          : clean(farmer.phone);
       const nextNationalId =
         payload.nationalId !== undefined ? cleanNationalId(payload.nationalId) : cleanNationalId(farmer.nationalId);
       const nextLocation = payload.location !== undefined ? clean(payload.location) : clean(farmer.location);
       const nextNotes = payload.notes !== undefined ? clean(payload.notes) : clean(farmer.notes);
+      const preferredLanguageInput = parsePreferredLanguage(
+        payload.preferredLanguage !== undefined ? payload.preferredLanguage : farmer.preferredLanguage
+      );
+      const nextPreferredLanguage = preferredLanguageInput.value;
 
       if (!nextName) {
         json(res, 422, { error: 'name is required' });
@@ -2483,6 +2881,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (!nextLocation) {
         json(res, 422, { error: 'location is required' });
+        return;
+      }
+      if (!preferredLanguageInput.valid) {
+        json(res, 422, { error: 'preferredLanguage must be en or sw' });
         return;
       }
 
@@ -2561,6 +2963,7 @@ const server = http.createServer(async (req, res) => {
       farmer.phone = nextPhone;
       farmer.nationalId = nextNationalId;
       farmer.location = nextLocation;
+      farmer.preferredLanguage = nextPreferredLanguage;
       farmer.notes = nextNotes;
       farmer.updatedAt = nowIso();
 
@@ -3172,7 +3575,7 @@ const server = http.createServer(async (req, res) => {
     const offset = safeQueryOffset(reqUrl.searchParams, 'offset', 0, 2_000_000);
 
     let recipients = store.farmers.filter((row) => clean(row.phone));
-    recipients = filterByTextQuery(recipients, q, ['id', 'name', 'phone', 'nationalId', 'location', 'notes']);
+    recipients = filterByTextQuery(recipients, q, ['id', 'name', 'phone', 'nationalId', 'location', 'preferredLanguage', 'notes']);
 
     const total = recipients.length;
     const rows = recipients.slice(offset, offset + limit).map((row) => ({
@@ -3180,7 +3583,8 @@ const server = http.createServer(async (req, res) => {
       name: row.name,
       phone: row.phone,
       nationalId: row.nationalId,
-      location: row.location
+      location: row.location,
+      preferredLanguage: languageOrDefault(row.preferredLanguage)
     }));
 
     json(res, 200, {
@@ -3458,6 +3862,7 @@ const server = http.createServer(async (req, res) => {
 
       return {
         ...row,
+        preferredLanguage: languageOrDefault(row.preferredLanguage),
         acres: Number(acres.toFixed(3)),
         squareFeet: Number(squareFeet.toFixed(2)),
         avocadoAcres: Number(avocadoAcres.toFixed(3)),
@@ -3471,6 +3876,7 @@ const server = http.createServer(async (req, res) => {
       { key: 'phone', label: 'phone' },
       { key: 'nationalId', label: 'nationalId' },
       { key: 'location', label: 'location' },
+      { key: 'preferredLanguage', label: 'preferredLanguage' },
       { key: 'hectares', label: 'hectares' },
       { key: 'acres', label: 'acres' },
       { key: 'squareFeet', label: 'squareFeet' },

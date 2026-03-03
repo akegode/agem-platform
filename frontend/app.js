@@ -4,8 +4,11 @@ const HECTARES_PER_ACRE = 0.40468564224;
 const ACRES_PER_HECTARE = 1 / HECTARES_PER_ACRE;
 const SQFT_PER_HECTARE = 107639.1041671;
 const IMPORT_ONBOARDING_SMS_MAX_LENGTH = 500;
-const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE =
+const DEFAULT_LANGUAGE = 'en';
+const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_EN =
   'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
+const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_SW =
+  'Agem Portal: Habari {{name}}. Umesajiliwa kwenye mfumo wa wakulima wa AGEM. Tumia USSD {{ussd}} (ukishawashwa) kupata huduma.';
 
 const API = {
   enabled: false
@@ -63,6 +66,7 @@ const elements = {
   registerPhone: document.getElementById('registerPhone'),
   registerNationalId: document.getElementById('registerNationalId'),
   registerLocation: document.getElementById('registerLocation'),
+  registerPreferredLanguage: document.getElementById('registerPreferredLanguage'),
   registerAreaHectares: document.getElementById('registerAreaHectares'),
   registerAreaAcres: document.getElementById('registerAreaAcres'),
   registerAreaSquareFeet: document.getElementById('registerAreaSquareFeet'),
@@ -105,6 +109,7 @@ const elements = {
   farmerPhone: document.getElementById('farmerPhone'),
   farmerNationalId: document.getElementById('farmerNationalId'),
   farmerLocation: document.getElementById('farmerLocation'),
+  farmerPreferredLanguage: document.getElementById('farmerPreferredLanguage'),
   treeCount: document.getElementById('treeCount'),
   farmerAreaHectares: document.getElementById('farmerAreaHectares'),
   farmerAreaAcres: document.getElementById('farmerAreaAcres'),
@@ -507,9 +512,10 @@ function bindAuth() {
     }
 
     const name = elements.registerName.value.trim();
-    const phone = elements.registerPhone.value.trim();
+    const phone = cleanPhone(elements.registerPhone.value);
     const nationalId = elements.registerNationalId.value.trim();
     const location = elements.registerLocation.value.trim();
+    const preferredLanguage = elements.registerPreferredLanguage.value.trim() || DEFAULT_LANGUAGE;
     const areaHectares = elements.registerAreaHectares.value.trim();
     const areaAcres = elements.registerAreaAcres.value.trim();
     const areaSquareFeet = elements.registerAreaSquareFeet.value.trim();
@@ -561,6 +567,7 @@ function bindAuth() {
           phone,
           nationalId,
           location,
+          preferredLanguage,
           ...totalAreaPayload,
           avocadoHectares: avocadoAreaPayload.hectares,
           avocadoAcres: avocadoAreaPayload.acres,
@@ -796,9 +803,10 @@ function bindFarmers() {
 
     const payload = {
       name: elements.farmerName.value.trim(),
-      phone: elements.farmerPhone.value.trim(),
+      phone: cleanPhone(elements.farmerPhone.value),
       nationalId: cleanNationalIdClient(elements.farmerNationalId.value),
       location: elements.farmerLocation.value.trim(),
+      preferredLanguage: normalizeLanguageClient(elements.farmerPreferredLanguage.value) || DEFAULT_LANGUAGE,
       trees: Number(elements.treeCount.value || 0),
       ...totalAreaPayload,
       avocadoHectares: avocadoAreaPayload.hectares,
@@ -935,7 +943,7 @@ function bindFarmers() {
           `SMS template is too long. Keep it under ${IMPORT_ONBOARDING_SMS_MAX_LENGTH} characters.`;
         return;
       }
-      const onboardingSmsTemplate = smsTemplate || DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE;
+      const onboardingSmsTemplate = smsTemplate;
 
       let result = null;
       if (API.enabled) {
@@ -991,6 +999,7 @@ function bindFarmers() {
       elements.farmerNationalId.value = farmer.nationalId || '';
       elements.farmerLocation.value = farmer.location || '';
       elements.treeCount.value = farmer.trees || 0;
+      elements.farmerPreferredLanguage.value = normalizeLanguageClient(farmer.preferredLanguage) || DEFAULT_LANGUAGE;
       fillAreaInputsFromHectares(
         {
           hectaresInput: elements.farmerAreaHectares,
@@ -2269,7 +2278,9 @@ async function loadSmsRecipients(reset = false) {
     if (q) {
       const needle = q.toLowerCase();
       rows = rows.filter((row) => {
-        const text = `${row.id || ''} ${row.name || ''} ${row.phone || ''} ${row.nationalId || ''} ${row.location || ''} ${row.notes || ''}`.toLowerCase();
+        const text =
+          `${row.id || ''} ${row.name || ''} ${row.phone || ''} ${row.nationalId || ''} ` +
+          `${row.location || ''} ${row.notes || ''} ${row.preferredLanguage || ''}`.toLowerCase();
         return text.includes(needle);
       });
     }
@@ -2280,7 +2291,8 @@ async function loadSmsRecipients(reset = false) {
       name: row.name,
       phone: row.phone,
       nationalId: row.nationalId,
-      location: row.location
+      location: row.location,
+      preferredLanguage: languageOrDefaultClient(row.preferredLanguage)
     }));
 
     if (smsPicker.offset > 0 && smsPicker.rows.length === 0) {
@@ -2330,6 +2342,7 @@ function renderSmsRecipientList() {
           <td>${escapeHtml(row.phone || '-')}</td>
           <td>${escapeHtml(row.nationalId || '-')}</td>
           <td>${escapeHtml(row.location || '-')}</td>
+          <td>${escapeHtml(languageOrDefaultClient(row.preferredLanguage) === 'sw' ? 'Kiswahili' : 'English')}</td>
         </tr>
       `
     )
@@ -2344,6 +2357,7 @@ function renderSmsRecipientList() {
           <th>Phone</th>
           <th>National ID</th>
           <th>Location</th>
+          <th>Language</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -2875,6 +2889,7 @@ function renderFarmers() {
           <td>${escapeHtml(farmer.phone)}</td>
           <td>${escapeHtml(farmer.nationalId || '-')}</td>
           <td>${escapeHtml(farmer.location)}</td>
+          <td>${escapeHtml(languageOrDefaultClient(farmer.preferredLanguage) === 'sw' ? 'Kiswahili' : 'English')}</td>
           <td>${escapeHtml(formatHectares(farmer.hectares))}</td>
           <td>${escapeHtml(formatAcres(farmer.hectares))}</td>
           <td>${escapeHtml(formatSquareFeet(farmer.hectares))}</td>
@@ -2898,6 +2913,7 @@ function renderFarmers() {
           <th>Phone</th>
           <th>National ID</th>
           <th>Location</th>
+          <th>Language</th>
           <th>Hectares</th>
           <th>Acres</th>
           <th>Square Feet</th>
@@ -3487,12 +3503,21 @@ function mapFarmerImportRecordClient(raw) {
     flat.areaunderavocadosquarefeet,
     flat.areaunderavocadosqft
   ]);
+  const preferredLanguageRaw = firstNonEmptyClient([
+    flat.preferredlanguage,
+    flat.language,
+    flat.farmerlanguage,
+    flat.smslanguage,
+    flat.ussdlanguage,
+    flat.lugha
+  ]);
 
   return {
     name,
-    phone,
+    phone: cleanPhone(phone),
     nationalId: cleanNationalIdClient(nationalId),
     location,
+    preferredLanguage: languageOrDefaultClient(preferredLanguageRaw),
     hectares: toHectaresFromInputsClient(hectaresRaw, acresRaw, squareFeetRaw),
     avocadoHectares: toHectaresFromInputsClient(avocadoHectaresRaw, avocadoAcresRaw, avocadoSquareFeetRaw),
     trees: parseTreeCountClient(treesRaw),
@@ -3515,7 +3540,13 @@ function validateImportedFarmer(mapped) {
 }
 
 function cleanPhone(value) {
-  return String(value ?? '').trim();
+  const raw = String(value ?? '').trim();
+  const digits = raw.replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('254') && digits.length === 12) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  if (digits.length === 9 && digits.startsWith('7')) return `254${digits}`;
+  return digits || raw;
 }
 
 function normalizeNationalIdClient(value) {
@@ -3535,8 +3566,26 @@ function isTruthyClient(value) {
   return lower === 'true' || lower === '1' || lower === 'yes' || lower === 'on';
 }
 
+function normalizeLanguageClient(value) {
+  const lower = String(value ?? '').trim().toLowerCase();
+  if (['2', 'sw', 'kiswahili', 'swahili'].includes(lower)) return 'sw';
+  if (['1', 'en', 'english'].includes(lower)) return 'en';
+  return '';
+}
+
+function languageOrDefaultClient(value) {
+  return normalizeLanguageClient(value) || DEFAULT_LANGUAGE;
+}
+
+function defaultImportOnboardingSmsTemplateClient(language) {
+  return languageOrDefaultClient(language) === 'sw'
+    ? DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_SW
+    : DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_EN;
+}
+
 function renderImportOnboardingSmsTemplateClient(template, farmer) {
-  const rawTemplate = String(template || '').trim() || DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE;
+  const lang = languageOrDefaultClient(farmer?.preferredLanguage);
+  const rawTemplate = String(template || '').trim() || defaultImportOnboardingSmsTemplateClient(lang);
   const values = {
     name: String(farmer?.name || '').trim() || 'farmer',
     phone: String(farmer?.phone || '').trim(),
@@ -3667,6 +3716,7 @@ function importFarmersLocal(records, options = {}) {
         existing.hectares = Number(mapped.hectares.toFixed(3));
         existing.avocadoHectares = Number(mapped.avocadoHectares.toFixed(3));
         existing.trees = Number(mapped.trees.toFixed(2));
+        existing.preferredLanguage = languageOrDefaultClient(mapped.preferredLanguage);
         existing.notes = mapped.notes;
         existing.updatedAt = new Date().toISOString();
 
@@ -3685,6 +3735,7 @@ function importFarmersLocal(records, options = {}) {
       phone,
       nationalId,
       location: mapped.location,
+      preferredLanguage: languageOrDefaultClient(mapped.preferredLanguage),
       hectares: Number(mapped.hectares.toFixed(3)),
       avocadoHectares: Number(mapped.avocadoHectares.toFixed(3)),
       trees: Number(mapped.trees.toFixed(2)),
@@ -3891,6 +3942,9 @@ function resetFarmerForm() {
   state.editingFarmerId = '';
   elements.farmerId.value = '';
   elements.farmerForm.reset();
+  if (elements.farmerPreferredLanguage) {
+    elements.farmerPreferredLanguage.value = DEFAULT_LANGUAGE;
+  }
   elements.farmerSubmitBtn.textContent = 'Register Farmer';
   elements.farmerCancelEditBtn.hidden = true;
 }
@@ -3935,6 +3989,7 @@ function seedLocalData() {
     phone: '254712330001',
     nationalId: '28643197',
     location: 'Muranga',
+    preferredLanguage: 'en',
     hectares: 1.9,
     avocadoHectares: 1.2,
     trees: 48,
@@ -3950,6 +4005,7 @@ function seedLocalData() {
     phone: '254712330002',
     nationalId: '30984522',
     location: 'Nyeri',
+    preferredLanguage: 'sw',
     hectares: 2.4,
     avocadoHectares: 1.6,
     trees: 62,

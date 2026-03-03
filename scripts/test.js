@@ -239,6 +239,7 @@ async function run() {
         phone: '254700111222',
         nationalId: '11223344',
         location: 'Muranga',
+        preferredLanguage: 'sw',
         hectares: 1.2,
         avocadoHectares: 0.8,
         username: farmerSelfUsername,
@@ -673,7 +674,25 @@ async function run() {
       expectStatus: 200
     });
     assert.ok(ussdMenu.startsWith('CON '), 'USSD menu should keep session open');
-    assert.ok(ussdMenu.includes('1. Payment Status'), 'USSD menu missing payment option');
+    assert.ok(ussdMenu.includes('Choose language'), 'USSD language menu should be shown first');
+
+    const ussdEnglishMenu = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-menu-en',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: '1'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdEnglishMenu.startsWith('CON '), 'USSD English menu should keep session open');
+    assert.ok(ussdEnglishMenu.includes('1. Payment Status'), 'USSD English menu missing payment option');
 
     await request(baseUrl, `/api/ussd/events?secret=${encodeURIComponent(ussdSecret)}`, {
       method: 'POST',
@@ -697,7 +716,7 @@ async function run() {
         sessionId: 'sess-pay',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '1'
+        text: '1*1'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
@@ -715,7 +734,7 @@ async function run() {
         sessionId: 'sess-qc',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '2'
+        text: '1*2'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
@@ -733,7 +752,7 @@ async function run() {
         sessionId: 'sess-profile',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '3'
+        text: '1*3'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
@@ -741,25 +760,148 @@ async function run() {
     assert.ok(ussdProfile.startsWith('END '), 'USSD profile lookup should end session');
     assert.ok(ussdProfile.includes('Name: Grace Njoki'), 'USSD profile response missing farmer name');
 
-    const ussdUnknownFarmer = await request(baseUrl, '/api/ussd/callback', {
+    const ussdUnknownLanguageSelected = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'x-ussd-secret': ussdSecret
       },
       bodyRaw: new URLSearchParams({
-        sessionId: 'sess-unknown',
+        sessionId: 'sess-unknown-en',
         serviceCode: ussdCode,
         phoneNumber: '254799000000',
-        text: ''
+        text: '1'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownFarmer.startsWith('END '), 'Unregistered USSD number should end session');
+    assert.ok(ussdUnknownLanguageSelected.startsWith('CON '), 'Unregistered USSD flow should continue to registration menu');
     assert.ok(
-      ussdUnknownFarmer.includes('not yet registered'),
-      'USSD unknown number response should explain registration status'
+      ussdUnknownLanguageSelected.includes('Register Now'),
+      'USSD unknown number should receive registration option'
+    );
+
+    const ussdUnknownStep1 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step1',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep1.includes('Step 1/5'), 'USSD registration should prompt for name');
+
+    const ussdUnknownStep2 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step2',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep2.includes('Step 2/5'), 'USSD registration should prompt for National ID');
+
+    const ussdUnknownStep3 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step3',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep3.includes('Step 3/5'), 'USSD registration should prompt for location');
+
+    const ussdUnknownStep4 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step4',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566*Kisumu'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep4.includes('Step 4/5'), 'USSD registration should prompt for total acres');
+
+    const ussdUnknownStep5 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step5',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566*Kisumu*2.4'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep5.includes('Step 5/5'), 'USSD registration should prompt for avocado acres');
+
+    const ussdUnknownComplete = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-complete',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566*Kisumu*2.4*1.6'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownComplete.startsWith('END '), 'USSD registration should complete and end session');
+    assert.ok(ussdUnknownComplete.includes('Registration complete'), 'USSD registration completion message missing');
+
+    const farmersAfterUssdRegistration = await request(baseUrl, '/api/farmers?limit=50', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    const jane = (farmersAfterUssdRegistration.data || []).find((row) => row.phone === '254799000000');
+    assert.ok(jane, 'USSD registration should create a farmer profile');
+    assert.strictEqual(jane.nationalId, '33445566', 'USSD registration should capture National ID');
+    assert.strictEqual(jane.preferredLanguage, 'en', 'USSD registration should capture selected language');
+
+    const smsAfterUssdRegistration = await request(baseUrl, '/api/sms?limit=50', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(
+      (smsAfterUssdRegistration.data || []).some(
+        (row) => row.phone === '254799000000' && String(row.message || '').includes('Registration complete')
+      ),
+      'USSD registration should log confirmation SMS'
     );
 
     const farmersCsv = await request(baseUrl, '/api/exports/farmers.csv', {
@@ -768,7 +910,7 @@ async function run() {
       expectStatus: 200
     });
     assert.ok(
-      farmersCsv.includes('name,phone,nationalId,location,hectares,acres,squareFeet,avocadoHectares,avocadoAcres,avocadoSquareFeet'),
+      farmersCsv.includes('name,phone,nationalId,location,preferredLanguage,hectares,acres,squareFeet,avocadoHectares,avocadoAcres,avocadoSquareFeet'),
       'Farmers CSV header missing'
     );
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');

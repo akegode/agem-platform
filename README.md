@@ -10,6 +10,7 @@ This project is now a full working web application with authentication, role-bas
 - Recovery endpoints for forgotten username/password via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards) with mandatory National ID, total farm size + area under avocado, and auto-conversion across hectares, acres, and square feet
 - Bulk farmer import (CSV/Excel) for admin; required fields (including National ID, total area, and area under avocado) are mapped, extra columns ignored, acreage/square-feet values are converted to hectares, and optional onboarding SMS can be sent to imported farmers
+- Farmer preferred language support (English/Kiswahili) for onboarding and USSD engagement
 - Duplicate protection for admin/agent/farmer accounts and farmer phone records (no double registration)
 - Import duplicate handling: choose to keep existing farmer data or overwrite with incoming file data
 - Farm-gate avocado QC capture (Hass/Fuerte): visual grade, dry matter, firmness, fruit weight, size code, lot weight, and QC decision
@@ -19,7 +20,7 @@ This project is now a full working web application with authentication, role-bas
 - M-PESA disbursement simulation endpoint
 - SMS sending simulation + message logs
 - Bulk SMS for admin (all farmers or selected recipients) with searchable recipient picker
-- Safaricom-ready USSD callback endpoint (`/api/ussd/callback`) with menu for payment status, latest QC, profile, and help (via gateway such as Africa's Talking)
+- Safaricom-ready USSD callback endpoint (`/api/ussd/callback`) with language selection (English/Kiswahili), self-registration for new phone numbers, and menu for payment status, latest QC, profile, and help (via gateway such as Africa's Talking)
 - Operational KPI dashboard and agent performance report
 - CSV exports (farmers, produce, payments, activity)
 - Backup snapshots + backup listing
@@ -103,4 +104,5 @@ Your current website stays as-is, and this app runs as a portal under a subdomai
 - Farmer self-registration can be turned off by setting `ALLOW_FARMER_REGISTRATION=false`.
 - Admins can create additional agent accounts from the in-app **Agents** section by entering agent name and email. The portal auto-generates temporary login credentials, and env `AGENT_*` remains the initial bootstrap agent.
 - For live Safaricom USSD, use a gateway provider (e.g., Africa's Talking), point callback URL to `https://portal.agemlimited.com/api/ussd/callback?secret=<same-secret>` and events URL to `https://portal.agemlimited.com/api/ussd/events?secret=<same-secret>`.
+- USSD self-registration collects full name, National ID, location, total farm size (acres), and area under avocado (acres), then creates a farmer profile and sends a confirmation SMS in the selected language.
 - If you later install PHP/Composer/MySQL/Redis, this can be migrated to Laravel + React/Inertia exactly as planned.
