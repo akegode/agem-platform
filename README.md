@@ -7,7 +7,7 @@ This project is now a full working web application with authentication, role-bas
 - Farmer self-registration from the sign-in card (creates farmer account + farmer profile)
 - Admin-only agent account management (enter name + email, auto-generate temporary username/password, and list multiple agent logins)
 - Signed-in password change flow
-- Recovery endpoints for forgotten username/password via role recovery codes
+- Recovery endpoints for forgotten username/password for admin and agent accounts via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards) with mandatory National ID, total farm size + area under avocado, and auto-conversion across hectares, acres, and square feet
 - Bulk farmer import (CSV/Excel) for admin; required fields (including National ID, total area, and area under avocado) are mapped, extra columns ignored, acreage/square-feet values are converted to hectares, and optional onboarding SMS can be sent to imported farmers
 - Farmer preferred language support (English/Kiswahili) for onboarding and USSD engagement
