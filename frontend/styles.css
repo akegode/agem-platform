@@ -503,8 +503,16 @@ h3,
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.grid > * {
+  min-width: 0;
+}
+
+.farmers-grid > .dropdown-card:last-child {
+  grid-column: 1 / -1;
 }
 
 .card {
@@ -518,6 +526,7 @@ h3,
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--card);
+  min-width: 0;
 }
 
 .dropdown-card > summary {
@@ -772,6 +781,8 @@ button.table-btn.danger {
 #smsTableWrap,
 #agentStatsWrap,
 #backupListWrap {
+  min-width: 0;
+  max-width: 100%;
   max-height: 360px;
   overflow: auto;
 }
