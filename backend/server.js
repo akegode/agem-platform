@@ -16,6 +16,7 @@ const ACTIVITY_CAP = 1000;
 const HECTARES_PER_ACRE = 0.40468564224;
 const SQFT_PER_HECTARE = 107639.1041671;
 const MIN_PASSWORD_LENGTH = 10;
+const FARMER_PIN_PATTERN = /^\d{4}$/;
 const DEFAULT_LANGUAGE = 'en';
 const IMPORT_ONBOARDING_SMS_DEFAULT_EN =
   'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
@@ -108,6 +109,14 @@ function validateNewPassword(password) {
   }
   if (!/[A-Za-z]/.test(value) || !/\d/.test(value)) {
     return 'Password must include at least one letter and one number.';
+  }
+  return '';
+}
+
+function validateFarmerPin(pin) {
+  const value = String(pin || '').trim();
+  if (!FARMER_PIN_PATTERN.test(value)) {
+    return 'PIN must be exactly 4 digits.';
   }
   return '';
 }
@@ -493,6 +502,7 @@ function currentSession(req, store) {
     token,
     userId: currentUser.id,
     username: currentUser.username,
+    phone: currentUser.phone || '',
     name: currentUser.name,
     role: currentUser.role,
     createdAt: session.createdAt,
@@ -590,6 +600,14 @@ function normalizedUsername(value) {
 function findUserByUsername(store, username) {
   const target = normalizedUsername(username);
   return store.users.find((row) => normalizedUsername(row.username) === target);
+}
+
+function findUserByPhone(store, phone) {
+  const target = normalizePhone(phone);
+  if (!target) return null;
+  return (
+    store.users.find((row) => normalizePhone(row.phone || row.username) === target) || null
+  );
 }
 
 function normalizedEmail(value) {
@@ -1153,18 +1171,22 @@ function ussdHelpMessage(lang = DEFAULT_LANGUAGE) {
 
 function ussdRegistrationPrompt(lang, stepNumber) {
   if (languageOrDefault(lang) === 'sw') {
-    if (stepNumber === 1) return 'Usajili (Hatua 1/5)\nWeka jina lako kamili:';
-    if (stepNumber === 2) return 'Usajili (Hatua 2/5)\nWeka nambari ya kitambulisho (National ID):';
-    if (stepNumber === 3) return 'Usajili (Hatua 3/5)\nWeka eneo lako (mtaa/kata):';
-    if (stepNumber === 4) return 'Usajili (Hatua 4/5)\nWeka ukubwa wa shamba kwa acres:';
-    return 'Usajili (Hatua 5/5)\nWeka eneo la parachichi kwa acres:';
+    if (stepNumber === 1) return 'Usajili (Hatua 1/7)\nWeka jina lako kamili:';
+    if (stepNumber === 2) return 'Usajili (Hatua 2/7)\nWeka nambari ya kitambulisho (National ID):';
+    if (stepNumber === 3) return 'Usajili (Hatua 3/7)\nWeka eneo lako (mtaa/kata):';
+    if (stepNumber === 4) return 'Usajili (Hatua 4/7)\nWeka ukubwa wa shamba kwa acres:';
+    if (stepNumber === 5) return 'Usajili (Hatua 5/7)\nWeka eneo la parachichi kwa acres:';
+    if (stepNumber === 6) return 'Usajili (Hatua 6/7)\nWeka PIN ya namba 4:';
+    return 'Usajili (Hatua 7/7)\nRudia PIN ya namba 4 kuthibitisha:';
   }
 
-  if (stepNumber === 1) return 'Registration (Step 1/5)\nEnter your full name:';
-  if (stepNumber === 2) return 'Registration (Step 2/5)\nEnter your National ID number:';
-  if (stepNumber === 3) return 'Registration (Step 3/5)\nEnter your location (ward/area):';
-  if (stepNumber === 4) return 'Registration (Step 4/5)\nEnter total farm size in acres:';
-  return 'Registration (Step 5/5)\nEnter area under avocado in acres:';
+  if (stepNumber === 1) return 'Registration (Step 1/7)\nEnter your full name:';
+  if (stepNumber === 2) return 'Registration (Step 2/7)\nEnter your National ID number:';
+  if (stepNumber === 3) return 'Registration (Step 3/7)\nEnter your location (ward/area):';
+  if (stepNumber === 4) return 'Registration (Step 4/7)\nEnter total farm size in acres:';
+  if (stepNumber === 5) return 'Registration (Step 5/7)\nEnter area under avocado in acres:';
+  if (stepNumber === 6) return 'Registration (Step 6/7)\nSet a 4-digit PIN:';
+  return 'Registration (Step 7/7)\nConfirm your 4-digit PIN:';
 }
 
 function ussdRegistrationSmsMessage(farmer, lang = DEFAULT_LANGUAGE) {
@@ -1186,6 +1208,7 @@ function ussdRegistrationCompleteMessage(farmer, lang = DEFAULT_LANGUAGE) {
 function registerFarmerFromUssd(store, payload) {
   const lang = languageOrDefault(payload.language);
   const phone = normalizePhone(payload.phoneNumber) || clean(payload.phoneNumber);
+  const pin = String(payload.pin || '').trim();
   const name = clean(payload.name);
   const nationalId = cleanNationalId(payload.nationalId);
   const location = clean(payload.location);
@@ -1193,6 +1216,19 @@ function registerFarmerFromUssd(store, payload) {
   const avocadoAcres = Number(payload.avocadoAcres);
   const totalHectares = totalAcres * HECTARES_PER_ACRE;
   const avocadoHectares = avocadoAcres * HECTARES_PER_ACRE;
+
+  const user = {
+    id: id('USR'),
+    username: phone,
+    phone,
+    name,
+    role: 'farmer',
+    status: 'active',
+    password: hashPassword(pin),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  store.users.push(user);
 
   const record = {
     id: id('F'),
@@ -1205,11 +1241,21 @@ function registerFarmerFromUssd(store, payload) {
     avocadoHectares: Number(avocadoHectares.toFixed(3)),
     preferredLanguage: lang,
     notes: `Registered via USSD (${languageLabel(lang)})`,
+    userId: user.id,
     createdBy: 'ussd',
     createdAt: nowIso(),
     updatedAt: nowIso()
   };
   store.farmers.unshift(record);
+
+  addActivity(store, {
+    actor: phone || 'ussd',
+    role: 'farmer',
+    action: 'auth.register',
+    entity: 'user',
+    entityId: user.id,
+    details: `USSD registration created farmer account for ${phone}`
+  });
 
   addActivity(store, {
     actor: phone || 'ussd',
@@ -1845,6 +1891,43 @@ const server = http.createServer(async (req, res) => {
           );
           return;
         }
+        if (registrationValues.length === 5) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 6), false);
+          return;
+        }
+
+        const pin = String(registrationValues[5] || '').trim();
+        const invalidPin = validateFarmerPin(pin);
+        if (invalidPin) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `${invalidPin} Please dial again and restart registration.`,
+              `PIN lazima iwe namba 4. Tafadhali piga tena kuanza usajili upya.`
+            ),
+            true
+          );
+          return;
+        }
+        if (registrationValues.length === 6) {
+          ussdReply(res, ussdRegistrationPrompt(lang, 7), false);
+          return;
+        }
+
+        const confirmPin = String(registrationValues[6] || '').trim();
+        if (!secureEquals(pin, confirmPin)) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'PIN confirmation does not match. Please dial again and restart registration.',
+              'Uthibitisho wa PIN haulingani. Tafadhali piga tena kuanza usajili upya.'
+            ),
+            true
+          );
+          return;
+        }
 
         if (findFarmerByPhoneNormalized(store.farmers, phoneNumber)) {
           ussdReply(
@@ -1870,6 +1953,18 @@ const server = http.createServer(async (req, res) => {
           );
           return;
         }
+        if (findUserByPhone(store, phoneNumber)) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `This phone number already has an account.\nSupport: ${USSD_HELP_PHONE}`,
+              `Nambari hii tayari ina akaunti.\nMsaada: ${USSD_HELP_PHONE}`
+            ),
+            true
+          );
+          return;
+        }
 
         const registeredFarmer = registerFarmerFromUssd(store, {
           phoneNumber,
@@ -1878,6 +1973,7 @@ const server = http.createServer(async (req, res) => {
           location,
           totalAcres,
           avocadoAcres,
+          pin,
           language: lang
         });
         writeStore(store);
@@ -1968,8 +2064,10 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/auth/login' && req.method === 'POST') {
     try {
       const payload = await readBody(req);
-      const username = normalizedUsername(payload.username);
-      const password = String(payload.password || '');
+      const identityRaw = clean(payload.username || payload.phone);
+      const secret = String(payload.password || payload.pin || '');
+      const username = normalizedUsername(identityRaw);
+      const phone = normalizePhone(identityRaw);
       const store = readStore();
 
       if (activeUserCount(store) === 0) {
@@ -1979,10 +2077,14 @@ const server = http.createServer(async (req, res) => {
         });
         return;
       }
+      if (!identityRaw || !secret) {
+        json(res, 422, { error: 'Username/phone and password/PIN are required.' });
+        return;
+      }
 
-      const user = findUserByUsername(store, username);
-      if (!user || user.status !== 'active' || !verifyPassword(password, user.password)) {
-        json(res, 401, { error: 'Invalid username or password' });
+      const user = findUserByUsername(store, username) || findUserByPhone(store, phone);
+      if (!user || user.status !== 'active' || !verifyPassword(secret, user.password)) {
+        json(res, 401, { error: 'Invalid username/phone or password/PIN' });
         return;
       }
 
@@ -1993,6 +2095,7 @@ const server = http.createServer(async (req, res) => {
       store.sessions[token] = {
         userId: user.id,
         username: user.username,
+        phone: user.phone || '',
         role: user.role,
         name: user.name,
         createdAt,
@@ -2015,6 +2118,7 @@ const server = http.createServer(async (req, res) => {
           user: {
             id: user.id,
             username: user.username,
+            phone: user.phone || '',
             role: user.role,
             name: user.name
           }
@@ -2035,34 +2139,31 @@ const server = http.createServer(async (req, res) => {
 
       const payload = await readBody(req);
       const name = clean(payload.name);
-      const phone = normalizePhone(payload.phone) || clean(payload.phone);
+      const phone = normalizePhone(payload.phone);
       const nationalId = cleanNationalId(payload.nationalId);
       const location = clean(payload.location);
       const preferredLanguageInput = parsePreferredLanguage(payload.preferredLanguage);
       const preferredLanguage = preferredLanguageInput.value;
-      const username = normalizedUsername(payload.username);
-      const password = String(payload.password || '');
-      const confirmPassword = String(payload.confirmPassword || '');
+      const pin = String(payload.pin || '');
+      const confirmPin = payload.confirmPin === undefined ? pin : String(payload.confirmPin || '');
       const notes = clean(payload.notes);
       const treesValue = payload.trees === undefined ? 0 : parseTrees(payload.trees);
       const trees = Number.isFinite(treesValue) ? Number(treesValue.toFixed(2)) : NaN;
       const hectares = resolveHectares(payload);
       const avocadoHectares = resolveAvocadoHectares(payload);
 
-      if (!name || !phone || !nationalId || !location || !username || !password || !confirmPassword) {
-        json(res, 422, { error: 'name, phone, nationalId, location, total area, area under avocado, username, password, and confirmPassword are required.' });
+      if (!name || !phone || !nationalId || !location || !pin || !confirmPin) {
+        json(res, 422, {
+          error: 'name, phone, nationalId, location, total area, area under avocado, pin, and confirmPin are required.'
+        });
         return;
       }
       if (!preferredLanguageInput.valid) {
         json(res, 422, { error: 'preferredLanguage must be en or sw.' });
         return;
       }
-      if (!/^[a-z0-9._-]{3,32}$/.test(username)) {
-        json(res, 422, { error: 'Username must be 3-32 chars and contain only letters, numbers, dot, underscore, or dash.' });
-        return;
-      }
-      if (!secureEquals(password, confirmPassword)) {
-        json(res, 422, { error: 'Password confirmation does not match.' });
+      if (!secureEquals(pin, confirmPin)) {
+        json(res, 422, { error: 'PIN confirmation does not match.' });
         return;
       }
       if (!Number.isFinite(trees) || trees < 0) {
@@ -2082,19 +2183,19 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const invalidPassword = validateNewPassword(password);
-      if (invalidPassword) {
-        json(res, 422, { error: invalidPassword });
+      const invalidPin = validateFarmerPin(pin);
+      if (invalidPin) {
+        json(res, 422, { error: invalidPin });
         return;
       }
 
       const store = readStore();
-      if (findUserByUsername(store, username)) {
-        json(res, 409, { error: 'Username is already taken.' });
-        return;
-      }
       if (findFarmerByPhone(store.farmers, phone)) {
         json(res, 409, { error: 'A farmer with this phone number already exists.' });
+        return;
+      }
+      if (findUserByPhone(store, phone)) {
+        json(res, 409, { error: 'An account with this phone number already exists.' });
         return;
       }
       if (findFarmerByNationalId(store.farmers, nationalId)) {
@@ -2102,13 +2203,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      const username = phone;
       const user = {
         id: id('USR'),
         username,
+        phone,
         name,
         role: 'farmer',
         status: 'active',
-        password: hashPassword(password),
+        password: hashPassword(pin),
         createdAt: nowIso(),
         updatedAt: nowIso()
       };
@@ -2138,6 +2241,7 @@ const server = http.createServer(async (req, res) => {
       store.sessions[token] = {
         userId: user.id,
         username: user.username,
+        phone: user.phone || '',
         role: user.role,
         name: user.name,
         createdAt,
@@ -2169,6 +2273,7 @@ const server = http.createServer(async (req, res) => {
           user: {
             id: user.id,
             username: user.username,
+            phone: user.phone || '',
             role: user.role,
             name: user.name
           },
@@ -2197,32 +2302,50 @@ const server = http.createServer(async (req, res) => {
         ? newPassword
         : String(payload.confirmPassword || '');
 
-      if (!currentPassword || !newPassword) {
-        json(res, 422, { error: 'Current and new password are required.' });
-        return;
-      }
-      if (!secureEquals(newPassword, confirmPassword)) {
-        json(res, 422, { error: 'New password and confirmation do not match.' });
-        return;
-      }
-      if (secureEquals(currentPassword, newPassword)) {
-        json(res, 422, { error: 'New password must be different from current password.' });
-        return;
-      }
-
-      const invalidPassword = validateNewPassword(newPassword);
-      if (invalidPassword) {
-        json(res, 422, { error: invalidPassword });
-        return;
-      }
-
       const user = store.users.find((row) => row.id === auth.session.userId && row.status === 'active');
       if (!user) {
         json(res, 401, { error: 'Session is no longer valid. Please sign in again.' });
         return;
       }
+      const updatingPin = user.role === 'farmer';
+
+      if (!currentPassword || !newPassword) {
+        json(res, 422, {
+          error: updatingPin
+            ? 'Current and new PIN are required.'
+            : 'Current and new password are required.'
+        });
+        return;
+      }
+      if (!secureEquals(newPassword, confirmPassword)) {
+        json(res, 422, {
+          error: updatingPin
+            ? 'New PIN and confirmation do not match.'
+            : 'New password and confirmation do not match.'
+        });
+        return;
+      }
+      if (secureEquals(currentPassword, newPassword)) {
+        json(res, 422, {
+          error: updatingPin
+            ? 'New PIN must be different from current PIN.'
+            : 'New password must be different from current password.'
+        });
+        return;
+      }
+
+      const invalidCredential = updatingPin
+        ? validateFarmerPin(newPassword)
+        : validateNewPassword(newPassword);
+      if (invalidCredential) {
+        json(res, 422, { error: invalidCredential });
+        return;
+      }
+
       if (!verifyPassword(currentPassword, user.password)) {
-        json(res, 401, { error: 'Current password is incorrect.' });
+        json(res, 401, {
+          error: updatingPin ? 'Current PIN is incorrect.' : 'Current password is incorrect.'
+        });
         return;
       }
 
@@ -2238,7 +2361,9 @@ const server = http.createServer(async (req, res) => {
         action: 'auth.password_change',
         entity: 'user',
         entityId: user.id,
-        details: 'Password changed by signed-in user.'
+        details: updatingPin
+          ? 'PIN changed by signed-in farmer.'
+          : 'Password changed by signed-in user.'
       });
 
       writeStore(store);
@@ -2393,6 +2518,7 @@ const server = http.createServer(async (req, res) => {
         user: {
           id: auth.session.userId,
           username: auth.session.username,
+          phone: auth.session.phone || '',
           role: auth.session.role,
           name: auth.session.name
         },

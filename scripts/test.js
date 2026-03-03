@@ -76,8 +76,9 @@ async function run() {
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
   const additionalAgentEmail = 'mary.wanjiku@agemlimited.com';
   const agentRecoveryCode = 'AgentRecovery#2026';
-  const farmerSelfUsername = 'grower01';
-  const farmerSelfPassword = 'GrowerPass#2026!';
+  const farmerSelfPhone = '254700111222';
+  const farmerSelfPin = '1728';
+  const farmerSelfPinUpdated = '1839';
   const ussdSecret = 'UssdSecret#2026';
   const ussdCode = '*483#';
 
@@ -236,48 +237,71 @@ async function run() {
       method: 'POST',
       body: {
         name: 'Self Grower',
-        phone: '254700111222',
+        phone: farmerSelfPhone,
         nationalId: '11223344',
         location: 'Muranga',
         preferredLanguage: 'sw',
         hectares: 1.2,
         avocadoHectares: 0.8,
-        username: farmerSelfUsername,
-        password: farmerSelfPassword,
-        confirmPassword: farmerSelfPassword
+        pin: farmerSelfPin,
+        confirmPin: farmerSelfPin
       },
       expectStatus: 201
     });
     assert.strictEqual(selfRegister.data.user.role, 'farmer');
+    assert.strictEqual(selfRegister.data.user.username, farmerSelfPhone);
     assert.ok(selfRegister.data.farmerId, 'Farmer ID missing after self-registration');
 
     await request(baseUrl, '/api/auth/register-farmer', {
       method: 'POST',
       body: {
         name: 'Duplicate Grower',
-        phone: '254700111222',
+        phone: farmerSelfPhone,
         nationalId: '55443322',
         location: 'Muranga',
         hectares: 1.1,
         avocadoHectares: 0.6,
-        username: 'grower02',
-        password: farmerSelfPassword,
-        confirmPassword: farmerSelfPassword
+        pin: '1944',
+        confirmPin: '1944'
       },
       expectStatus: 409
     });
 
     const farmerLogin = await request(baseUrl, '/api/auth/login', {
       method: 'POST',
-      body: { username: farmerSelfUsername.toUpperCase(), password: farmerSelfPassword },
+      body: { username: `+${farmerSelfPhone}`, password: farmerSelfPin },
       expectStatus: 200
     });
-    const farmerToken = farmerLogin.data.token;
+    let farmerToken = farmerLogin.data.token;
     const farmerMe = await request(baseUrl, '/api/auth/me', {
       token: farmerToken,
       expectStatus: 200
     });
-    assert.strictEqual(farmerMe.data.user.username, farmerSelfUsername);
+    assert.strictEqual(farmerMe.data.user.username, farmerSelfPhone);
+
+    await request(baseUrl, '/api/auth/change-password', {
+      method: 'POST',
+      token: farmerToken,
+      body: {
+        currentPassword: farmerSelfPin,
+        newPassword: farmerSelfPinUpdated,
+        confirmPassword: farmerSelfPinUpdated
+      },
+      expectStatus: 200
+    });
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { username: farmerSelfPhone, password: farmerSelfPin },
+      expectStatus: 401
+    });
+
+    const farmerLoginUpdated = await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: farmerSelfPhone, pin: farmerSelfPinUpdated },
+      expectStatus: 200
+    });
+    farmerToken = farmerLoginUpdated.data.token;
 
     const farmer = await request(baseUrl, '/api/farmers', {
       method: 'POST',
@@ -796,7 +820,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownStep1.includes('Step 1/5'), 'USSD registration should prompt for name');
+    assert.ok(ussdUnknownStep1.includes('Step 1/7'), 'USSD registration should prompt for name');
 
     const ussdUnknownStep2 = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
@@ -813,7 +837,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownStep2.includes('Step 2/5'), 'USSD registration should prompt for National ID');
+    assert.ok(ussdUnknownStep2.includes('Step 2/7'), 'USSD registration should prompt for National ID');
 
     const ussdUnknownStep3 = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
@@ -830,7 +854,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownStep3.includes('Step 3/5'), 'USSD registration should prompt for location');
+    assert.ok(ussdUnknownStep3.includes('Step 3/7'), 'USSD registration should prompt for location');
 
     const ussdUnknownStep4 = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
@@ -847,7 +871,7 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownStep4.includes('Step 4/5'), 'USSD registration should prompt for total acres');
+    assert.ok(ussdUnknownStep4.includes('Step 4/7'), 'USSD registration should prompt for total acres');
 
     const ussdUnknownStep5 = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
@@ -864,7 +888,41 @@ async function run() {
       responseType: 'text',
       expectStatus: 200
     });
-    assert.ok(ussdUnknownStep5.includes('Step 5/5'), 'USSD registration should prompt for avocado acres');
+    assert.ok(ussdUnknownStep5.includes('Step 5/7'), 'USSD registration should prompt for avocado acres');
+
+    const ussdUnknownStep6 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step6',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566*Kisumu*2.4*1.6'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep6.includes('Step 6/7'), 'USSD registration should prompt for PIN');
+
+    const ussdUnknownStep7 = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-unknown-step7',
+        serviceCode: ussdCode,
+        phoneNumber: '254799000000',
+        text: '1*1*Jane Atieno*33445566*Kisumu*2.4*1.6*2468'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdUnknownStep7.includes('Step 7/7'), 'USSD registration should confirm PIN');
 
     const ussdUnknownComplete = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
@@ -876,7 +934,7 @@ async function run() {
         sessionId: 'sess-unknown-complete',
         serviceCode: ussdCode,
         phoneNumber: '254799000000',
-        text: '1*1*Jane Atieno*33445566*Kisumu*2.4*1.6'
+        text: '1*1*Jane Atieno*33445566*Kisumu*2.4*1.6*2468*2468'
       }).toString(),
       responseType: 'text',
       expectStatus: 200

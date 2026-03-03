@@ -73,14 +73,14 @@ const elements = {
   registerAvocadoAreaHectares: document.getElementById('registerAvocadoAreaHectares'),
   registerAvocadoAreaAcres: document.getElementById('registerAvocadoAreaAcres'),
   registerAvocadoAreaSquareFeet: document.getElementById('registerAvocadoAreaSquareFeet'),
-  registerUsername: document.getElementById('registerUsername'),
-  registerPassword: document.getElementById('registerPassword'),
-  registerConfirmPassword: document.getElementById('registerConfirmPassword'),
+  registerPin: document.getElementById('registerPin'),
+  registerConfirmPin: document.getElementById('registerConfirmPin'),
   registerMsg: document.getElementById('registerMsg'),
   changePasswordForm: document.getElementById('changePasswordForm'),
   currentPassword: document.getElementById('currentPassword'),
   newPassword: document.getElementById('newPassword'),
   confirmNewPassword: document.getElementById('confirmNewPassword'),
+  changePasswordBtn: document.getElementById('changePasswordBtn'),
   changePasswordMsg: document.getElementById('changePasswordMsg'),
   logoutBtn: document.getElementById('logoutBtn'),
   profilePhoto: document.getElementById('profilePhoto'),
@@ -462,18 +462,18 @@ function bindAuth() {
       return;
     }
 
-    const username = elements.loginUsername.value.trim();
-    const password = elements.loginPassword.value;
+    const identity = elements.loginUsername.value.trim();
+    const secret = elements.loginPassword.value;
 
-    if (!username || !password) {
-      elements.authMsg.textContent = 'Username and password are required.';
+    if (!identity || !secret) {
+      elements.authMsg.textContent = 'Username/phone and password/PIN are required.';
       return;
     }
 
     try {
       const response = await apiRequest('/api/auth/login', {
         method: 'POST',
-        body: { username, password },
+        body: { username: identity, password: secret },
         auth: false
       });
 
@@ -522,9 +522,8 @@ function bindAuth() {
     const avocadoAreaHectares = elements.registerAvocadoAreaHectares.value.trim();
     const avocadoAreaAcres = elements.registerAvocadoAreaAcres.value.trim();
     const avocadoAreaSquareFeet = elements.registerAvocadoAreaSquareFeet.value.trim();
-    const username = elements.registerUsername.value.trim();
-    const password = elements.registerPassword.value;
-    const confirmPassword = elements.registerConfirmPassword.value;
+    const pin = elements.registerPin.value.trim();
+    const confirmPin = elements.registerConfirmPin.value.trim();
 
     const totalAreaPayload = buildAreaPayload(areaHectares, areaAcres, areaSquareFeet);
     const avocadoAreaPayload = buildAreaPayload(avocadoAreaHectares, avocadoAreaAcres, avocadoAreaSquareFeet);
@@ -538,11 +537,18 @@ function bindAuth() {
       !location ||
       (!areaHectares && !areaAcres && !areaSquareFeet) ||
       (!avocadoAreaHectares && !avocadoAreaAcres && !avocadoAreaSquareFeet) ||
-      !username ||
-      !password ||
-      !confirmPassword
+      !pin ||
+      !confirmPin
     ) {
       elements.registerMsg.textContent = 'All registration fields are required.';
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      elements.registerMsg.textContent = 'PIN must be exactly 4 digits.';
+      return;
+    }
+    if (pin !== confirmPin) {
+      elements.registerMsg.textContent = 'PIN confirmation does not match.';
       return;
     }
     if (!Number.isFinite(totalHectares) || totalHectares <= 0) {
@@ -572,9 +578,8 @@ function bindAuth() {
           avocadoHectares: avocadoAreaPayload.hectares,
           avocadoAcres: avocadoAreaPayload.acres,
           avocadoSquareFeet: avocadoAreaPayload.squareFeet,
-          username,
-          password,
-          confirmPassword
+          pin,
+          confirmPin
         }
       });
 
@@ -615,9 +620,12 @@ function bindAuth() {
     const currentPassword = elements.currentPassword.value;
     const newPassword = elements.newPassword.value;
     const confirmPassword = elements.confirmNewPassword.value;
+    const updatingPin = isAuthenticated() && state.auth.user.role === 'farmer';
 
     if (!currentPassword || !newPassword || !confirmPassword) {
-      elements.changePasswordMsg.textContent = 'All password fields are required.';
+      elements.changePasswordMsg.textContent = updatingPin
+        ? 'All PIN fields are required.'
+        : 'All password fields are required.';
       return;
     }
 
@@ -628,7 +636,9 @@ function bindAuth() {
       });
 
       elements.changePasswordForm.reset();
-      elements.changePasswordMsg.textContent = 'Password updated successfully.';
+      elements.changePasswordMsg.textContent = updatingPin
+        ? 'PIN updated successfully.'
+        : 'Password updated successfully.';
     } catch (error) {
       elements.changePasswordMsg.textContent = error.message;
     }
@@ -2729,6 +2739,7 @@ function updateAuthUi() {
     elements.roleSelect.value = state.role;
   }
 
+  updateCredentialUiForRole();
   renderDashboardAccount();
   updateRoleHint();
 }
@@ -4136,6 +4147,27 @@ function currentRole() {
 
 function isAuthenticated() {
   return Boolean(state.auth && state.auth.token && state.auth.user);
+}
+
+function updateCredentialUiForRole() {
+  const isFarmer = isAuthenticated() && state.auth.user.role === 'farmer';
+
+  if (isFarmer) {
+    elements.currentPassword.placeholder = 'Current PIN';
+    elements.newPassword.placeholder = 'New 4-digit PIN';
+    elements.confirmNewPassword.placeholder = 'Confirm new 4-digit PIN';
+    if (elements.changePasswordBtn) {
+      elements.changePasswordBtn.textContent = 'Change PIN';
+    }
+    return;
+  }
+
+  elements.currentPassword.placeholder = 'Current password';
+  elements.newPassword.placeholder = 'New password (min 10 chars)';
+  elements.confirmNewPassword.placeholder = 'Confirm new password';
+  if (elements.changePasswordBtn) {
+    elements.changePasswordBtn.textContent = 'Change Password';
+  }
 }
 
 function currentUserPhotoKey() {

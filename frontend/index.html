@@ -27,8 +27,8 @@
         <p class="auth-state" id="authState">Not signed in</p>
 
         <form id="loginForm" class="auth-form">
-          <input required id="loginUsername" placeholder="Username" autocomplete="username">
-          <input required id="loginPassword" type="password" placeholder="Password" autocomplete="current-password">
+          <input required id="loginUsername" placeholder="Username or phone number" autocomplete="username">
+          <input required id="loginPassword" type="password" placeholder="Password or 4-digit PIN" autocomplete="current-password">
           <button class="primary" type="submit">Sign In</button>
         </form>
 
@@ -55,9 +55,8 @@
               <input id="registerAvocadoAreaAcres" type="number" min="0.01" step="0.01" placeholder="Avocado acres">
               <input id="registerAvocadoAreaSquareFeet" type="number" min="1" step="1" placeholder="Avocado square feet">
             </div>
-            <input id="registerUsername" placeholder="Choose username">
-            <input id="registerPassword" type="password" placeholder="Choose password">
-            <input id="registerConfirmPassword" type="password" placeholder="Confirm password">
+            <input id="registerPin" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="Choose 4-digit PIN">
+            <input id="registerConfirmPin" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="Confirm 4-digit PIN">
             <button class="primary" type="submit">Create Farmer Account</button>
           </form>
           <div class="success" id="registerMsg"></div>
@@ -120,7 +119,7 @@
             <input id="currentPassword" type="password" placeholder="Current password" autocomplete="current-password">
             <input id="newPassword" type="password" placeholder="New password (min 10 chars)" autocomplete="new-password">
             <input id="confirmNewPassword" type="password" placeholder="Confirm new password" autocomplete="new-password">
-            <button class="secondary" type="submit">Change Password</button>
+            <button class="secondary" id="changePasswordBtn" type="submit">Change Password</button>
           </form>
 
           <div class="success" id="changePasswordMsg"></div>
