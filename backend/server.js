@@ -817,15 +817,37 @@ function parseNumber(value) {
 function parseTrees(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return 0;
-  const num = Number(raw.replace(/,/g, ''));
+  const direct = Number(raw.replace(/,/g, ''));
+  if (Number.isFinite(direct)) return direct;
+  const match = raw.match(/-?\d[\d,]*(?:\.\d+)?/);
+  if (!match) return NaN;
+  const num = Number(match[0].replace(/,/g, ''));
   return Number.isFinite(num) ? num : NaN;
 }
 
 function parseArea(value) {
   const raw = String(value ?? '').trim();
   if (!raw) return NaN;
-  const num = Number(raw.replace(/,/g, ''));
+  const direct = Number(raw.replace(/,/g, ''));
+  if (Number.isFinite(direct)) return direct;
+  const match = raw.match(/-?\d[\d,]*(?:\.\d+)?/);
+  if (!match) return NaN;
+  const num = Number(match[0].replace(/,/g, ''));
   return Number.isFinite(num) ? num : NaN;
+}
+
+function parseAreaToHectares(value, defaultUnit = 'hectares') {
+  const raw = clean(value);
+  if (!raw) return NaN;
+  const num = parseArea(raw);
+  if (!Number.isFinite(num)) return NaN;
+  const lower = raw.toLowerCase();
+  if (/(hectare|hectares|\bha\b)/.test(lower)) return num;
+  if (/(acre|acres|acreage)/.test(lower)) return num * HECTARES_PER_ACRE;
+  if (/(square\s*feet|square\s*foot|sq\s*ft|sqft|ft2|ft²)/.test(lower)) return num / SQFT_PER_HECTARE;
+  if (defaultUnit === 'acres') return num * HECTARES_PER_ACRE;
+  if (defaultUnit === 'squareFeet') return num / SQFT_PER_HECTARE;
+  return num;
 }
 
 function resolveHectaresFromValues(hectaresRaw, acresRaw, squareFeetRaw) {
@@ -833,16 +855,12 @@ function resolveHectaresFromValues(hectaresRaw, acresRaw, squareFeetRaw) {
   const hasAcres = clean(acresRaw) !== '';
   const hasSquareFeet = clean(squareFeetRaw) !== '';
 
-  if (hasHectares) return parseArea(hectaresRaw);
+  if (hasHectares) return parseAreaToHectares(hectaresRaw, 'hectares');
   if (hasAcres) {
-    const acres = parseArea(acresRaw);
-    if (!Number.isFinite(acres)) return NaN;
-    return acres * HECTARES_PER_ACRE;
+    return parseAreaToHectares(acresRaw, 'acres');
   }
   if (hasSquareFeet) {
-    const squareFeet = parseArea(squareFeetRaw);
-    if (!Number.isFinite(squareFeet)) return NaN;
-    return squareFeet / SQFT_PER_HECTARE;
+    return parseAreaToHectares(squareFeetRaw, 'squareFeet');
   }
   return NaN;
 }
@@ -964,6 +982,88 @@ function validateFarmer(payload) {
   return '';
 }
 
+function formatAreaHint(hectares) {
+  const num = Number(hectares);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  const acres = num * ACRES_PER_HECTARE;
+  return `${num.toFixed(3)} ha (~${acres.toFixed(2)} acres)`;
+}
+
+function buildFarmerImportIssue(mapped, invalid) {
+  const totalHectares = resolveHectares(mapped);
+  const avocadoHectares = resolveAvocadoHectares(mapped);
+  const issue = {
+    error: invalid,
+    code: 'invalid_import_row',
+    suggestion: 'Check the row fields and retry import.'
+  };
+
+  if (invalid === 'name is required') {
+    issue.code = 'missing_name';
+    issue.suggestion = 'Fill farmer name (or first and last seller names) in this row.';
+    return issue;
+  }
+  if (invalid === 'phone is required') {
+    issue.code = 'missing_phone';
+    issue.suggestion = 'Fill a valid farmer phone number (Kenya format supported: 07..., 7..., or 254...).';
+    return issue;
+  }
+  if (invalid === 'nationalId is required') {
+    issue.code = 'missing_national_id';
+    issue.suggestion = 'Fill the National ID / Identification Number column for this farmer.';
+    return issue;
+  }
+  if (invalid === 'location is required') {
+    issue.code = 'missing_location';
+    issue.suggestion = 'Fill location (ward/county/area) for this farmer.';
+    return issue;
+  }
+  if (invalid === 'hectares/acres/square feet is required') {
+    issue.code = 'missing_total_area';
+    issue.suggestion = 'Fill total farm size with a number (e.g., 2.5, 5 acres, or 1 hectare).';
+    return issue;
+  }
+  if (invalid === 'avocadoHectares/avocadoAcres/avocadoSquareFeet is required') {
+    issue.code = 'missing_avocado_area';
+    issue.suggestion = 'Fill area under avocado with a number (e.g., 1.2, 3 acres, or 0.8 hectare).';
+    return issue;
+  }
+  if (invalid === 'hectares must be greater than 0') {
+    issue.code = 'invalid_total_area';
+    issue.suggestion = 'Set total farm size to a value greater than zero.';
+    return issue;
+  }
+  if (invalid === 'area under avocado must be greater than 0') {
+    issue.code = 'invalid_avocado_area';
+    issue.suggestion = 'Set area under avocado to a value greater than zero.';
+    return issue;
+  }
+  if (invalid === 'area under avocado cannot be greater than total farm size') {
+    issue.code = 'avocado_area_exceeds_total';
+    issue.suggestion =
+      Number.isFinite(totalHectares) && totalHectares > 0
+        ? `Set area under avocado to <= total farm size (${formatAreaHint(totalHectares)}), or fix units in the source row.`
+        : 'Set area under avocado to a value less than or equal to total farm size.';
+    issue.observed = {
+      totalHectares: Number.isFinite(totalHectares) ? Number(totalHectares.toFixed(3)) : '',
+      avocadoHectares: Number.isFinite(avocadoHectares) ? Number(avocadoHectares.toFixed(3)) : ''
+    };
+    return issue;
+  }
+  if (invalid === 'trees must be a number') {
+    issue.code = 'invalid_tree_count';
+    issue.suggestion = 'Use a numeric value for tree count (e.g., 400).';
+    return issue;
+  }
+  if (invalid === 'preferredLanguage must be en or sw') {
+    issue.code = 'invalid_language';
+    issue.suggestion = 'Use English/en/1 or Kiswahili/sw/2 for preferred language.';
+    return issue;
+  }
+
+  return issue;
+}
+
 function normalizeAvocadoVariety(value) {
   const upper = clean(value).toUpperCase();
   if (upper === 'HASS') return 'Hass';
@@ -1075,19 +1175,24 @@ function firstNonEmpty(values) {
   return '';
 }
 
+function joinNonEmpty(values, separator = ' ') {
+  return values
+    .map((value) => clean(value))
+    .filter(Boolean)
+    .join(separator);
+}
+
 function mapFarmerImportRecord(raw) {
   const flat = {};
   for (const [key, value] of Object.entries(raw || {})) {
     flat[normalizeImportHeader(key)] = value;
   }
 
-  const name = firstNonEmpty([
-    flat.name,
-    flat.farmername,
-    flat.fullname,
-    flat.farmerfullname,
-    flat.growername
-  ]);
+  const firstName = firstNonEmpty([flat.firstname, flat.firstnameseller, flat.sellerfirstname]);
+  const middleName = firstNonEmpty([flat.middlename, flat.sellermiddlename]);
+  const lastName = firstNonEmpty([flat.lastname, flat.lastnameseller, flat.sellerlastname, flat.surname]);
+  const composedName = joinNonEmpty([firstName, middleName, lastName]);
+  const name = firstNonEmpty([flat.name, flat.farmername, flat.fullname, flat.farmerfullname, flat.growername, flat.sellername, composedName]);
   const phone = firstNonEmpty([
     flat.phone,
     flat.phonenumber,
@@ -1103,21 +1208,55 @@ function mapFarmerImportRecord(raw) {
     flat.idno,
     flat.nationalidno,
     flat.governmentid,
-    flat.governmentidnumber
+    flat.governmentidnumber,
+    flat.identificationnumber
   ]);
-  const location = firstNonEmpty([
+  const explicitLocation = firstNonEmpty([
     flat.location,
     flat.area,
-    flat.ward,
-    flat.county,
     flat.village,
-    flat.region
+    flat.farmlocation,
+    flat.nearestcollectionpointdepot
   ]);
-  const notes = firstNonEmpty([flat.notes, flat.note, flat.comments, flat.remarks, flat.description]);
-  const treesRaw = firstNonEmpty([flat.trees, flat.treecount, flat.numberoftrees, flat.treequantity, flat.treenumber]);
+  const ward = firstNonEmpty([flat.ward, flat.locationward, flat.wardname, flat['2']]);
+  const county = firstNonEmpty([flat.county, flat.region, flat.locationcounty, flat.countyname, flat['3']]);
+  const wardCountyLocation = joinNonEmpty([ward, county], ', ');
+  const location = firstNonEmpty([explicitLocation, wardCountyLocation, ward, county, flat.locationofsocietycooperative]);
+  const notes = firstNonEmpty([
+    flat.notes,
+    flat.note,
+    flat.comments,
+    flat.remarks,
+    flat.description,
+    flat.additionalinformationcommentsnotes
+  ]);
+  const treesRaw = firstNonEmpty([
+    flat.trees,
+    flat.treecount,
+    flat.numberoftrees,
+    flat.treequantity,
+    flat.treenumber,
+    flat.numberapproximateofhasstrees,
+    flat.numberofhasstrees
+  ]);
   const trees = parseTrees(treesRaw);
-  const hectaresRaw = firstNonEmpty([flat.hectares, flat.hectare, flat.farmsizeha, flat.farmsizehectares, flat.landsizehectares]);
-  const acresRaw = firstNonEmpty([flat.acres, flat.acre, flat.acreage, flat.farmsizeacres, flat.landsizeacres]);
+  const hectaresRaw = firstNonEmpty([
+    flat.hectares,
+    flat.hectare,
+    flat.farmsizeha,
+    flat.farmsizehectares,
+    flat.landsizehectares,
+    flat.totalfarmsizehectares
+  ]);
+  const acresRaw = firstNonEmpty([
+    flat.acres,
+    flat.acre,
+    flat.acreage,
+    flat.farmsizeacres,
+    flat.landsizeacres,
+    flat.farmsize,
+    flat.totalfarmsize
+  ]);
   const squareFeetRaw = firstNonEmpty([
     flat.squarefeet,
     flat.squarefoot,
@@ -1139,7 +1278,9 @@ function mapFarmerImportRecord(raw) {
     flat.avocadoacreage,
     flat.areaunderavocadoacres,
     flat.avocadoareaacres,
-    flat.avocadoplotacres
+    flat.avocadoplotacres,
+    flat.areaunderhassavocado,
+    flat.areaunderavocado
   ]);
   const avocadoSquareFeetRaw = firstNonEmpty([
     flat.avocadosquarefeet,
@@ -2968,7 +3109,8 @@ const server = http.createServer(async (req, res) => {
         const mapped = mapFarmerImportRecord(raw);
         const invalid = validateFarmer(mapped);
         if (invalid) {
-          errors.push({ row: idx + 1, error: invalid });
+          const issue = buildFarmerImportIssue(mapped, invalid);
+          errors.push({ row: idx + 1, ...issue });
           return;
         }
 
@@ -2987,7 +3129,9 @@ const server = http.createServer(async (req, res) => {
             ) {
               errors.push({
                 row: idx + 1,
-                error: 'Conflicting duplicate match: phone and National ID belong to different farmers'
+                error: 'Conflicting duplicate match: phone and National ID belong to different farmers',
+                code: 'duplicate_conflict',
+                suggestion: 'Review this row manually: phone and National ID currently belong to different existing farmers.'
               });
               return;
             }
@@ -2997,7 +3141,9 @@ const server = http.createServer(async (req, res) => {
             if (!syncResult.ok) {
               errors.push({
                 row: idx + 1,
-                error: syncResult.error
+                error: syncResult.error,
+                code: 'identity_sync_conflict',
+                suggestion: 'Check phone and name values, then retry overwrite for this specific row.'
               });
               return;
             }
@@ -3026,7 +3172,12 @@ const server = http.createServer(async (req, res) => {
             farmersByNationalId.set(nationalIdKey, existing);
             updated.push(existing);
           } else {
-            errors.push({ row: idx + 1, error: 'Duplicate farmer (matching phone or National ID)' });
+            errors.push({
+              row: idx + 1,
+              error: 'Duplicate farmer (matching phone or National ID)',
+              code: 'duplicate_farmer',
+              suggestion: 'Use overwrite mode to update existing farmer details, or keep skip mode to retain old data.'
+            });
           }
           return;
         }
@@ -3113,6 +3264,7 @@ const server = http.createServer(async (req, res) => {
           duplicateMode: onDuplicate,
           sendOnboardingSms,
           smsSent: importSmsLogs.length,
+          anomalyCount: errors.filter((entry) => clean(entry.suggestion)).length,
           errors: errors.slice(0, 250)
         }
       });
