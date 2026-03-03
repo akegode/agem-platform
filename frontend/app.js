@@ -129,6 +129,17 @@ const elements = {
   farmerImportMsg: document.getElementById('farmerImportMsg'),
   farmerImportSummary: document.getElementById('farmerImportSummary'),
   farmerImportErrors: document.getElementById('farmerImportErrors'),
+  farmerPinCard: document.getElementById('farmerPinCard'),
+  farmerPinForm: document.getElementById('farmerPinForm'),
+  farmerPinSearch: document.getElementById('farmerPinSearch'),
+  farmerPinSearchBtn: document.getElementById('farmerPinSearchBtn'),
+  farmerPinFarmer: document.getElementById('farmerPinFarmer'),
+  farmerPinValue: document.getElementById('farmerPinValue'),
+  farmerPinConfirm: document.getElementById('farmerPinConfirm'),
+  farmerPinSubmitBtn: document.getElementById('farmerPinSubmitBtn'),
+  farmerPinGenerateBtn: document.getElementById('farmerPinGenerateBtn'),
+  farmerPinMsg: document.getElementById('farmerPinMsg'),
+  farmerPinCredentials: document.getElementById('farmerPinCredentials'),
   farmerTableWrap: document.getElementById('farmerTableWrap'),
   agentForm: document.getElementById('agentForm'),
   agentName: document.getElementById('agentName'),
@@ -991,6 +1002,177 @@ function bindFarmers() {
     }
   });
 
+  const setFarmerPinControls = (disabled) => {
+    if (!elements.farmerPinForm) return;
+    const controls = [
+      elements.farmerPinSearch,
+      elements.farmerPinSearchBtn,
+      elements.farmerPinFarmer,
+      elements.farmerPinValue,
+      elements.farmerPinConfirm,
+      elements.farmerPinSubmitBtn,
+      elements.farmerPinGenerateBtn
+    ];
+    controls.forEach((control) => {
+      if (control) control.disabled = disabled;
+    });
+  };
+
+  const showFarmerPinCredential = (payload, usedGeneratedPin) => {
+    if (!elements.farmerPinCredentials) return;
+    const username = String(payload?.username || '').trim();
+    const phone = String(payload?.phone || '').trim();
+    const generatedPin = String(payload?.generatedPin || '').trim();
+
+    if (!username) {
+      elements.farmerPinCredentials.hidden = true;
+      elements.farmerPinCredentials.textContent = '';
+      return;
+    }
+
+    const pinLine = usedGeneratedPin && generatedPin
+      ? `Generated PIN: <code>${escapeHtml(generatedPin)}</code><br>`
+      : '';
+    elements.farmerPinCredentials.hidden = false;
+    elements.farmerPinCredentials.innerHTML = `
+      <strong>Portal access ${payload?.accountCreated ? 'created' : 'updated'}.</strong><br>
+      Farmer: <code>${escapeHtml(String(payload?.farmerName || '-'))}</code><br>
+      Login phone: <code>${escapeHtml(phone || username)}</code><br>
+      Username: <code>${escapeHtml(username)}</code><br>
+      ${pinLine}
+      <span class="meta compact">Share the phone and PIN with the farmer. They can later change PIN in account settings.</span>
+    `;
+  };
+
+  const runFarmerPinSearch = async () => {
+    if (currentRole() !== 'admin') {
+      elements.farmerPinMsg.textContent = 'Only admin can set or reset farmer PIN.';
+      return;
+    }
+
+    const query = String(elements.farmerPinSearch?.value || '').trim();
+    const selectedBefore = elements.farmerPinFarmer?.value || '';
+
+    if (API.enabled) {
+      if (!isAuthenticated()) {
+        elements.farmerPinMsg.textContent = 'Sign in first to manage farmer PIN.';
+        return;
+      }
+
+      const params = new URLSearchParams({ limit: '500' });
+      if (query) params.set('q', query);
+      const response = await apiRequest(`/api/farmers?${params.toString()}`);
+      const rows = Array.isArray(response.data) ? response.data : [];
+      hydrateFarmerPinOptions(rows, selectedBefore);
+      elements.farmerPinMsg.textContent = `Loaded ${rows.length} farmer record(s).`;
+      return;
+    }
+
+    const rows = state.farmers.filter((row) => {
+      if (!query) return true;
+      const q = query.toLowerCase();
+      return [row.name, row.phone, row.nationalId, row.location]
+        .some((field) => String(field || '').toLowerCase().includes(q));
+    });
+    hydrateFarmerPinOptions(rows, selectedBefore);
+    elements.farmerPinMsg.textContent = 'PIN tool works in backend mode only.';
+  };
+
+  const submitFarmerPinReset = async (generate = false) => {
+    clearMessages();
+    if (currentRole() !== 'admin') {
+      elements.farmerPinMsg.textContent = 'Only admin can set or reset farmer PIN.';
+      return;
+    }
+    if (!API.enabled) {
+      elements.farmerPinMsg.textContent = 'PIN management requires backend mode.';
+      return;
+    }
+    if (!isAuthenticated()) {
+      elements.farmerPinMsg.textContent = 'Sign in first to manage farmer PIN.';
+      return;
+    }
+
+    const farmerId = String(elements.farmerPinFarmer?.value || '').trim();
+    const pin = String(elements.farmerPinValue?.value || '').trim();
+    const confirmPin = String(elements.farmerPinConfirm?.value || '').trim();
+
+    if (!farmerId) {
+      elements.farmerPinMsg.textContent = 'Select a farmer first.';
+      return;
+    }
+    if (!generate) {
+      if (!pin || !confirmPin) {
+        elements.farmerPinMsg.textContent = 'Enter and confirm a 4-digit PIN.';
+        return;
+      }
+      if (!/^\d{4}$/.test(pin)) {
+        elements.farmerPinMsg.textContent = 'PIN must be exactly 4 digits.';
+        return;
+      }
+      if (pin !== confirmPin) {
+        elements.farmerPinMsg.textContent = 'PIN confirmation does not match.';
+        return;
+      }
+    }
+
+    setFarmerPinControls(true);
+    try {
+      const response = await apiRequest(`/api/farmers/${encodeURIComponent(farmerId)}/reset-pin`, {
+        method: 'POST',
+        body: generate ? { generate: true } : { pin, confirmPin }
+      });
+      elements.farmerPinValue.value = '';
+      elements.farmerPinConfirm.value = '';
+      showFarmerPinCredential(response.data || {}, generate);
+      elements.farmerPinMsg.textContent = generate
+        ? 'PIN generated and saved.'
+        : 'PIN updated successfully.';
+      await fetchAllData();
+    } catch (error) {
+      elements.farmerPinMsg.textContent = error.message;
+    } finally {
+      setFarmerPinControls(false);
+    }
+  };
+
+  if (elements.farmerPinSearchBtn) {
+    elements.farmerPinSearchBtn.addEventListener('click', async () => {
+      clearMessages();
+      try {
+        await runFarmerPinSearch();
+      } catch (error) {
+        elements.farmerPinMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.farmerPinSearch) {
+    elements.farmerPinSearch.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      clearMessages();
+      try {
+        await runFarmerPinSearch();
+      } catch (error) {
+        elements.farmerPinMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.farmerPinForm) {
+    elements.farmerPinForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      await submitFarmerPinReset(false);
+    });
+  }
+
+  if (elements.farmerPinGenerateBtn) {
+    elements.farmerPinGenerateBtn.addEventListener('click', async () => {
+      await submitFarmerPinReset(true);
+    });
+  }
+
   elements.farmerTableWrap.addEventListener('click', async (event) => {
     const button = event.target.closest('button[data-action]');
     if (!button) return;
@@ -1031,6 +1213,23 @@ function bindFarmers() {
       elements.farmerSubmitBtn.textContent = 'Update Farmer';
       elements.farmerCancelEditBtn.hidden = false;
       elements.farmerMsg.textContent = `Editing ${farmer.name}`;
+      return;
+    }
+
+    if (button.dataset.action === 'set-pin-farmer') {
+      if (currentRole() !== 'admin') {
+        elements.farmerMsg.textContent = 'Only admin can set/reset farmer PIN.';
+        return;
+      }
+
+      if (elements.farmerPinFarmer) {
+        elements.farmerPinFarmer.value = farmerId;
+      }
+      if (elements.farmerPinCard) {
+        elements.farmerPinCard.open = true;
+      }
+      elements.farmerPinValue?.focus();
+      elements.farmerPinMsg.textContent = `Ready to set PIN for ${button.dataset.name || 'selected farmer'}.`;
       return;
     }
 
@@ -2756,6 +2955,7 @@ function updatePermissionUi() {
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
+  const farmerPinManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const agentManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
 
   elements.farmerSubmitBtn.disabled = !farmersAllowed;
@@ -2763,6 +2963,13 @@ function updatePermissionUi() {
   elements.farmerImportBtn.disabled = !importAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
   elements.farmerImportNotifyBySms.disabled = !importAllowed;
+  if (elements.farmerPinSearch) elements.farmerPinSearch.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinSearchBtn) elements.farmerPinSearchBtn.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinFarmer) elements.farmerPinFarmer.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinValue) elements.farmerPinValue.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinConfirm) elements.farmerPinConfirm.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinSubmitBtn) elements.farmerPinSubmitBtn.disabled = !farmerPinManageAllowed;
+  if (elements.farmerPinGenerateBtn) elements.farmerPinGenerateBtn.disabled = !farmerPinManageAllowed;
   updateFarmerImportSmsUi();
   elements.agentName.disabled = !agentManageAllowed;
   elements.agentEmail.disabled = !agentManageAllowed;
@@ -2882,6 +3089,7 @@ function renderFarmers() {
 
   const canEdit = ['admin', 'agent'].includes(currentRole());
   const canDelete = currentRole() === 'admin';
+  const canSetPin = currentRole() === 'admin';
 
   const rows = state.farmers
     .slice(0, 200)
@@ -2889,9 +3097,11 @@ function renderFarmers() {
       const actions = canEdit
         ? `
           <button class="table-btn" data-action="edit-farmer" data-id="${escapeHtml(farmer.id)}">Edit</button>
+          ${canSetPin ? `<button class="table-btn" data-action="set-pin-farmer" data-id="${escapeHtml(farmer.id)}" data-name="${escapeHtml(farmer.name)}">Set PIN</button>` : ''}
           ${canDelete ? `<button class="table-btn danger" data-action="delete-farmer" data-id="${escapeHtml(farmer.id)}">Delete</button>` : ''}
         `
         : '-';
+      const portalAccess = farmer.hasPortalAccess ? 'Enabled' : 'Not Set';
 
       return `
         <tr>
@@ -2908,6 +3118,7 @@ function renderFarmers() {
           <td>${escapeHtml(formatAcres(farmer.avocadoHectares))}</td>
           <td>${escapeHtml(formatSquareFeet(farmer.avocadoHectares))}</td>
           <td>${escapeHtml(String(farmer.trees ?? '0'))}</td>
+          <td>${escapeHtml(portalAccess)}</td>
           <td>${escapeHtml(dateShort(farmer.updatedAt || farmer.createdAt))}</td>
           <td class="actions">${actions}</td>
         </tr>
@@ -2932,6 +3143,7 @@ function renderFarmers() {
           <th>Avocado Acres</th>
           <th>Avocado Sq Ft</th>
           <th>Trees</th>
+          <th>Portal Access</th>
           <th>Updated</th>
           <th>Actions</th>
         </tr>
@@ -3960,7 +4172,25 @@ function resetFarmerForm() {
   elements.farmerCancelEditBtn.hidden = true;
 }
 
+function hydrateFarmerPinOptions(rows = state.farmers, preferredId = '') {
+  if (!elements.farmerPinFarmer) return;
+
+  const options = rows
+    .slice(0, 500)
+    .map((farmer) => {
+      const label = `${farmer.name || '-'} | ${farmer.phone || '-'} | ID ${farmer.nationalId || '-'}`;
+      return `<option value="${escapeHtml(farmer.id)}">${escapeHtml(label)}</option>`;
+    })
+    .join('');
+
+  elements.farmerPinFarmer.innerHTML = '<option value="">Select farmer</option>' + options;
+  if (preferredId) {
+    elements.farmerPinFarmer.value = preferredId;
+  }
+}
+
 function hydrateFarmerSelectors() {
+  const selectedPinFarmerId = elements.farmerPinFarmer?.value || '';
   const options = state.farmers
     .map((farmer) => `<option value="${escapeHtml(farmer.id)}">${escapeHtml(farmer.name)} (${escapeHtml(farmer.location)})</option>`)
     .join('');
@@ -3969,6 +4199,7 @@ function hydrateFarmerSelectors() {
   elements.produceFarmer.innerHTML = options || fallback;
   elements.purchaseFarmer.innerHTML = options || fallback;
   elements.paymentFarmer.innerHTML = options || fallback;
+  hydrateFarmerPinOptions(state.farmers, selectedPinFarmerId);
   hydratePurchaseQcOptions();
 
   if (!API.enabled && currentSmsMode() === 'selected') {
@@ -4275,6 +4506,11 @@ function clearMessages() {
   elements.farmerImportSummary.textContent = '';
   elements.farmerImportErrors.innerHTML = '';
   elements.farmerImportErrors.classList.remove('import-errors');
+  elements.farmerPinMsg.textContent = '';
+  if (elements.farmerPinCredentials) {
+    elements.farmerPinCredentials.hidden = true;
+    elements.farmerPinCredentials.textContent = '';
+  }
   elements.agentMsg.textContent = '';
   elements.produceMsg.textContent = '';
   elements.purchaseMsg.textContent = '';

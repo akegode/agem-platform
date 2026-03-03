@@ -610,6 +610,112 @@ function findUserByPhone(store, phone) {
   );
 }
 
+function findFarmerUserById(store, userId) {
+  const target = clean(userId);
+  if (!target) return null;
+  return store.users.find((row) => row.id === target && row.role === 'farmer') || null;
+}
+
+function resolveFarmerPortalUser(store, farmer) {
+  if (!farmer) return null;
+  const byId = findFarmerUserById(store, farmer.userId);
+  if (byId) return byId;
+  const byPhone = findUserByPhone(store, farmer.phone);
+  if (byPhone && byPhone.role === 'farmer') return byPhone;
+  return null;
+}
+
+function ensureFarmerPortalUser(store, farmer, pin) {
+  const normalizedFarmerPhone = normalizePhone(farmer?.phone) || clean(farmer?.phone);
+  if (!normalizedFarmerPhone) {
+    return { error: 'Farmer phone number is required before setting a PIN.' };
+  }
+
+  const conflictByPhone = findUserByPhone(store, normalizedFarmerPhone);
+  if (conflictByPhone && conflictByPhone.role !== 'farmer') {
+    return { error: 'This phone number is already linked to a non-farmer account.' };
+  }
+
+  let user = resolveFarmerPortalUser(store, farmer);
+  if (!user && conflictByPhone && conflictByPhone.role === 'farmer') {
+    user = conflictByPhone;
+  }
+  if (user && conflictByPhone && conflictByPhone.id !== user.id) {
+    return { error: 'Phone number is linked to a different farmer account.' };
+  }
+
+  const conflictByUsername = findUserByUsername(store, normalizedFarmerPhone);
+  if (conflictByUsername && conflictByUsername.role !== 'farmer') {
+    return { error: 'This phone number conflicts with a non-farmer username.' };
+  }
+  if (!user && conflictByUsername && conflictByUsername.role === 'farmer') {
+    user = conflictByUsername;
+  }
+  if (user && conflictByUsername && conflictByUsername.id !== user.id) {
+    return { error: 'Username is linked to a different farmer account.' };
+  }
+
+  const now = nowIso();
+  let created = false;
+  if (!user) {
+    created = true;
+    user = {
+      id: id('USR'),
+      username: normalizedFarmerPhone,
+      phone: normalizedFarmerPhone,
+      name: clean(farmer.name),
+      role: 'farmer',
+      status: 'active',
+      password: hashPassword(pin),
+      createdAt: now,
+      updatedAt: now
+    };
+    store.users.push(user);
+  } else {
+    user.username = normalizedFarmerPhone;
+    user.phone = normalizedFarmerPhone;
+    user.name = clean(farmer.name);
+    user.role = 'farmer';
+    user.status = 'active';
+    user.password = hashPassword(pin);
+    user.updatedAt = now;
+  }
+
+  farmer.phone = normalizedFarmerPhone;
+  farmer.userId = user.id;
+  farmer.updatedAt = now;
+  return { user, created };
+}
+
+function syncFarmerPortalUserIdentity(store, farmer, nextPhone, nextName) {
+  const normalizedFarmerPhone = normalizePhone(nextPhone) || clean(nextPhone);
+  if (!normalizedFarmerPhone) {
+    return { ok: false, error: 'Farmer phone number is required.' };
+  }
+
+  const user = resolveFarmerPortalUser(store, farmer);
+  if (!user) {
+    return { ok: true, updated: false, user: null };
+  }
+
+  const portalConflictPhone = findUserByPhone(store, normalizedFarmerPhone);
+  if (portalConflictPhone && portalConflictPhone.id !== user.id) {
+    return { ok: false, error: 'Farmer phone conflicts with another portal account.' };
+  }
+  const portalConflictUsername = findUserByUsername(store, normalizedFarmerPhone);
+  if (portalConflictUsername && portalConflictUsername.id !== user.id) {
+    return { ok: false, error: 'Farmer phone conflicts with another portal username.' };
+  }
+
+  user.username = normalizedFarmerPhone;
+  user.phone = normalizedFarmerPhone;
+  user.name = clean(nextName);
+  user.updatedAt = nowIso();
+  farmer.userId = user.id;
+
+  return { ok: true, updated: true, user };
+}
+
 function normalizedEmail(value) {
   return clean(value).toLowerCase();
 }
@@ -675,6 +781,11 @@ function generateTemporaryPassword(length = 12) {
   }
 
   return chars.join('');
+}
+
+function generateNumericPin(length = 4) {
+  const max = 10 ** length;
+  return String(crypto.randomInt(0, max)).padStart(length, '0');
 }
 
 function agentView(user) {
@@ -2228,6 +2339,7 @@ const server = http.createServer(async (req, res) => {
         avocadoHectares: Number(avocadoHectares.toFixed(3)),
         preferredLanguage,
         notes,
+        userId: user.id,
         createdBy: user.username,
         createdAt: nowIso(),
         updatedAt: nowIso()
@@ -2676,7 +2788,14 @@ const server = http.createServer(async (req, res) => {
     rows = filterByQuery(rows, reqUrl.searchParams, ['name', 'phone', 'nationalId', 'location', 'preferredLanguage', 'notes']);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
-    rows = rows.slice(0, limit);
+    rows = rows.slice(0, limit).map((farmer) => {
+      const user = resolveFarmerPortalUser(store, farmer);
+      return {
+        ...farmer,
+        hasPortalAccess: Boolean(user && user.status === 'active'),
+        portalUsername: user ? user.username : ''
+      };
+    });
     json(res, 200, { data: rows });
     return;
   }
@@ -2813,6 +2932,16 @@ const server = http.createServer(async (req, res) => {
               return;
             }
 
+            const nextName = clean(mapped.name);
+            const syncResult = syncFarmerPortalUserIdentity(store, existing, phone, nextName);
+            if (!syncResult.ok) {
+              errors.push({
+                row: idx + 1,
+                error: syncResult.error
+              });
+              return;
+            }
+
             const oldPhoneKey = normalizePhone(existing.phone) || clean(existing.phone);
             const oldNationalIdKey = normalizedNationalId(existing.nationalId);
             if (oldPhoneKey && farmersByPhone.get(oldPhoneKey)?.id === existing.id) {
@@ -2822,7 +2951,7 @@ const server = http.createServer(async (req, res) => {
               farmersByNationalId.delete(oldNationalIdKey);
             }
 
-            existing.name = clean(mapped.name);
+            existing.name = nextName;
             existing.phone = phone;
             existing.nationalId = nationalId;
             existing.location = clean(mapped.location);
@@ -2932,6 +3061,82 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  const farmerPinMatch = pathname.match(/^\/api\/farmers\/([^/]+)\/reset-pin$/);
+  if (farmerPinMatch && req.method === 'POST') {
+    try {
+      const store = readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const farmerId = decodeURIComponent(farmerPinMatch[1]);
+      const farmer = findById(store.farmers, farmerId);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const generate = isTruthy(payload.generate);
+      const pin = String(payload.pin || '').trim();
+      const confirmPin = payload.confirmPin === undefined ? pin : String(payload.confirmPin || '').trim();
+
+      let nextPin = pin;
+      if (generate || !nextPin) {
+        nextPin = generateNumericPin(4);
+      } else {
+        const invalidPin = validateFarmerPin(nextPin);
+        if (invalidPin) {
+          json(res, 422, { error: invalidPin });
+          return;
+        }
+        if (!secureEquals(nextPin, confirmPin)) {
+          json(res, 422, { error: 'PIN confirmation does not match.' });
+          return;
+        }
+      }
+
+      const invalidGeneratedPin = validateFarmerPin(nextPin);
+      if (invalidGeneratedPin) {
+        json(res, 422, { error: invalidGeneratedPin });
+        return;
+      }
+
+      const upsertResult = ensureFarmerPortalUser(store, farmer, nextPin);
+      if (upsertResult.error) {
+        json(res, 409, { error: upsertResult.error });
+        return;
+      }
+
+      const user = upsertResult.user;
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'farmer.pin_reset',
+        entity: 'user',
+        entityId: user.id,
+        details: `${upsertResult.created ? 'Created' : 'Updated'} portal access for farmer ${farmer.name}`
+      });
+
+      writeStore(store);
+      json(res, 200, {
+        data: {
+          farmerId: farmer.id,
+          farmerName: farmer.name,
+          phone: farmer.phone,
+          username: user.username,
+          accountCreated: upsertResult.created,
+          generatedPin: generate ? nextPin : ''
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (pathname.startsWith('/api/farmers/') && req.method === 'GET') {
     const store = readStore();
     const auth = requireSession(req, store);
@@ -3032,6 +3237,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 409, { error: 'A farmer with this National ID already exists.' });
         return;
       }
+      const linkedFarmerUser = resolveFarmerPortalUser(store, farmer);
       const hasFarmAreaUpdate =
         payload.hectares !== undefined ||
         payload.acres !== undefined ||
@@ -3092,6 +3298,13 @@ const server = http.createServer(async (req, res) => {
       farmer.preferredLanguage = nextPreferredLanguage;
       farmer.notes = nextNotes;
       farmer.updatedAt = nowIso();
+      if (linkedFarmerUser) {
+        const syncResult = syncFarmerPortalUserIdentity(store, farmer, nextPhone, nextName);
+        if (!syncResult.ok) {
+          json(res, 409, { error: syncResult.error });
+          return;
+        }
+      }
 
       addActivity(store, {
         actor: auth.session.username,
@@ -3133,6 +3346,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     const [removed] = store.farmers.splice(farmerIndex, 1);
+    const removedPortalUser = resolveFarmerPortalUser(store, removed);
+    if (removedPortalUser) {
+      store.users = store.users.filter((row) => row.id !== removedPortalUser.id);
+      invalidateUserSessions(store, removedPortalUser.id);
+    }
     addActivity(store, {
       actor: auth.session.username,
       role: auth.session.role,
@@ -3141,6 +3359,16 @@ const server = http.createServer(async (req, res) => {
       entityId: removed.id,
       details: `Deleted farmer ${removed.name}`
     });
+    if (removedPortalUser) {
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'auth.user_delete',
+        entity: 'user',
+        entityId: removedPortalUser.id,
+        details: `Deleted linked farmer portal account for ${removed.name}`
+      });
+    }
     writeStore(store);
     json(res, 200, { data: { success: true } });
     return;

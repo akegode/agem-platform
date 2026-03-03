@@ -271,6 +271,32 @@
               </div>
             </details>
 
+            <details class="dropdown-card" id="farmerPinCard">
+              <summary>Portal Access (Set/Reset Farmer PIN)</summary>
+              <div class="dropdown-body">
+                <form id="farmerPinForm">
+                  <p class="meta compact">Admin only: give imported farmers phone + 4-digit PIN access without self-registration.</p>
+                  <div class="row">
+                    <input id="farmerPinSearch" placeholder="Search farmer by name, phone, or National ID">
+                    <button class="secondary" id="farmerPinSearchBtn" type="button">Search</button>
+                  </div>
+                  <select id="farmerPinFarmer">
+                    <option value="">Select farmer</option>
+                  </select>
+                  <div class="row">
+                    <input id="farmerPinValue" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="New 4-digit PIN">
+                    <input id="farmerPinConfirm" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="Confirm 4-digit PIN">
+                  </div>
+                  <div class="inline-actions wrap">
+                    <button class="primary" id="farmerPinSubmitBtn" type="submit">Set / Reset PIN</button>
+                    <button class="secondary" id="farmerPinGenerateBtn" type="button">Generate PIN</button>
+                  </div>
+                  <div class="success" id="farmerPinMsg"></div>
+                  <div id="farmerPinCredentials" class="empty" hidden></div>
+                </form>
+              </div>
+            </details>
+
             <details class="dropdown-card">
               <summary>Registered Farmers</summary>
               <div class="dropdown-body">

@@ -453,6 +453,37 @@ async function run() {
     assert.ok(Math.abs(Number(alice.hectares) - 1.0) < 0.02, 'Square-feet to hectares conversion should be applied');
     assert.ok(Math.abs(Number(peter.avocadoHectares) - 0.809) < 0.02, 'Avocado acreage to hectares conversion should be applied');
     assert.ok(Math.abs(Number(alice.avocadoHectares) - 0.5) < 0.02, 'Avocado square-feet to hectares conversion should be applied');
+    assert.strictEqual(Boolean(peter.hasPortalAccess), false, 'Imported farmer should not have portal access before PIN set');
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: peter.phone, pin: '3728' },
+      expectStatus: 401
+    });
+
+    await request(baseUrl, `/api/farmers/${encodeURIComponent(peter.id)}/reset-pin`, {
+      method: 'POST',
+      token: agentToken,
+      body: { pin: '3728', confirmPin: '3728' },
+      expectStatus: 403
+    });
+
+    const pinProvision = await request(baseUrl, `/api/farmers/${encodeURIComponent(peter.id)}/reset-pin`, {
+      method: 'POST',
+      token: adminToken,
+      body: { pin: '3728', confirmPin: '3728' },
+      expectStatus: 200
+    });
+    assert.strictEqual(pinProvision.data.farmerId, peter.id);
+    assert.strictEqual(pinProvision.data.accountCreated, true);
+    assert.strictEqual(pinProvision.data.username, peter.phone);
+    assert.strictEqual(pinProvision.data.generatedPin, '');
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: peter.phone, pin: '3728' },
+      expectStatus: 200
+    });
 
     const overwriteImport = await request(baseUrl, '/api/farmers/import', {
       method: 'POST',
@@ -489,6 +520,34 @@ async function run() {
     assert.strictEqual(updatedPeter.location, 'Embu');
     assert.ok(Math.abs(Number(updatedPeter.hectares) - 2.2) < 0.01);
     assert.ok(Math.abs(Number(updatedPeter.avocadoHectares) - 1.7) < 0.01);
+    assert.strictEqual(Boolean(updatedPeter.hasPortalAccess), true, 'Expected imported farmer portal access to persist');
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: '254700123456', pin: '3728' },
+      expectStatus: 401
+    });
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: '254700999999', pin: '3728' },
+      expectStatus: 200
+    });
+
+    const generatedPinReset = await request(baseUrl, `/api/farmers/${encodeURIComponent(updatedPeter.id)}/reset-pin`, {
+      method: 'POST',
+      token: adminToken,
+      body: { generate: true },
+      expectStatus: 200
+    });
+    assert.strictEqual(generatedPinReset.data.accountCreated, false);
+    assert.ok(/^\d{4}$/.test(generatedPinReset.data.generatedPin), 'Expected generated 4-digit PIN');
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: '254700999999', pin: generatedPinReset.data.generatedPin },
+      expectStatus: 200
+    });
 
     await request(baseUrl, '/api/produce', {
       method: 'POST',
