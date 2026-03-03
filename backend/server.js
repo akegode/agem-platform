@@ -2491,13 +2491,50 @@ const server = http.createServer(async (req, res) => {
       const payload = await readBody(req);
       const role = clean(payload.role).toLowerCase();
       const recoveryCode = String(payload.recoveryCode || '');
+      const recoveryPhone = normalizePhone(payload.phone || payload.username || payload.identity || '');
 
-      if (!role || !RECOVERY_CODE_BY_ROLE[role]) {
-        json(res, 422, { error: 'Role must be admin or agent.' });
+      if (!role || !['admin', 'agent', 'farmer'].includes(role)) {
+        json(res, 422, { error: 'Role must be admin, agent, or farmer.' });
         return;
       }
       if (!recoveryCode) {
         json(res, 422, { error: 'Recovery code is required.' });
+        return;
+      }
+
+      if (role === 'farmer') {
+        if (!recoveryPhone) {
+          json(res, 422, { error: 'Farmer phone number is required for recovery.' });
+          return;
+        }
+
+        const store = readStore();
+        const user = findUserByPhone(store, recoveryPhone);
+        if (!user || user.status !== 'active' || user.role !== 'farmer') {
+          json(res, 404, { error: 'No active farmer account found for this phone number.' });
+          return;
+        }
+        if (!verifyPassword(recoveryCode, user.password)) {
+          json(res, 401, { error: 'Recovery PIN is invalid.' });
+          return;
+        }
+
+        addActivity(store, {
+          actor: `${recoveryPhone}:recovery`,
+          role,
+          action: 'auth.recover_username',
+          entity: 'user',
+          entityId: user.id,
+          details: `Username recovery completed for farmer account ${recoveryPhone}.`
+        });
+        writeStore(store);
+
+        json(res, 200, {
+          data: {
+            username: user.username,
+            role: user.role
+          }
+        });
         return;
       }
 
@@ -2545,31 +2582,84 @@ const server = http.createServer(async (req, res) => {
       const payload = await readBody(req);
       const role = clean(payload.role).toLowerCase();
       const recoveryCode = String(payload.recoveryCode || '');
+      const recoveryPhone = normalizePhone(payload.phone || payload.username || payload.identity || '');
       const newPassword = String(payload.newPassword || '');
       const confirmPassword = payload.confirmPassword === undefined
         ? newPassword
         : String(payload.confirmPassword || '');
 
-      if (!role || !RECOVERY_CODE_BY_ROLE[role]) {
-        json(res, 422, { error: 'Role must be admin or agent.' });
+      if (!role || !['admin', 'agent', 'farmer'].includes(role)) {
+        json(res, 422, { error: 'Role must be admin, agent, or farmer.' });
         return;
       }
       if (!recoveryCode) {
         json(res, 422, { error: 'Recovery code is required.' });
         return;
       }
+      if (role === 'farmer' && !recoveryPhone) {
+        json(res, 422, { error: 'Farmer phone number is required for recovery.' });
+        return;
+      }
       if (!newPassword) {
-        json(res, 422, { error: 'New password is required.' });
+        json(res, 422, {
+          error: role === 'farmer' ? 'New PIN is required.' : 'New password is required.'
+        });
         return;
       }
       if (!secureEquals(newPassword, confirmPassword)) {
-        json(res, 422, { error: 'New password and confirmation do not match.' });
+        json(res, 422, {
+          error: role === 'farmer'
+            ? 'New PIN and confirmation do not match.'
+            : 'New password and confirmation do not match.'
+        });
         return;
       }
 
-      const invalidPassword = validateNewPassword(newPassword);
+      const invalidPassword = role === 'farmer'
+        ? validateFarmerPin(newPassword)
+        : validateNewPassword(newPassword);
       if (invalidPassword) {
         json(res, 422, { error: invalidPassword });
+        return;
+      }
+
+      if (role === 'farmer') {
+        const store = readStore();
+        const user = findUserByPhone(store, recoveryPhone);
+        if (!user || user.status !== 'active' || user.role !== 'farmer') {
+          json(res, 404, { error: 'No active farmer account found for this phone number.' });
+          return;
+        }
+        if (!verifyPassword(recoveryCode, user.password)) {
+          json(res, 401, { error: 'Recovery PIN is invalid.' });
+          return;
+        }
+        if (secureEquals(recoveryCode, newPassword)) {
+          json(res, 422, { error: 'New PIN must be different from your current PIN.' });
+          return;
+        }
+
+        user.password = hashPassword(newPassword);
+        user.updatedAt = nowIso();
+        invalidateUserSessions(store, user.id);
+
+        addActivity(store, {
+          actor: `${recoveryPhone}:recovery`,
+          role,
+          action: 'auth.recover_password',
+          entity: 'user',
+          entityId: user.id,
+          details: `PIN reset completed for farmer account ${recoveryPhone}.`
+        });
+        writeStore(store);
+
+        json(res, 200, {
+          data: {
+            success: true,
+            username: user.username,
+            role: user.role
+          }
+        });
         return;
       }
 

@@ -79,6 +79,7 @@ async function run() {
   const farmerSelfPhone = '254700111222';
   const farmerSelfPin = '1728';
   const farmerSelfPinUpdated = '1839';
+  const farmerSelfPinRecovered = '1940';
   const ussdSecret = 'UssdSecret#2026';
   const ussdCode = '*483#';
 
@@ -302,6 +303,53 @@ async function run() {
       expectStatus: 200
     });
     farmerToken = farmerLoginUpdated.data.token;
+
+    const recoveredFarmerUsername = await request(baseUrl, '/api/auth/recover-username', {
+      method: 'POST',
+      body: { role: 'farmer', phone: farmerSelfPhone, recoveryCode: farmerSelfPinUpdated },
+      expectStatus: 200
+    });
+    assert.strictEqual(recoveredFarmerUsername.data.username, farmerSelfPhone);
+    assert.strictEqual(recoveredFarmerUsername.data.role, 'farmer');
+
+    await request(baseUrl, '/api/auth/recover-password', {
+      method: 'POST',
+      body: {
+        role: 'farmer',
+        phone: farmerSelfPhone,
+        recoveryCode: '0000',
+        newPassword: farmerSelfPinRecovered,
+        confirmPassword: farmerSelfPinRecovered
+      },
+      expectStatus: 401
+    });
+
+    const recoverFarmerPin = await request(baseUrl, '/api/auth/recover-password', {
+      method: 'POST',
+      body: {
+        role: 'farmer',
+        phone: farmerSelfPhone,
+        recoveryCode: farmerSelfPinUpdated,
+        newPassword: farmerSelfPinRecovered,
+        confirmPassword: farmerSelfPinRecovered
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(recoverFarmerPin.data.role, 'farmer');
+    assert.strictEqual(recoverFarmerPin.data.username, farmerSelfPhone);
+
+    await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: farmerSelfPhone, pin: farmerSelfPinUpdated },
+      expectStatus: 401
+    });
+
+    const farmerLoginRecovered = await request(baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: { phone: farmerSelfPhone, pin: farmerSelfPinRecovered },
+      expectStatus: 200
+    });
+    farmerToken = farmerLoginRecovered.data.token;
 
     const farmer = await request(baseUrl, '/api/farmers', {
       method: 'POST',

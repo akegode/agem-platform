@@ -91,6 +91,7 @@ const elements = {
   recoveryForm: document.getElementById('recoveryForm'),
   recoveryRole: document.getElementById('recoveryRole'),
   recoveryCode: document.getElementById('recoveryCode'),
+  recoveryPhone: document.getElementById('recoveryPhone'),
   recoverUsernameBtn: document.getElementById('recoverUsernameBtn'),
   recoveryNewPassword: document.getElementById('recoveryNewPassword'),
   recoveryConfirmPassword: document.getElementById('recoveryConfirmPassword'),
@@ -655,6 +656,40 @@ function bindAuth() {
     }
   });
 
+  const updateRecoveryUiForRole = () => {
+    const role = String(elements.recoveryRole?.value || '').toLowerCase();
+    const farmerMode = role === 'farmer';
+
+    if (elements.recoveryCode) {
+      elements.recoveryCode.placeholder = farmerMode
+        ? 'Recovery PIN (current 4-digit PIN)'
+        : 'Recovery code';
+    }
+    if (elements.recoveryPhone) {
+      elements.recoveryPhone.hidden = !farmerMode;
+      elements.recoveryPhone.disabled = !farmerMode;
+      elements.recoveryPhone.required = farmerMode;
+      if (!farmerMode) {
+        elements.recoveryPhone.value = '';
+      }
+    }
+    if (elements.recoveryNewPassword) {
+      elements.recoveryNewPassword.placeholder = farmerMode
+        ? 'New 4-digit PIN'
+        : 'New password for reset';
+    }
+    if (elements.recoveryConfirmPassword) {
+      elements.recoveryConfirmPassword.placeholder = farmerMode
+        ? 'Confirm new 4-digit PIN'
+        : 'Confirm new password';
+    }
+    if (elements.recoverPasswordBtn) {
+      elements.recoverPasswordBtn.textContent = farmerMode ? 'Reset PIN' : 'Reset Password';
+    }
+  };
+  updateRecoveryUiForRole();
+  elements.recoveryRole?.addEventListener('change', updateRecoveryUiForRole);
+
   elements.recoverUsernameBtn.addEventListener('click', async () => {
     clearMessages();
 
@@ -665,9 +700,16 @@ function bindAuth() {
 
     const role = elements.recoveryRole.value;
     const recoveryCode = elements.recoveryCode.value.trim();
+    const recoveryPhone = cleanPhone(elements.recoveryPhone?.value || '');
 
     if (!recoveryCode) {
-      elements.recoveryMsg.textContent = 'Recovery code is required.';
+      elements.recoveryMsg.textContent = role === 'farmer'
+        ? 'Recovery PIN is required.'
+        : 'Recovery code is required.';
+      return;
+    }
+    if (role === 'farmer' && !recoveryPhone) {
+      elements.recoveryMsg.textContent = 'Farmer phone is required for recovery.';
       return;
     }
 
@@ -675,11 +717,13 @@ function bindAuth() {
       const response = await apiRequest('/api/auth/recover-username', {
         method: 'POST',
         auth: false,
-        body: { role, recoveryCode }
+        body: { role, recoveryCode, phone: recoveryPhone }
       });
 
       elements.loginUsername.value = response.data.username;
-      elements.recoveryMsg.textContent = `Username recovered: ${response.data.username}`;
+      elements.recoveryMsg.textContent = role === 'farmer'
+        ? `Farmer login confirmed: ${response.data.username}`
+        : `Username recovered: ${response.data.username}`;
     } catch (error) {
       elements.recoveryMsg.textContent = error.message;
     }
@@ -695,11 +739,22 @@ function bindAuth() {
 
     const role = elements.recoveryRole.value;
     const recoveryCode = elements.recoveryCode.value.trim();
+    const recoveryPhone = cleanPhone(elements.recoveryPhone?.value || '');
     const newPassword = elements.recoveryNewPassword.value;
     const confirmPassword = elements.recoveryConfirmPassword.value;
 
     if (!recoveryCode || !newPassword || !confirmPassword) {
-      elements.recoveryMsg.textContent = 'Recovery code and both password fields are required.';
+      elements.recoveryMsg.textContent = role === 'farmer'
+        ? 'Recovery PIN and both PIN fields are required.'
+        : 'Recovery code and both password fields are required.';
+      return;
+    }
+    if (role === 'farmer' && !recoveryPhone) {
+      elements.recoveryMsg.textContent = 'Farmer phone is required for recovery.';
+      return;
+    }
+    if (role === 'farmer' && !/^\d{4}$/.test(newPassword)) {
+      elements.recoveryMsg.textContent = 'New PIN must be exactly 4 digits.';
       return;
     }
 
@@ -707,13 +762,15 @@ function bindAuth() {
       const response = await apiRequest('/api/auth/recover-password', {
         method: 'POST',
         auth: false,
-        body: { role, recoveryCode, newPassword, confirmPassword }
+        body: { role, recoveryCode, phone: recoveryPhone, newPassword, confirmPassword }
       });
 
       elements.recoveryNewPassword.value = '';
       elements.recoveryConfirmPassword.value = '';
       elements.loginUsername.value = response.data.username;
-      elements.recoveryMsg.textContent = `Password reset complete for ${response.data.username}.`;
+      elements.recoveryMsg.textContent = role === 'farmer'
+        ? `PIN reset complete for ${response.data.username}.`
+        : `Password reset complete for ${response.data.username}.`;
     } catch (error) {
       elements.recoveryMsg.textContent = error.message;
     }
