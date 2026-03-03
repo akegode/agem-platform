@@ -91,6 +91,7 @@ const elements = {
   recoveryForm: document.getElementById('recoveryForm'),
   recoveryRole: document.getElementById('recoveryRole'),
   recoveryCode: document.getElementById('recoveryCode'),
+  recoveryHelp: document.getElementById('recoveryHelp'),
   recoveryPhone: document.getElementById('recoveryPhone'),
   recoverUsernameBtn: document.getElementById('recoverUsernameBtn'),
   recoveryNewPassword: document.getElementById('recoveryNewPassword'),
@@ -662,8 +663,13 @@ function bindAuth() {
 
     if (elements.recoveryCode) {
       elements.recoveryCode.placeholder = farmerMode
-        ? 'Recovery PIN (current 4-digit PIN)'
+        ? 'Recovery code or current 4-digit PIN'
         : 'Recovery code';
+    }
+    if (elements.recoveryHelp) {
+      elements.recoveryHelp.textContent = farmerMode
+        ? 'Use either your recovery code or your current 4-digit PIN.'
+        : 'Use the recovery code for this account type.';
     }
     if (elements.recoveryPhone) {
       elements.recoveryPhone.hidden = !farmerMode;
@@ -704,7 +710,7 @@ function bindAuth() {
 
     if (!recoveryCode) {
       elements.recoveryMsg.textContent = role === 'farmer'
-        ? 'Recovery PIN is required.'
+        ? 'Recovery code or PIN is required.'
         : 'Recovery code is required.';
       return;
     }
@@ -717,7 +723,12 @@ function bindAuth() {
       const response = await apiRequest('/api/auth/recover-username', {
         method: 'POST',
         auth: false,
-        body: { role, recoveryCode, phone: recoveryPhone }
+        body: {
+          role,
+          recoveryCode,
+          recoveryPin: role === 'farmer' ? recoveryCode : '',
+          phone: recoveryPhone
+        }
       });
 
       elements.loginUsername.value = response.data.username;
@@ -745,7 +756,7 @@ function bindAuth() {
 
     if (!recoveryCode || !newPassword || !confirmPassword) {
       elements.recoveryMsg.textContent = role === 'farmer'
-        ? 'Recovery PIN and both PIN fields are required.'
+        ? 'Recovery code/PIN and both PIN fields are required.'
         : 'Recovery code and both password fields are required.';
       return;
     }
@@ -762,7 +773,14 @@ function bindAuth() {
       const response = await apiRequest('/api/auth/recover-password', {
         method: 'POST',
         auth: false,
-        body: { role, recoveryCode, phone: recoveryPhone, newPassword, confirmPassword }
+        body: {
+          role,
+          recoveryCode,
+          recoveryPin: role === 'farmer' ? recoveryCode : '',
+          phone: recoveryPhone,
+          newPassword,
+          confirmPassword
+        }
       });
 
       elements.recoveryNewPassword.value = '';

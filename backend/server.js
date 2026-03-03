@@ -465,6 +465,15 @@ function readTextBody(req, maxBytes = 1_000_000) {
   });
 }
 
+function recoverySecretFromPayload(payload) {
+  return String(
+    payload?.recoveryCode ||
+    payload?.recoveryPin ||
+    payload?.pin ||
+    ''
+  ).trim();
+}
+
 function extractToken(req) {
   const authHeader = (req.headers.authorization || '').toString().trim();
   if (authHeader.toLowerCase().startsWith('bearer ')) {
@@ -2490,15 +2499,19 @@ const server = http.createServer(async (req, res) => {
     try {
       const payload = await readBody(req);
       const role = clean(payload.role).toLowerCase();
-      const recoveryCode = String(payload.recoveryCode || '');
+      const recoverySecret = recoverySecretFromPayload(payload);
       const recoveryPhone = normalizePhone(payload.phone || payload.username || payload.identity || '');
 
       if (!role || !['admin', 'agent', 'farmer'].includes(role)) {
         json(res, 422, { error: 'Role must be admin, agent, or farmer.' });
         return;
       }
-      if (!recoveryCode) {
-        json(res, 422, { error: 'Recovery code is required.' });
+      if (!recoverySecret) {
+        json(res, 422, {
+          error: role === 'farmer'
+            ? 'Recovery code or 4-digit PIN is required.'
+            : 'Recovery code is required.'
+        });
         return;
       }
 
@@ -2514,8 +2527,8 @@ const server = http.createServer(async (req, res) => {
           json(res, 404, { error: 'No active farmer account found for this phone number.' });
           return;
         }
-        if (!verifyPassword(recoveryCode, user.password)) {
-          json(res, 401, { error: 'Recovery PIN is invalid.' });
+        if (!verifyPassword(recoverySecret, user.password)) {
+          json(res, 401, { error: 'Recovery code or PIN is invalid.' });
           return;
         }
 
@@ -2543,7 +2556,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 503, { error: `Recovery is not configured for role "${role}".` });
         return;
       }
-      if (!secureEquals(recoveryCode, expectedCode)) {
+      if (!secureEquals(recoverySecret, expectedCode)) {
         json(res, 401, { error: 'Recovery code is invalid.' });
         return;
       }
@@ -2581,7 +2594,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const payload = await readBody(req);
       const role = clean(payload.role).toLowerCase();
-      const recoveryCode = String(payload.recoveryCode || '');
+      const recoverySecret = recoverySecretFromPayload(payload);
       const recoveryPhone = normalizePhone(payload.phone || payload.username || payload.identity || '');
       const newPassword = String(payload.newPassword || '');
       const confirmPassword = payload.confirmPassword === undefined
@@ -2592,8 +2605,12 @@ const server = http.createServer(async (req, res) => {
         json(res, 422, { error: 'Role must be admin, agent, or farmer.' });
         return;
       }
-      if (!recoveryCode) {
-        json(res, 422, { error: 'Recovery code is required.' });
+      if (!recoverySecret) {
+        json(res, 422, {
+          error: role === 'farmer'
+            ? 'Recovery code or 4-digit PIN is required.'
+            : 'Recovery code is required.'
+        });
         return;
       }
       if (role === 'farmer' && !recoveryPhone) {
@@ -2630,11 +2647,11 @@ const server = http.createServer(async (req, res) => {
           json(res, 404, { error: 'No active farmer account found for this phone number.' });
           return;
         }
-        if (!verifyPassword(recoveryCode, user.password)) {
-          json(res, 401, { error: 'Recovery PIN is invalid.' });
+        if (!verifyPassword(recoverySecret, user.password)) {
+          json(res, 401, { error: 'Recovery code or PIN is invalid.' });
           return;
         }
-        if (secureEquals(recoveryCode, newPassword)) {
+        if (secureEquals(recoverySecret, newPassword)) {
           json(res, 422, { error: 'New PIN must be different from your current PIN.' });
           return;
         }
@@ -2668,7 +2685,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 503, { error: `Recovery is not configured for role "${role}".` });
         return;
       }
-      if (!secureEquals(recoveryCode, expectedCode)) {
+      if (!secureEquals(recoverySecret, expectedCode)) {
         json(res, 401, { error: 'Recovery code is invalid.' });
         return;
       }
