@@ -47,7 +47,7 @@ body.dashboard-open {
   display: grid;
   grid-template-columns: 1fr 440px;
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .auth-hero {
@@ -57,12 +57,20 @@ body.dashboard-open {
   box-shadow: var(--shadow);
   padding: 24px;
   display: grid;
-  align-content: center;
+  align-content: start;
   gap: 10px;
+  align-self: start;
 }
 
 .auth-hero h1 {
   margin-top: 6px;
+}
+
+.hero-brand {
+  font-family: "Arial Black", "Franklin Gothic Heavy", "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: clamp(1.7rem, 3.2vw, 2.4rem);
 }
 
 .auth-main-card {
@@ -70,6 +78,7 @@ body.dashboard-open {
   padding: 16px;
   box-shadow: var(--shadow);
   background: #ffffff;
+  align-self: start;
 }
 
 .dashboard-shell {
@@ -139,9 +148,10 @@ body.dashboard-open {
 }
 
 .brand {
-  font-family: "Cormorant Garamond", "freight-text-pro", Georgia, serif;
-  font-size: 1.32rem;
-  letter-spacing: 0.01em;
+  font-family: "Arial Black", "Franklin Gothic Heavy", "Helvetica Neue", Arial, sans-serif;
+  font-size: 1.2rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   margin-bottom: 4px;
 }
 
