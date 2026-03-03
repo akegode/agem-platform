@@ -38,6 +38,13 @@ const USSD_ENABLED = envValue('USSD_ENABLED') !== 'false';
 const USSD_CODE = envValue('USSD_CODE') || '*483#';
 const USSD_HELP_PHONE = envValue('USSD_HELP_PHONE') || '+254700000000';
 const USSD_SHARED_SECRET = process.env.USSD_SHARED_SECRET || '';
+const SMS_OWNER_COST_PER_MESSAGE_KES = (() => {
+  const raw = envValue('SMS_OWNER_COST_PER_MESSAGE_KES');
+  if (!raw) return 0.25;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0.25;
+  return Number(parsed.toFixed(4));
+})();
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
@@ -1181,6 +1188,52 @@ function money(value) {
   return Number(parseNumber(value).toFixed(2));
 }
 
+function isBillableSmsStatus(status) {
+  const normalized = clean(status).toLowerCase();
+  if (!normalized) return true;
+  return !['failed', 'rejected', 'cancelled', 'undelivered'].includes(normalized);
+}
+
+function smsOwnerCostKes(log) {
+  if (!isBillableSmsStatus(log?.status)) return 0;
+  const explicitOwnerCost = parseNumber(log?.ownerCostKes);
+  if (Number.isFinite(explicitOwnerCost) && explicitOwnerCost >= 0) return money(explicitOwnerCost);
+  const legacyExplicitCost = parseNumber(log?.costKes);
+  if (Number.isFinite(legacyExplicitCost) && legacyExplicitCost >= 0) return money(legacyExplicitCost);
+  return money(SMS_OWNER_COST_PER_MESSAGE_KES);
+}
+
+function smsCostSnapshot(smsLogs, nowMs = Date.now()) {
+  const logs = Array.isArray(smsLogs) ? smsLogs : [];
+  const cutoffMs = nowMs - 24 * 60 * 60 * 1000;
+  let smsBillable = 0;
+  let smsBillableLast24h = 0;
+  let smsSpentKes = 0;
+  let smsSpentLast24hKes = 0;
+
+  for (const log of logs) {
+    const costKes = smsOwnerCostKes(log);
+    if (costKes > 0) {
+      smsBillable += 1;
+      smsSpentKes += costKes;
+    }
+
+    const createdAtMs = dateMs(log?.createdAt);
+    if (createdAtMs >= cutoffMs && costKes > 0) {
+      smsBillableLast24h += 1;
+      smsSpentLast24hKes += costKes;
+    }
+  }
+
+  return {
+    smsOwnerCostPerMessageKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
+    smsBillable,
+    smsBillableLast24h,
+    smsSpentKes: money(smsSpentKes),
+    smsSpentLast24hKes: money(smsSpentLast24hKes)
+  };
+}
+
 function valueFromPurchase(purchase) {
   const explicitValue = parseNumber(purchase.purchaseValueKes);
   if (explicitValue > 0) return money(explicitValue);
@@ -1384,6 +1437,7 @@ function registerFarmerFromUssd(store, payload) {
     phone: record.phone,
     message: ussdRegistrationSmsMessage(record, lang),
     provider: 'AfricaTalking(Mock)',
+    ownerCostKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
     status: 'Sent',
     createdBy: 'ussd',
     createdAt: nowIso()
@@ -1714,6 +1768,7 @@ function makeSummary(store) {
   const totalProduceKg = store.produce.reduce((sum, row) => sum + Number(row.kgs || 0), 0);
   const totalPurchasedKg = store.producePurchases.reduce((sum, row) => sum + Number(row.purchasedKgs || 0), 0);
   const purchasedValueKes = store.producePurchases.reduce((sum, row) => sum + Number(row.purchaseValueKes || 0), 0);
+  const smsCosts = smsCostSnapshot(store.smsLogs);
   const owed = buildOwedRows(store, { period: 'all' });
   const paymentsReceived = store.payments
     .filter((row) => row.status === 'Received')
@@ -1738,6 +1793,11 @@ function makeSummary(store) {
     totalOwedKes: owed.meta.totalBalanceKes || 0,
     paymentsReceived,
     paymentSuccessRate,
+    smsOwnerCostPerMessageKes: smsCosts.smsOwnerCostPerMessageKes,
+    smsBillable: smsCosts.smsBillable,
+    smsSentLast24h: smsCosts.smsBillableLast24h,
+    smsSpentKes: smsCosts.smsSpentKes,
+    smsSpentLast24hKes: smsCosts.smsSpentLast24hKes,
     launchReady:
       store.farmers.length > 0 &&
       store.produce.length > 0 &&
@@ -3012,6 +3072,7 @@ const server = http.createServer(async (req, res) => {
             phone,
             message,
             provider: 'AfricaTalking(Mock)',
+            ownerCostKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
             status: 'Sent',
             createdBy: auth.session.username,
             createdAt
@@ -3912,7 +3973,10 @@ const server = http.createServer(async (req, res) => {
     rows = filterByQuery(rows, reqUrl.searchParams, ['phone', 'message', 'createdBy', 'farmerName']);
 
     const limit = safeQueryInt(reqUrl.searchParams, 'limit', 300, 2000);
-    json(res, 200, { data: rows.slice(0, limit) });
+    json(res, 200, {
+      data: rows.slice(0, limit),
+      meta: smsCostSnapshot(store.smsLogs)
+    });
     return;
   }
 
@@ -3995,6 +4059,7 @@ const server = http.createServer(async (req, res) => {
         phone,
         message,
         provider: 'AfricaTalking(Mock)',
+        ownerCostKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
         status: 'Sent',
         createdBy: auth.session.username,
         createdAt: nowIso()
@@ -4074,6 +4139,7 @@ const server = http.createServer(async (req, res) => {
           phone,
           message,
           provider: 'AfricaTalking(Mock)',
+          ownerCostKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
           status: 'Sent',
           createdBy: auth.session.username,
           createdAt

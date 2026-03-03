@@ -740,6 +740,13 @@ async function run() {
     assert.strictEqual(summary.data.purchasedRecords, 1);
     assert.strictEqual(summary.data.paymentRecords, 3);
     assert.strictEqual(summary.data.smsSent, 8);
+    assert.strictEqual(Number(summary.data.smsOwnerCostPerMessageKes), 0.25);
+    assert.strictEqual(summary.data.smsSentLast24h, 8);
+    assert.ok(Math.abs(Number(summary.data.smsSpentKes) - 2.0) < 0.0001, 'Expected total SMS spend to be KES 2.00');
+    assert.ok(
+      Math.abs(Number(summary.data.smsSpentLast24hKes) - 2.0) < 0.0001,
+      'Expected 24h SMS spend to be KES 2.00'
+    );
     assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
     assert.ok(Number(summary.data.totalOwedKes || 0) < 0.01, 'Expected owed balance to be settled');
 

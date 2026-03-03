@@ -9,6 +9,7 @@ const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_EN =
   'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
 const DEFAULT_IMPORT_ONBOARDING_SMS_TEMPLATE_SW =
   'Agem Portal: Habari {{name}}. Umesajiliwa kwenye mfumo wa wakulima wa AGEM. Tumia USSD {{ussd}} (ukishawashwa) kupata huduma.';
+const SMS_OWNER_COST_PER_MESSAGE_KES = 0.25;
 
 const API = {
   enabled: false
@@ -2372,6 +2373,7 @@ function bindSms() {
           phone,
           message,
           provider: 'Local Mock',
+          ownerCostKes: SMS_OWNER_COST_PER_MESSAGE_KES,
           status: 'Sent',
           createdBy: 'local',
           createdAt: new Date().toISOString()
@@ -2407,6 +2409,7 @@ function bindSms() {
             phone,
             message,
             provider: 'Local Mock',
+            ownerCostKes: SMS_OWNER_COST_PER_MESSAGE_KES,
             status: 'Sent',
             createdBy: 'local',
             createdAt: now
@@ -3083,6 +3086,8 @@ function renderOverview() {
     { label: 'Amount Owed (KES)', value: formatCurrency(summary.totalOwedKes || 0) },
     { label: 'Payments (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
     { label: 'SMS Sent', value: summary.smsSent || 0 },
+    { label: 'SMS Sent (24h)', value: summary.smsSentLast24h || 0 },
+    { label: 'SMS Spend (24h KES)', value: formatKesWithCents(summary.smsSpentLast24hKes || 0) },
     { label: 'Payment Success Rate', value: `${summary.paymentSuccessRate || 0}%` }
   ];
 
@@ -3402,8 +3407,17 @@ function renderPayments() {
 }
 
 function renderSms() {
+  const summary = state.summary || deriveSummaryFromState();
+  const smsCostSummary = `
+    <p class="meta">
+      Owner SMS spend: <strong>KES ${escapeHtml(formatKesWithCents(summary.smsSpentLast24hKes || 0))}</strong> in the last 24 hours
+      (${escapeHtml(String(summary.smsSentLast24h || 0))} billable SMS), total
+      <strong>KES ${escapeHtml(formatKesWithCents(summary.smsSpentKes || 0))}</strong>.
+    </p>
+  `;
+
   if (!state.smsLogs.length) {
-    elements.smsTableWrap.innerHTML = '<div class="empty">No SMS messages logged yet.</div>';
+    elements.smsTableWrap.innerHTML = `${smsCostSummary}<div class="empty">No SMS messages logged yet.</div>`;
     return;
   }
 
@@ -3417,6 +3431,7 @@ function renderSms() {
           <td>${escapeHtml(row.farmerName || '-')}</td>
           <td>${escapeHtml(row.message)}</td>
           <td>${escapeHtml(row.status)}</td>
+          <td>${escapeHtml(formatKesWithCents(smsOwnerCostKesClient(row, summary.smsOwnerCostPerMessageKes || SMS_OWNER_COST_PER_MESSAGE_KES)))}</td>
           <td>${escapeHtml(row.createdBy || '-')}</td>
           <td>${escapeHtml(dateShort(row.createdAt))}</td>
         </tr>
@@ -3433,6 +3448,7 @@ function renderSms() {
           <th>Farmer</th>
           <th>Message</th>
           <th>Status</th>
+          <th>Owner Cost (KES)</th>
           <th>By</th>
           <th>Date</th>
         </tr>
@@ -3440,6 +3456,8 @@ function renderSms() {
       <tbody>${rows}</tbody>
     </table>
   `;
+
+  elements.smsTableWrap.innerHTML = `${smsCostSummary}${elements.smsTableWrap.innerHTML}`;
 }
 
 function renderReports() {
@@ -3451,6 +3469,9 @@ function renderReports() {
     { label: 'Farmers Owed', value: summary.owedFarmers || 0 },
     { label: 'Amount Owed (KES)', value: formatCurrency(summary.totalOwedKes || 0) },
     { label: 'Payments Received (KES)', value: formatCurrency(summary.paymentsReceived || 0) },
+    { label: 'SMS Sent (24h)', value: summary.smsSentLast24h || 0 },
+    { label: 'SMS Spend (24h KES)', value: formatKesWithCents(summary.smsSpentLast24hKes || 0) },
+    { label: 'SMS Spend Total (KES)', value: formatKesWithCents(summary.smsSpentKes || 0) },
     { label: 'Payment Success', value: `${summary.paymentSuccessRate || 0}%` }
   ];
 
@@ -3472,6 +3493,8 @@ function renderReports() {
     `Current operations show ${summary.farmers || 0} farmers, ${summary.qcRecords ?? summary.produceRecords ?? 0} QC entries, ` +
     `${summary.purchasedRecords || 0} purchase entries, ${summary.owedFarmers || 0} farmers currently owed, ` +
     `${summary.paymentRecords || 0} payment records, and ${summary.smsSent || 0} SMS messages. ` +
+    `SMS owner spend: KES ${formatKesWithCents(summary.smsSpentLast24hKes || 0)} in the last 24 hours ` +
+    `(total KES ${formatKesWithCents(summary.smsSpentKes || 0)}). ` +
     `Data source: ${dataSource}. Session: ${user}.`;
 
   if (!state.agentStats.length) {
@@ -4018,6 +4041,7 @@ function importFarmersLocal(records, options = {}) {
         phone,
         message,
         provider: 'Local Mock',
+        ownerCostKes: SMS_OWNER_COST_PER_MESSAGE_KES,
         status: 'Sent',
         createdBy: 'local',
         createdAt: nowIso
@@ -4366,6 +4390,7 @@ function deriveSummaryFromState() {
   const paymentSuccessRate = state.payments.length
     ? Math.round((state.payments.filter((row) => row.status === 'Received').length / state.payments.length) * 100)
     : 0;
+  const smsCostSummary = smsCostSummaryFromLogs(state.smsLogs, SMS_OWNER_COST_PER_MESSAGE_KES);
 
   return {
     farmers: state.farmers.length,
@@ -4381,6 +4406,10 @@ function deriveSummaryFromState() {
     owedFarmers,
     paymentsReceived,
     paymentSuccessRate,
+    smsOwnerCostPerMessageKes: SMS_OWNER_COST_PER_MESSAGE_KES,
+    smsSentLast24h: smsCostSummary.smsSentLast24h,
+    smsSpentKes: smsCostSummary.smsSpentKes,
+    smsSpentLast24hKes: smsCostSummary.smsSpentLast24hKes,
     launchReady:
       state.farmers.length > 0 &&
       state.produce.length > 0 &&
@@ -4543,6 +4572,55 @@ function clearMessages() {
 
 function formatCurrency(value) {
   return Number(value || 0).toLocaleString('en-US');
+}
+
+function formatKesWithCents(value) {
+  const num = Number(value || 0);
+  if (!Number.isFinite(num)) return '0.00';
+  return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function isBillableSmsStatusClient(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (!normalized) return true;
+  return !['failed', 'rejected', 'cancelled', 'undelivered'].includes(normalized);
+}
+
+function smsOwnerCostKesClient(log, fallbackCostPerMessageKes = SMS_OWNER_COST_PER_MESSAGE_KES) {
+  if (!isBillableSmsStatusClient(log?.status)) return 0;
+
+  const explicitOwnerCost = Number(log?.ownerCostKes);
+  if (Number.isFinite(explicitOwnerCost) && explicitOwnerCost >= 0) return Number(explicitOwnerCost.toFixed(2));
+
+  const legacyCost = Number(log?.costKes);
+  if (Number.isFinite(legacyCost) && legacyCost >= 0) return Number(legacyCost.toFixed(2));
+
+  return Number(Number(fallbackCostPerMessageKes || 0).toFixed(2));
+}
+
+function smsCostSummaryFromLogs(logs, fallbackCostPerMessageKes = SMS_OWNER_COST_PER_MESSAGE_KES) {
+  const rows = Array.isArray(logs) ? logs : [];
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  let sentLast24h = 0;
+  let smsSpentKes = 0;
+  let smsSpentLast24hKes = 0;
+
+  for (const row of rows) {
+    const ownerCostKes = smsOwnerCostKesClient(row, fallbackCostPerMessageKes);
+    smsSpentKes += ownerCostKes;
+
+    const createdAtMs = new Date(row?.createdAt || '').getTime();
+    if (Number.isFinite(createdAtMs) && createdAtMs >= cutoff && ownerCostKes > 0) {
+      sentLast24h += 1;
+      smsSpentLast24hKes += ownerCostKes;
+    }
+  }
+
+  return {
+    smsSentLast24h: sentLast24h,
+    smsSpentKes: Number(smsSpentKes.toFixed(2)),
+    smsSpentLast24hKes: Number(smsSpentLast24hKes.toFixed(2))
+  };
 }
 
 function formatHectares(value) {

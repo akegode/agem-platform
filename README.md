@@ -20,6 +20,7 @@ This project is now a full working web application with authentication, role-bas
 - M-PESA disbursement simulation endpoint
 - SMS sending simulation + message logs
 - Bulk SMS for admin (all farmers or selected recipients) with searchable recipient picker
+- SMS cost tracking for code-owner spend (total + rolling 24-hour spend in dashboard/reports)
 - Safaricom-ready USSD callback endpoint (`/api/ussd/callback`) with language selection (English/Kiswahili), self-registration for new phone numbers, and menu for payment status, latest QC, profile, and help (via gateway such as Africa's Talking)
 - Operational KPI dashboard and agent performance report
 - CSV exports (farmers, produce, payments, activity)
@@ -55,6 +56,7 @@ This project is now a full working web application with authentication, role-bas
    export USSD_CODE="*483#"
    export USSD_HELP_PHONE="+254700000000"
    export USSD_SHARED_SECRET="set-a-secret-used-by-your-ussd-gateway"
+   export SMS_OWNER_COST_PER_MESSAGE_KES="0.25"
    ```
 3. Run:
    ```bash
@@ -89,6 +91,7 @@ This is the easiest path if you are new to deployment.
    - `USSD_CODE=*483#`
    - `USSD_HELP_PHONE=+2547xxxxxxxx`
    - `USSD_SHARED_SECRET=<strong-random-secret>`
+   - `SMS_OWNER_COST_PER_MESSAGE_KES=0.25`
 5. In Render service settings, add a custom domain like `portal.yourdomain.com`.
 6. In your DNS provider, add the DNS record Render asks for.
 7. In your existing website, add a button/link to `https://portal.yourdomain.com`.
@@ -105,4 +108,5 @@ Your current website stays as-is, and this app runs as a portal under a subdomai
 - Admins can create additional agent accounts from the in-app **Agents** section by entering agent name and email. The portal auto-generates temporary login credentials, and env `AGENT_*` remains the initial bootstrap agent.
 - For live Safaricom USSD, use a gateway provider (e.g., Africa's Talking), point callback URL to `https://portal.agemlimited.com/api/ussd/callback?secret=<same-secret>` and events URL to `https://portal.agemlimited.com/api/ussd/events?secret=<same-secret>`.
 - USSD self-registration collects full name, National ID, location, total farm size (acres), and area under avocado (acres), then creates a farmer profile and sends a confirmation SMS in the selected language.
+- SMS spend metrics treat successful sends as billable and compute owner spend using `SMS_OWNER_COST_PER_MESSAGE_KES` (default `0.25`).
 - If you later install PHP/Composer/MySQL/Redis, this can be migrated to Laravel + React/Inertia exactly as planned.
