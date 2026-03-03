@@ -4439,6 +4439,37 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/exports/sms.csv' && req.method === 'GET') {
+    const store = readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const smsRows = store.smsLogs.map((row) => ({
+      ...row,
+      ownerCostKes: smsOwnerCostKes(row),
+      billable: smsOwnerCostKes(row) > 0 ? 'yes' : 'no'
+    }));
+
+    const csvData = toCsv(smsRows, [
+      { key: 'id', label: 'id' },
+      { key: 'farmerId', label: 'farmerId' },
+      { key: 'farmerName', label: 'farmerName' },
+      { key: 'phone', label: 'phone' },
+      { key: 'message', label: 'message' },
+      { key: 'provider', label: 'provider' },
+      { key: 'status', label: 'status' },
+      { key: 'ownerCostKes', label: 'ownerCostKes' },
+      { key: 'billable', label: 'billable' },
+      { key: 'createdBy', label: 'createdBy' },
+      { key: 'createdAt', label: 'createdAt' }
+    ]);
+    csv(res, 'sms.csv', csvData);
+    return;
+  }
+
   if (pathname === '/api/exports/activity.csv' && req.method === 'GET') {
     const store = readStore();
     const auth = requireSession(req, store, ['admin']);

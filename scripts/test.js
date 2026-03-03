@@ -1087,6 +1087,17 @@ async function run() {
       'Owed CSV header missing'
     );
 
+    const smsCsv = await request(baseUrl, '/api/exports/sms.csv', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(
+      smsCsv.includes('id,farmerId,farmerName,phone,message,provider,status,ownerCostKes,billable,createdBy,createdAt'),
+      'SMS CSV header missing'
+    );
+    assert.ok(smsCsv.includes('0.25'), 'SMS CSV should include owner SMS cost values');
+
     await request(baseUrl, '/api/admin/backup', {
       method: 'POST',
       token: adminToken,
