@@ -157,6 +157,7 @@ const elements = {
   farmerCancelEditBtn: document.getElementById('farmerCancelEditBtn'),
   farmerMsg: document.getElementById('farmerMsg'),
   farmerImportForm: document.getElementById('farmerImportForm'),
+  farmerImportCard: document.getElementById('farmerImportCard'),
   farmerImportFile: document.getElementById('farmerImportFile'),
   farmerImportNotifyBySms: document.getElementById('farmerImportNotifyBySms'),
   farmerImportSmsTemplate: document.getElementById('farmerImportSmsTemplate'),
@@ -5365,6 +5366,9 @@ function updatePermissionUi() {
   if (elements.farmerImportQaBtn) elements.farmerImportQaBtn.disabled = !smartQaAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
   elements.farmerImportNotifyBySms.disabled = !importAllowed;
+  if (elements.farmerImportCard) {
+    elements.farmerImportCard.hidden = !importAllowed;
+  }
   if (elements.farmerPinSearch) elements.farmerPinSearch.disabled = !farmerPinManageAllowed;
   if (elements.farmerPinSearchBtn) elements.farmerPinSearchBtn.disabled = !farmerPinManageAllowed;
   if (elements.farmerPinFarmer) elements.farmerPinFarmer.disabled = !farmerPinManageAllowed;
