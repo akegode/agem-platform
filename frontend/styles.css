@@ -133,12 +133,13 @@ body.dashboard-open {
   min-width: 0;
   flex: 1 1 auto;
   max-width: calc(100% - 92px);
-  background: rgba(5, 12, 8, 0.9);
-  border-color: rgba(255, 255, 255, 0.36);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .hero-company-logo {
-  filter: invert(1) grayscale(0.06) contrast(1.14) brightness(1.06);
+  filter: invert(1) grayscale(0.05) contrast(1.22) brightness(1.08);
+  mix-blend-mode: screen;
 }
 
 .hero-logo {
