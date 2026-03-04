@@ -685,6 +685,141 @@
             </details>
           </div>
 
+          <details class="dropdown-card">
+            <summary>Executive Briefs & Alerts (AI)</summary>
+            <div class="dropdown-body">
+              <div class="inline-actions wrap">
+                <button class="secondary" id="briefRunNowBtn" type="button">Run Brief Now</button>
+                <button class="secondary" id="briefRefreshBtn" type="button">Refresh Briefs</button>
+              </div>
+              <div class="success" id="briefMsg"></div>
+              <div id="briefWrap" class="empty">Run or refresh executive briefs to view strategic summaries and alerts.</div>
+            </div>
+          </details>
+
+          <details class="dropdown-card">
+            <summary>AI Proposal Queue (Approve / Reject / Execute)</summary>
+            <div class="dropdown-body">
+              <div class="row">
+                <select id="proposalStatusFilter">
+                  <option value="">Filter: All statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="executed">Executed</option>
+                </select>
+                <button class="secondary" id="proposalRefreshBtn" type="button">Refresh Queue</button>
+              </div>
+
+              <form id="proposalForm">
+                <div class="row">
+                  <select id="proposalActionType" required>
+                    <option value="payment_risk_to_tasks">Action: Payment risk -> ops tasks</option>
+                    <option value="qc_risk_to_tasks">Action: QC risk -> ops tasks</option>
+                    <option value="generate_executive_brief">Action: Generate executive brief</option>
+                    <option value="create_ops_tasks">Action: Create custom ops tasks</option>
+                  </select>
+                  <input id="proposalConfidence" type="number" min="0" max="1" step="0.01" placeholder="Confidence 0-1 (optional)">
+                </div>
+                <input id="proposalTitle" placeholder="Proposal title (optional)">
+                <textarea id="proposalDescription" rows="2" placeholder="Proposal description (optional)"></textarea>
+                <textarea id="proposalPayload" rows="3" placeholder='JSON payload (optional), e.g. {"period":"week"}'></textarea>
+                <button class="primary" type="submit">Create Proposal</button>
+              </form>
+
+              <div class="success" id="proposalMsg"></div>
+              <div id="proposalWrap" class="empty">No proposals loaded yet.</div>
+            </div>
+          </details>
+
+          <details class="dropdown-card">
+            <summary>Operations Tasks (AI Follow-up)</summary>
+            <div class="dropdown-body">
+              <div class="inline-actions wrap">
+                <button class="secondary" id="opsFromPaymentRiskBtn" type="button">Create Tasks from Payment Risk</button>
+                <button class="secondary" id="opsFromQcBtn" type="button">Create Tasks from QC Risk</button>
+                <button class="secondary" id="opsRefreshBtn" type="button">Refresh Tasks</button>
+              </div>
+              <div class="row">
+                <select id="opsTaskStatusFilter">
+                  <option value="">Status: All</option>
+                  <option value="open">Open</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="closed">Closed</option>
+                </select>
+                <select id="opsTaskSeverityFilter">
+                  <option value="">Severity: All</option>
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+              <div class="success" id="opsTaskMsg"></div>
+              <div id="opsTaskWrap" class="empty">No ops tasks loaded yet.</div>
+            </div>
+          </details>
+
+          <div class="grid">
+            <details class="dropdown-card">
+              <summary>AI Knowledge Base</summary>
+              <div class="dropdown-body">
+                <form id="knowledgeForm">
+                  <input id="knowledgeTitle" placeholder="Document title" required>
+                  <div class="row">
+                    <input id="knowledgeSource" placeholder="Source / SOP / link label (optional)">
+                    <input id="knowledgeTags" placeholder="Tags (comma-separated)">
+                  </div>
+                  <textarea id="knowledgeContent" rows="4" placeholder="Knowledge content for grounding copilot and briefing." required></textarea>
+                  <button class="primary" type="submit">Add Knowledge Document</button>
+                </form>
+
+                <div class="row">
+                  <input id="knowledgeSearch" placeholder="Search knowledge by title, tags, source, or content">
+                  <button class="secondary" id="knowledgeSearchBtn" type="button">Search</button>
+                </div>
+                <div class="success" id="knowledgeMsg"></div>
+                <div id="knowledgeWrap" class="empty">No knowledge documents loaded yet.</div>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
+              <summary>AI Feedback & Evals</summary>
+              <div class="dropdown-body">
+                <form id="aiFeedbackForm">
+                  <div class="row">
+                    <select id="aiFeedbackTool">
+                      <option value="copilot">Tool: Admin Copilot</option>
+                      <option value="sms-draft">Tool: SMS Drafting</option>
+                      <option value="qc-intelligence">Tool: QC Intelligence</option>
+                      <option value="payment-risk">Tool: Payment Risk</option>
+                      <option value="executive-brief">Tool: Executive Brief</option>
+                      <option value="import-qa">Tool: Smart Import QA</option>
+                      <option value="other">Tool: Other</option>
+                    </select>
+                    <select id="aiFeedbackRating">
+                      <option value="up">Rating: 👍 Helpful</option>
+                      <option value="neutral">Rating: Neutral</option>
+                      <option value="down">Rating: 👎 Not Helpful</option>
+                    </select>
+                  </div>
+                  <input id="aiFeedbackResponseId" placeholder="Response ID (optional, auto-filled from latest AI run)">
+                  <textarea id="aiFeedbackNote" rows="3" placeholder="What was good/bad? (optional)"></textarea>
+                  <button class="primary" type="submit">Save Feedback</button>
+                </form>
+
+                <div class="inline-actions wrap">
+                  <button class="secondary" id="aiFeedbackSummaryBtn" type="button">Refresh Feedback Summary</button>
+                  <button class="secondary" id="aiEvalRunBtn" type="button">Run AI Eval Suite</button>
+                  <button class="secondary" id="aiEvalRefreshBtn" type="button">Refresh Eval Runs</button>
+                </div>
+                <div class="success" id="aiFeedbackMsg"></div>
+                <div id="aiFeedbackWrap" class="empty">Feedback summary and eval runs will appear here.</div>
+              </div>
+            </details>
+          </div>
+
           <div class="kpis" id="reportMetrics"></div>
 
           <div class="grid">

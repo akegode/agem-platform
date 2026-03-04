@@ -730,6 +730,282 @@ async function run() {
     assert.ok(paymentRisk.data.summary, 'Payment risk summary should be returned');
     assert.ok(Array.isArray(paymentRisk.data.flags), 'Payment risk flags should be an array');
 
+    // Phase 2B (exact order): Executive Briefs -> Proposal Queue -> Ops Tasks -> Knowledge Base -> Feedback/Evals
+    await request(baseUrl, '/api/ai/briefs/run-now', {
+      method: 'POST',
+      token: agentToken,
+      body: {},
+      expectStatus: 403
+    });
+
+    const runBrief = await request(baseUrl, '/api/ai/briefs/run-now', {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+      expectStatus: 201
+    });
+    assert.ok(runBrief.data?.id, 'Executive brief run-now should return brief id');
+    assert.ok(runBrief.data?.overallRisk, 'Executive brief should include overall risk');
+
+    const listBriefsAgent = await request(baseUrl, '/api/ai/briefs?limit=5&includeAlerts=true', {
+      token: agentToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(listBriefsAgent.data?.briefs), 'Briefs endpoint should return briefs array');
+    assert.ok(listBriefsAgent.data.briefs.length >= 1, 'Expected at least one executive brief');
+
+    await request(baseUrl, '/api/ai/proposals', {
+      token: agentToken,
+      expectStatus: 403
+    });
+
+    const proposalCreate = await request(baseUrl, '/api/ai/proposals', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        actionType: 'create_ops_tasks',
+        confidence: 0.91,
+        title: 'Follow up pending collections',
+        description: 'Create follow-up tasks for pending collections and payment verification.',
+        payload: {
+          tasks: [
+            {
+              title: 'Call Kiambu farmer cluster',
+              description: 'Verify pending produce handover and confirm next pickup window.',
+              severity: 'high',
+              sourceType: 'manual-ai',
+              sourceRef: 'cluster-kiambu'
+            },
+            {
+              title: 'Reconcile payment evidence',
+              description: 'Match payment references against settlement sheet before disbursement.',
+              severity: 'medium',
+              sourceType: 'manual-ai',
+              sourceRef: 'settlement-batch-1'
+            }
+          ]
+        }
+      },
+      expectStatus: 201
+    });
+    const proposalId = proposalCreate.data?.id;
+    assert.ok(proposalId, 'Proposal id should be returned');
+    assert.strictEqual(proposalCreate.data?.status, 'pending');
+
+    const listProposals = await request(baseUrl, '/api/ai/proposals?status=pending&limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(listProposals.data), 'Proposals endpoint should return array');
+    assert.ok((listProposals.data || []).some((row) => row.id === proposalId), 'Created proposal should appear in queue');
+
+    const approvedProposal = await request(baseUrl, `/api/ai/proposals/${encodeURIComponent(proposalId)}/approve`, {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+      expectStatus: 200
+    });
+    assert.strictEqual(approvedProposal.data?.status, 'approved', 'Proposal should move to approved state');
+
+    const executedProposal = await request(baseUrl, `/api/ai/proposals/${encodeURIComponent(proposalId)}/execute`, {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+      expectStatus: 200
+    });
+    assert.strictEqual(executedProposal.data?.status, 'executed', 'Proposal should move to executed state');
+    assert.ok(
+      Number(executedProposal.result?.tasksCreated || 0) >= 2,
+      'Executed custom proposal should create ops tasks'
+    );
+
+    const proposalRejectCreate = await request(baseUrl, '/api/ai/proposals', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        actionType: 'generate_executive_brief',
+        title: 'Reject flow coverage',
+        description: 'Test reject lifecycle',
+        payload: {}
+      },
+      expectStatus: 201
+    });
+    const rejectProposalId = proposalRejectCreate.data?.id;
+    assert.ok(rejectProposalId, 'Reject test proposal should be created');
+
+    const rejectedProposal = await request(baseUrl, `/api/ai/proposals/${encodeURIComponent(rejectProposalId)}/reject`, {
+      method: 'POST',
+      token: adminToken,
+      body: { reason: 'Duplicate request' },
+      expectStatus: 200
+    });
+    assert.strictEqual(rejectedProposal.data?.status, 'rejected', 'Proposal should move to rejected state');
+    assert.strictEqual(rejectedProposal.data?.rejectionReason, 'Duplicate request');
+
+    await request(baseUrl, `/api/ai/proposals/${encodeURIComponent(rejectProposalId)}/execute`, {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+      expectStatus: 409
+    });
+
+    await request(baseUrl, '/api/ops/tasks/from-ai', {
+      method: 'POST',
+      token: agentToken,
+      body: { source: 'custom', tasks: [{ title: 'agent forbidden task' }] },
+      expectStatus: 403
+    });
+
+    const opsCreateCustom = await request(baseUrl, '/api/ops/tasks/from-ai', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        source: 'custom',
+        tasks: [
+          {
+            title: 'Verify packhouse readiness',
+            description: 'Confirm grading line staffing for tomorrow.',
+            severity: 'low',
+            sourceType: 'ops-manual',
+            sourceRef: 'packhouse'
+          }
+        ]
+      },
+      expectStatus: 201
+    });
+    assert.ok(Number(opsCreateCustom.meta?.createdCount || 0) >= 1, 'Expected at least one custom ops task');
+
+    const opsListAgent = await request(baseUrl, '/api/ops/tasks?limit=100', {
+      token: agentToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(opsListAgent.data), 'Ops tasks endpoint should return array');
+    assert.ok((opsListAgent.data || []).length >= 3, 'Expected ops tasks from executed proposal and custom source');
+
+    const firstOpenTask = (opsListAgent.data || []).find((row) => row.status === 'open') || opsListAgent.data[0];
+    assert.ok(firstOpenTask?.id, 'Expected at least one ops task id');
+
+    const taskPatchedByAgent = await request(baseUrl, `/api/ops/tasks/${encodeURIComponent(firstOpenTask.id)}`, {
+      method: 'PATCH',
+      token: agentToken,
+      body: {
+        status: 'in_progress',
+        assignedTo: 'Field Agent East',
+        notes: 'Started follow-up.'
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(taskPatchedByAgent.data?.status, 'in_progress', 'Agent should be able to update task status');
+
+    const knowledgeCreated = await request(baseUrl, '/api/ai/knowledge', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        title: 'Payment Reconciliation SOP',
+        source: 'Internal SOP v1',
+        tags: 'payments,reconciliation,weekly',
+        content: 'Always match M-PESA reference, farmer national ID, and owed balance before final disbursement.'
+      },
+      expectStatus: 201
+    });
+    const knowledgeDocId = knowledgeCreated.data?.id;
+    assert.ok(knowledgeDocId, 'Knowledge document id should be returned');
+
+    await request(baseUrl, '/api/ai/knowledge', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        title: 'Agent cannot write',
+        content: 'Should fail'
+      },
+      expectStatus: 403
+    });
+
+    const knowledgeSearchAgent = await request(baseUrl, '/api/ai/knowledge?q=reconciliation&limit=10', {
+      token: agentToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(knowledgeSearchAgent.data), 'Knowledge list should return array');
+    assert.ok(
+      (knowledgeSearchAgent.data || []).some((row) => row.id === knowledgeDocId),
+      'Agent should see created knowledge document'
+    );
+
+    await request(baseUrl, `/api/ai/knowledge/${encodeURIComponent(knowledgeDocId)}`, {
+      method: 'DELETE',
+      token: agentToken,
+      body: {},
+      expectStatus: 403
+    });
+
+    await request(baseUrl, `/api/ai/knowledge/${encodeURIComponent(knowledgeDocId)}`, {
+      method: 'DELETE',
+      token: adminToken,
+      body: {},
+      expectStatus: 200
+    });
+
+    const feedbackAgent = await request(baseUrl, '/api/ai/feedback', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        tool: 'copilot',
+        rating: 'up',
+        responseId: runBrief.data.id,
+        note: 'Helpful summary for field follow-up.'
+      },
+      expectStatus: 201
+    });
+    assert.ok(feedbackAgent.data?.id, 'Feedback entry id should be returned');
+
+    const feedbackAdmin = await request(baseUrl, '/api/ai/feedback', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        tool: 'payment-risk',
+        rating: 'neutral',
+        responseId: paymentRisk.data?.responseId || '',
+        note: 'Useful but needs more context on duplicates.'
+      },
+      expectStatus: 201
+    });
+    assert.ok(feedbackAdmin.data?.id, 'Admin feedback entry id should be returned');
+
+    await request(baseUrl, '/api/ai/feedback/summary?limit=10', {
+      token: agentToken,
+      expectStatus: 403
+    });
+
+    const feedbackSummary = await request(baseUrl, '/api/ai/feedback/summary?limit=20', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(feedbackSummary.data?.totals?.total >= 2, 'Feedback summary should aggregate submitted entries');
+    assert.ok(Array.isArray(feedbackSummary.data?.byTool), 'Feedback summary should include byTool array');
+
+    await request(baseUrl, '/api/ai/evals/run', {
+      method: 'POST',
+      token: agentToken,
+      body: {},
+      expectStatus: 403
+    });
+
+    const evalRun = await request(baseUrl, '/api/ai/evals/run', {
+      method: 'POST',
+      token: adminToken,
+      body: {},
+      expectStatus: 201
+    });
+    assert.ok(evalRun.data?.id, 'Eval run id should be returned');
+    assert.ok(Number(evalRun.data?.totalChecks || 0) >= 1, 'Eval run should include checks');
+
+    const evalRuns = await request(baseUrl, '/api/ai/evals?limit=10', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(evalRuns.data), 'Eval runs endpoint should return array');
+    assert.ok((evalRuns.data || []).some((row) => row.id === evalRun.data.id), 'Latest eval run should be listed');
+
     await request(baseUrl, '/api/sms/send', {
       method: 'POST',
       token: agentToken,

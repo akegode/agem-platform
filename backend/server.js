@@ -87,9 +87,18 @@ const SMS_OWNER_COST_PER_MESSAGE_KES = (() => {
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = envValue('OPENAI_MODEL') || 'gpt-4.1-mini';
 const OPENAI_TIMEOUT_MS = parseEnvInt('OPENAI_TIMEOUT_MS', 12000, 1000, 120000);
+const AI_EXEC_BRIEF_ENABLED = envValue('AI_EXEC_BRIEF_ENABLED') !== 'false';
+const AI_EXEC_BRIEF_INTERVAL_HOURS = parseEnvInt('AI_EXEC_BRIEF_INTERVAL_HOURS', 24, 1, 24 * 30);
+const AI_EXEC_BRIEF_MAX_HISTORY = parseEnvInt('AI_EXEC_BRIEF_MAX_HISTORY', 120, 10, 2000);
+const AI_PROPOSAL_CAP = parseEnvInt('AI_PROPOSAL_CAP', 500, 50, 10000);
+const AI_FEEDBACK_CAP = parseEnvInt('AI_FEEDBACK_CAP', 2000, 100, 20000);
+const AI_EVAL_CAP = parseEnvInt('AI_EVAL_CAP', 500, 20, 5000);
+const AI_KNOWLEDGE_CAP = parseEnvInt('AI_KNOWLEDGE_CAP', 500, 10, 5000);
+const OPS_TASK_CAP = parseEnvInt('OPS_TASK_CAP', 5000, 100, 50000);
 
 let sqlStoreAdapter = null;
 let backupScheduleHandle = null;
+let executiveBriefScheduleHandle = null;
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
@@ -334,7 +343,7 @@ function invalidateUserSessions(store, userId, exceptToken = '') {
 function freshStore() {
   return {
     meta: {
-      version: 3,
+      version: 4,
       createdAt: nowIso(),
       lastWriteAt: nowIso(),
       authMode: ALLOW_DEMO_USERS ? 'demo' : 'private'
@@ -346,7 +355,15 @@ function freshStore() {
     payments: [],
     smsLogs: [],
     activityLogs: [],
-    sessions: {}
+    sessions: {},
+    aiProposals: [],
+    aiBriefs: [],
+    aiAlerts: [],
+    aiFeedback: [],
+    aiEvalRuns: [],
+    aiKnowledgeDocs: [],
+    aiPromptConfig: {},
+    opsTasks: []
   };
 }
 
@@ -360,11 +377,19 @@ function normalizeStore(raw) {
     payments: Array.isArray(raw.payments) ? raw.payments : [],
     smsLogs: Array.isArray(raw.smsLogs) ? raw.smsLogs : [],
     activityLogs: Array.isArray(raw.activityLogs) ? raw.activityLogs : [],
-    sessions: raw.sessions && typeof raw.sessions === 'object' ? raw.sessions : {}
+    sessions: raw.sessions && typeof raw.sessions === 'object' ? raw.sessions : {},
+    aiProposals: Array.isArray(raw.aiProposals) ? raw.aiProposals : [],
+    aiBriefs: Array.isArray(raw.aiBriefs) ? raw.aiBriefs : [],
+    aiAlerts: Array.isArray(raw.aiAlerts) ? raw.aiAlerts : [],
+    aiFeedback: Array.isArray(raw.aiFeedback) ? raw.aiFeedback : [],
+    aiEvalRuns: Array.isArray(raw.aiEvalRuns) ? raw.aiEvalRuns : [],
+    aiKnowledgeDocs: Array.isArray(raw.aiKnowledgeDocs) ? raw.aiKnowledgeDocs : [],
+    aiPromptConfig: raw.aiPromptConfig && typeof raw.aiPromptConfig === 'object' ? raw.aiPromptConfig : {},
+    opsTasks: Array.isArray(raw.opsTasks) ? raw.opsTasks : []
   };
 
   if (!store.meta.createdAt) store.meta.createdAt = nowIso();
-  store.meta.version = 3;
+  store.meta.version = 4;
   store.meta.authMode = ALLOW_DEMO_USERS ? 'demo' : 'private';
 
   const usersValid = store.users.some((u) => u && u.username && u.password && u.password.hash);
@@ -389,6 +414,49 @@ function normalizeStore(raw) {
   }
 
   reconcileProducePurchases(store);
+
+  store.aiProposals = store.aiProposals.slice(0, AI_PROPOSAL_CAP).map((row) => ({
+    id: clean(row?.id) || id('AIP'),
+    status: normalizeAiProposalStatus(row?.status),
+    actionType: clean(row?.actionType),
+    title: clean(row?.title),
+    description: clean(row?.description),
+    confidence: Number.isFinite(Number(row?.confidence)) ? Number(row.confidence) : '',
+    source: clean(row?.source) || 'local-rules',
+    payload: row?.payload && typeof row.payload === 'object' ? row.payload : {},
+    createdBy: clean(row?.createdBy) || 'system',
+    createdAt: clean(row?.createdAt) || nowIso(),
+    updatedAt: clean(row?.updatedAt) || clean(row?.createdAt) || nowIso(),
+    approvedBy: clean(row?.approvedBy),
+    approvedAt: clean(row?.approvedAt),
+    rejectedBy: clean(row?.rejectedBy),
+    rejectedAt: clean(row?.rejectedAt),
+    rejectionReason: clean(row?.rejectionReason),
+    executedBy: clean(row?.executedBy),
+    executedAt: clean(row?.executedAt),
+    executionSummary: clean(row?.executionSummary)
+  }));
+  store.aiBriefs = store.aiBriefs.slice(0, AI_EXEC_BRIEF_MAX_HISTORY);
+  store.aiAlerts = store.aiAlerts.slice(0, AI_EXEC_BRIEF_MAX_HISTORY);
+  store.aiFeedback = store.aiFeedback.slice(0, AI_FEEDBACK_CAP);
+  store.aiEvalRuns = store.aiEvalRuns.slice(0, AI_EVAL_CAP);
+  store.aiKnowledgeDocs = store.aiKnowledgeDocs.slice(0, AI_KNOWLEDGE_CAP);
+  store.opsTasks = store.opsTasks.slice(0, OPS_TASK_CAP).map((row) => ({
+    id: clean(row?.id) || id('TASK'),
+    title: clean(row?.title) || 'Untitled task',
+    description: clean(row?.description),
+    severity: normalizeRiskSeverity(row?.severity, 'medium'),
+    status: normalizeOpsTaskStatus(row?.status),
+    sourceType: clean(row?.sourceType) || 'ai',
+    sourceRef: clean(row?.sourceRef),
+    assignedTo: clean(row?.assignedTo),
+    notes: clean(row?.notes),
+    createdBy: clean(row?.createdBy) || 'system',
+    createdAt: clean(row?.createdAt) || nowIso(),
+    updatedAt: clean(row?.updatedAt) || clean(row?.createdAt) || nowIso(),
+    resolvedAt: clean(row?.resolvedAt)
+  }));
+
   applyUserPolicy(store);
   pruneExpiredSessions(store);
   return store;
@@ -666,6 +734,541 @@ function addActivity(store, entry) {
 
   if (store.activityLogs.length > ACTIVITY_CAP) {
     store.activityLogs.length = ACTIVITY_CAP;
+  }
+}
+
+function pushWithCap(list, item, cap) {
+  if (!Array.isArray(list)) return;
+  list.unshift(item);
+  if (list.length > cap) list.length = cap;
+}
+
+function normalizeRiskSeverity(value, fallback = 'medium') {
+  const normalized = clean(value).toLowerCase();
+  if (['critical', 'high', 'medium', 'low'].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeAiProposalStatus(value) {
+  const normalized = clean(value).toLowerCase();
+  if (['pending', 'approved', 'rejected', 'executed'].includes(normalized)) return normalized;
+  return 'pending';
+}
+
+function normalizeOpsTaskStatus(value) {
+  const normalized = clean(value).toLowerCase();
+  if (['open', 'in_progress', 'resolved', 'closed'].includes(normalized)) return normalized;
+  return 'open';
+}
+
+function aiPromptPolicy(store, key, fallback) {
+  if (!store || !store.aiPromptConfig || typeof store.aiPromptConfig !== 'object') return fallback;
+  const configured = clean(store.aiPromptConfig[key]);
+  return configured || fallback;
+}
+
+function routeParamWithSuffix(pathname, prefix, suffix) {
+  if (!pathname.startsWith(prefix) || !pathname.endsWith(suffix)) return '';
+  const middle = pathname.slice(prefix.length, pathname.length - suffix.length);
+  const parts = middle.split('/').filter(Boolean);
+  return parts.length === 1 ? decodeURIComponent(parts[0]) : '';
+}
+
+function tokenizeSearchText(value) {
+  return clean(value)
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((row) => row.trim())
+    .filter((row) => row.length >= 2)
+    .slice(0, 40);
+}
+
+function compactWhitespace(value) {
+  return clean(value).replace(/\s+/g, ' ').trim();
+}
+
+function buildKnowledgeSnippet(content, tokens) {
+  const raw = compactWhitespace(content);
+  if (!raw) return '';
+  if (!tokens.length) return raw.slice(0, 220);
+  const lower = raw.toLowerCase();
+  for (const token of tokens) {
+    const idx = lower.indexOf(token);
+    if (idx >= 0) {
+      const start = Math.max(0, idx - 70);
+      const end = Math.min(raw.length, idx + token.length + 150);
+      return (start > 0 ? '…' : '') + raw.slice(start, end) + (end < raw.length ? '…' : '');
+    }
+  }
+  return raw.slice(0, 220);
+}
+
+function findKnowledgeMatches(store, query, limit = 4) {
+  const docs = Array.isArray(store?.aiKnowledgeDocs) ? store.aiKnowledgeDocs : [];
+  if (!docs.length) return [];
+  const tokens = tokenizeSearchText(query);
+  if (!tokens.length) {
+    return docs
+      .slice(0, Math.max(1, limit))
+      .map((doc) => ({
+        id: doc.id,
+        title: doc.title || 'Untitled',
+        source: doc.source || '',
+        tags: Array.isArray(doc.tags) ? doc.tags : [],
+        snippet: buildKnowledgeSnippet(doc.content, []),
+        score: 0
+      }));
+  }
+
+  const scored = [];
+  for (const doc of docs) {
+    const haystack = [
+      clean(doc.title).toLowerCase(),
+      clean(doc.source).toLowerCase(),
+      Array.isArray(doc.tags) ? doc.tags.map((row) => clean(row).toLowerCase()).join(' ') : '',
+      clean(doc.content).toLowerCase()
+    ].join(' ');
+
+    let score = 0;
+    for (const token of tokens) {
+      if (!token) continue;
+      if (haystack.includes(token)) score += 1;
+      if (clean(doc.title).toLowerCase().includes(token)) score += 2;
+      if (Array.isArray(doc.tags) && doc.tags.some((tag) => clean(tag).toLowerCase().includes(token))) {
+        score += 2;
+      }
+    }
+
+    if (score <= 0) continue;
+    scored.push({
+      id: doc.id,
+      title: doc.title || 'Untitled',
+      source: doc.source || '',
+      tags: Array.isArray(doc.tags) ? doc.tags : [],
+      snippet: buildKnowledgeSnippet(doc.content, tokens),
+      score
+    });
+  }
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(limit, 8)));
+}
+
+function createOpsTask(store, payload = {}) {
+  const now = nowIso();
+  const task = {
+    id: id('TASK'),
+    title: clean(payload.title) || 'Untitled task',
+    description: clean(payload.description),
+    severity: normalizeRiskSeverity(payload.severity, 'medium'),
+    status: normalizeOpsTaskStatus(payload.status || 'open'),
+    sourceType: clean(payload.sourceType) || 'ai',
+    sourceRef: clean(payload.sourceRef),
+    assignedTo: clean(payload.assignedTo),
+    notes: clean(payload.notes),
+    createdBy: clean(payload.createdBy) || 'system',
+    createdAt: now,
+    updatedAt: now,
+    resolvedAt: ''
+  };
+  pushWithCap(store.opsTasks, task, OPS_TASK_CAP);
+  return task;
+}
+
+function buildOpsTasksFromPaymentRisk(report, actor = 'system') {
+  const flags = Array.isArray(report?.flags) ? report.flags : [];
+  const tasks = [];
+  for (const flag of flags) {
+    const severity = normalizeRiskSeverity(flag.severity, 'medium');
+    if (!['high', 'critical', 'medium'].includes(severity)) continue;
+    tasks.push({
+      title: `${severity.toUpperCase()}: ${clean(flag.title) || clean(flag.code) || 'Payment risk flag'}`,
+      description: clean(flag.detail) || 'Investigate payment anomaly and reconcile before next disbursement.',
+      severity,
+      sourceType: 'payment-risk',
+      sourceRef: clean(flag.paymentId) || clean(flag.ref),
+      createdBy: actor
+    });
+  }
+  return tasks.slice(0, 120);
+}
+
+function buildOpsTasksFromQcInsights(items, actor = 'system') {
+  const rows = Array.isArray(items) ? items : [];
+  const tasks = [];
+  for (const insight of rows) {
+    const level = normalizeRiskSeverity(insight?.riskLevel, 'low');
+    if (!['high', 'medium', 'critical'].includes(level)) continue;
+    tasks.push({
+      title: `${level.toUpperCase()}: QC lot follow-up (${clean(insight.farmerName) || 'Unknown farmer'})`,
+      description:
+        clean(insight.summary) ||
+        `Review lot ${clean(insight.qcRecordId)} and confirm ${clean(insight.recommendedDecision) || 'next QC decision'}.`,
+      severity: level,
+      sourceType: 'qc-intelligence',
+      sourceRef: clean(insight.qcRecordId),
+      createdBy: actor
+    });
+  }
+  return tasks.slice(0, 120);
+}
+
+function buildAiFeedbackSummary(feedbackRows) {
+  const rows = Array.isArray(feedbackRows) ? feedbackRows : [];
+  const byTool = {};
+
+  for (const row of rows) {
+    const tool = clean(row?.tool) || 'unknown';
+    const rating = clean(row?.rating).toLowerCase();
+    if (!byTool[tool]) {
+      byTool[tool] = {
+        tool,
+        total: 0,
+        positive: 0,
+        negative: 0,
+        neutral: 0
+      };
+    }
+    byTool[tool].total += 1;
+    if (rating === 'up' || rating === 'positive') {
+      byTool[tool].positive += 1;
+    } else if (rating === 'down' || rating === 'negative') {
+      byTool[tool].negative += 1;
+    } else {
+      byTool[tool].neutral += 1;
+    }
+  }
+
+  const totals = Object.values(byTool).reduce(
+    (acc, row) => {
+      acc.total += row.total;
+      acc.positive += row.positive;
+      acc.negative += row.negative;
+      acc.neutral += row.neutral;
+      return acc;
+    },
+    { total: 0, positive: 0, negative: 0, neutral: 0 }
+  );
+  const positiveRate = totals.total ? Number(((totals.positive / totals.total) * 100).toFixed(1)) : 0;
+
+  return {
+    totals: {
+      ...totals,
+      positiveRatePct: positiveRate
+    },
+    byTool: Object.values(byTool)
+      .map((row) => ({
+        ...row,
+        positiveRatePct: row.total ? Number(((row.positive / row.total) * 100).toFixed(1)) : 0
+      }))
+      .sort((a, b) => b.total - a.total)
+  };
+}
+
+function runAiEvalSuite(store) {
+  const checks = [];
+
+  const copilotCheck = localCopilotAnswer(store, 'show farmers owed this week in Nakuru');
+  checks.push({
+    id: 'copilot_intent_owed',
+    label: 'Copilot detects owed-farmers intent',
+    pass: clean(copilotCheck.intent) === 'owed_farmers',
+    details: `Intent="${clean(copilotCheck.intent)}"`
+  });
+
+  const riskReport = localPaymentRiskReport(store, { period: 'week' });
+  checks.push({
+    id: 'payment_risk_schema',
+    label: 'Payment risk report returns summary and flags',
+    pass: Boolean(riskReport && riskReport.summary && Array.isArray(riskReport.flags)),
+    details: `flags=${Array.isArray(riskReport.flags) ? riskReport.flags.length : 0}`
+  });
+
+  const produceSample = Array.isArray(store.produce) ? store.produce[0] : null;
+  if (produceSample) {
+    const qc = localQcIntelligence(produceSample);
+    checks.push({
+      id: 'qc_decision_bounds',
+      label: 'QC intelligence returns valid decision',
+      pass: ['Accept', 'Hold', 'Reject'].includes(clean(qc.recommendedDecision)),
+      details: `recommendedDecision="${clean(qc.recommendedDecision)}"`
+    });
+  } else {
+    checks.push({
+      id: 'qc_decision_bounds',
+      label: 'QC intelligence returns valid decision',
+      pass: true,
+      details: 'Skipped (no QC rows available).'
+    });
+  }
+
+  const knowledge = findKnowledgeMatches(store, 'payment reconciliation workflow', 2);
+  checks.push({
+    id: 'knowledge_retrieval',
+    label: 'Knowledge retrieval executes without error',
+    pass: Array.isArray(knowledge),
+    details: `matches=${Array.isArray(knowledge) ? knowledge.length : 0}`
+  });
+
+  return checks;
+}
+
+async function generateExecutiveBrief(store, options = {}) {
+  const trigger = clean(options.trigger) || 'manual';
+  const requestedBy = clean(options.requestedBy) || 'system';
+  const generatedAt = nowIso();
+
+  const summary = makeSummary(store);
+  const agentStats = makeAgentStats(store).slice(0, 5);
+  const paymentRisk = localPaymentRiskReport(store, { period: 'week' });
+  const recentQc = (store.produce || [])
+    .slice()
+    .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))
+    .slice(0, 25)
+    .map((row) => localQcIntelligence(row));
+
+  const qcHighRisk = recentQc.filter((row) => row.riskLevel === 'high').length;
+  const qcMediumRisk = recentQc.filter((row) => row.riskLevel === 'medium').length;
+  const riskSignals = [];
+  if ((summary.owedFarmers || 0) > 0) {
+    riskSignals.push(`${summary.owedFarmers} farmer(s) currently owed (KES ${formatKes(summary.totalOwedKes || 0)}).`);
+  }
+  if ((paymentRisk.summary?.highFlags || 0) > 0) {
+    riskSignals.push(`${paymentRisk.summary.highFlags} high payment-risk flag(s) in the last 7 days.`);
+  }
+  if (qcHighRisk > 0) {
+    riskSignals.push(`${qcHighRisk} high-risk QC lot(s) in the latest inspections.`);
+  }
+  if (!riskSignals.length) {
+    riskSignals.push('No critical operational risks detected in current snapshot.');
+  }
+
+  const actions = [];
+  if ((summary.owedFarmers || 0) > 0) {
+    actions.push('Open Payments > Farmers Owed and prepare settlement batch for due farmers.');
+  }
+  if ((paymentRisk.summary?.highFlags || 0) > 0 || (paymentRisk.summary?.mediumFlags || 0) > 0) {
+    actions.push('Review Payment Risk flags and convert high-risk findings into ops tasks for follow-up.');
+  }
+  if (qcHighRisk > 0 || qcMediumRisk > 0) {
+    actions.push('Run re-sampling on medium/high QC lots before dispatch confirmation.');
+  }
+  if (!actions.length) {
+    actions.push('Maintain routine monitoring and continue weekly KPI review.');
+  }
+
+  let narrative =
+    `Daily executive brief (${generatedAt}): ${summary.farmers || 0} farmers, ${summary.qcRecords || 0} QC records, ` +
+    `${summary.purchasedRecords || 0} purchases, payment success ${summary.paymentSuccessRate || 0}%, ` +
+    `SMS spend KES ${formatKes(summary.smsSpentLast24hKes || 0)} in last 24h.`;
+  let source = 'local-rules';
+  let model = 'local-rules';
+  let warning = '';
+
+  if (OPENAI_API_KEY) {
+    const openAi = await callOpenAiJson(
+      aiPromptPolicy(
+        store,
+        'executiveBriefSystem',
+        'You are an executive operations analyst. Create concise, decision-oriented summaries. Do not claim to execute changes.'
+      ),
+      `Create a short executive brief using this snapshot:
+- Trigger: ${trigger}
+- Requested by: ${requestedBy}
+- Farmers: ${summary.farmers || 0}
+- QC records: ${summary.qcRecords || 0}
+- Purchases: ${summary.purchasedRecords || 0}
+- Owed farmers: ${summary.owedFarmers || 0}
+- Total owed KES: ${summary.totalOwedKes || 0}
+- Payment success: ${summary.paymentSuccessRate || 0}%
+- SMS spend 24h KES: ${summary.smsSpentLast24hKes || 0}
+- Payment risk summary: ${paymentRisk.narrative}
+- QC risk counts: high=${qcHighRisk}, medium=${qcMediumRisk}
+- Baseline narrative: ${narrative}`,
+      {
+        type: 'object',
+        additionalProperties: false,
+        required: ['narrative', 'actions'],
+        properties: {
+          narrative: { type: 'string' },
+          actions: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 6,
+            items: { type: 'string' }
+          }
+        }
+      }
+    );
+
+    if (openAi.ok) {
+      source = 'openai';
+      model = OPENAI_MODEL;
+      narrative = clean(openAi.data?.narrative) || narrative;
+      const aiActions = Array.isArray(openAi.data?.actions)
+        ? openAi.data.actions.map((row) => clean(row)).filter(Boolean).slice(0, 6)
+        : [];
+      if (aiActions.length) {
+        actions.length = 0;
+        actions.push(...aiActions);
+      }
+    } else {
+      warning = openAi.error || 'OpenAI unavailable. Generated local executive brief.';
+    }
+  }
+
+  const overallRisk = paymentRisk.summary?.overallRisk || (qcHighRisk > 0 ? 'high' : qcMediumRisk > 0 ? 'medium' : 'low');
+  const brief = {
+    id: id('BRIEF'),
+    generatedAt,
+    trigger,
+    requestedBy,
+    source,
+    model,
+    warning,
+    summary,
+    paymentRiskSummary: paymentRisk.summary || {},
+    agentSnapshot: agentStats,
+    riskSignals: riskSignals.slice(0, 10),
+    actions: actions.slice(0, 8),
+    narrative,
+    overallRisk
+  };
+
+  if (overallRisk === 'high') {
+    brief.alert = {
+      id: id('AIALERT'),
+      createdAt: generatedAt,
+      severity: 'high',
+      title: 'High operational risk detected in executive brief',
+      detail: narrative
+    };
+  }
+
+  return brief;
+}
+
+async function executeAiProposal(store, proposal, actor = 'system') {
+  const actionType = clean(proposal?.actionType).toLowerCase();
+  const payload = proposal?.payload && typeof proposal.payload === 'object' ? proposal.payload : {};
+
+  if (!actionType) {
+    throw new Error('Proposal actionType is missing.');
+  }
+
+  if (actionType === 'payment_risk_to_tasks') {
+    const report = localPaymentRiskReport(store, {
+      period: clean(payload?.period) || 'week',
+      from: clean(payload?.from),
+      to: clean(payload?.to)
+    });
+    const templates = buildOpsTasksFromPaymentRisk(report, actor);
+    const created = templates.map((row) => createOpsTask(store, row));
+    return {
+      actionType,
+      tasksCreated: created.length,
+      taskIds: created.map((row) => row.id),
+      summary: `Created ${created.length} ops task(s) from payment risk flags.`
+    };
+  }
+
+  if (actionType === 'qc_risk_to_tasks') {
+    const qcRecordId = clean(payload?.qcRecordId);
+    const limitRaw = Number(payload?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(120, Math.floor(limitRaw))) : 30;
+    const allQc = [...(store.produce || [])].sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt));
+    const selected = qcRecordId ? allQc.filter((row) => row.id === qcRecordId) : allQc.slice(0, limit);
+    const insights = selected.map((row) => localQcIntelligence(row));
+    const templates = buildOpsTasksFromQcInsights(insights, actor);
+    const created = templates.map((row) => createOpsTask(store, row));
+    return {
+      actionType,
+      tasksCreated: created.length,
+      taskIds: created.map((row) => row.id),
+      summary: `Created ${created.length} ops task(s) from QC intelligence.`
+    };
+  }
+
+  if (actionType === 'create_ops_tasks') {
+    const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+    if (!tasks.length) {
+      throw new Error('No tasks payload provided.');
+    }
+    const created = tasks.map((task) =>
+      createOpsTask(store, {
+        title: task?.title,
+        description: task?.description,
+        severity: task?.severity,
+        sourceType: clean(task?.sourceType) || 'ai-proposal',
+        sourceRef: clean(task?.sourceRef) || clean(proposal?.id),
+        createdBy: actor
+      })
+    );
+    return {
+      actionType,
+      tasksCreated: created.length,
+      taskIds: created.map((row) => row.id),
+      summary: `Created ${created.length} custom ops task(s).`
+    };
+  }
+
+  if (actionType === 'generate_executive_brief') {
+    const brief = await generateExecutiveBrief(store, {
+      trigger: 'proposal-execution',
+      requestedBy: actor
+    });
+    pushWithCap(store.aiBriefs, brief, AI_EXEC_BRIEF_MAX_HISTORY);
+    if (brief.alert) {
+      pushWithCap(store.aiAlerts, brief.alert, AI_EXEC_BRIEF_MAX_HISTORY);
+    }
+    return {
+      actionType,
+      tasksCreated: 0,
+      taskIds: [],
+      briefId: brief.id,
+      summary: `Generated executive brief ${brief.id}.`
+    };
+  }
+
+  throw new Error(`Unsupported proposal actionType "${actionType}".`);
+}
+
+async function runScheduledExecutiveBrief() {
+  const store = await readStore();
+  const brief = await generateExecutiveBrief(store, {
+    trigger: 'scheduled',
+    requestedBy: 'system'
+  });
+  pushWithCap(store.aiBriefs, brief, AI_EXEC_BRIEF_MAX_HISTORY);
+  if (brief.alert) {
+    pushWithCap(store.aiAlerts, brief.alert, AI_EXEC_BRIEF_MAX_HISTORY);
+  }
+  addActivity(store, {
+    actor: 'system',
+    role: 'system',
+    action: 'ai.brief.scheduled',
+    entity: 'ai',
+    entityId: brief.id,
+    details: `Generated scheduled executive brief (${brief.overallRisk} risk)`
+  });
+  await writeStore(store);
+  return brief;
+}
+
+function scheduleExecutiveBriefs() {
+  if (executiveBriefScheduleHandle) {
+    clearInterval(executiveBriefScheduleHandle);
+    executiveBriefScheduleHandle = null;
+  }
+  if (!AI_EXEC_BRIEF_ENABLED) return;
+
+  const intervalMs = AI_EXEC_BRIEF_INTERVAL_HOURS * 60 * 60 * 1000;
+  executiveBriefScheduleHandle = setInterval(() => {
+    runScheduledExecutiveBrief().catch((error) => {
+      console.error(`[ai] Scheduled executive brief failed: ${error.message}`);
+    });
+  }, intervalMs);
+  if (typeof executiveBriefScheduleHandle.unref === 'function') {
+    executiveBriefScheduleHandle.unref();
   }
 }
 
@@ -3066,6 +3669,12 @@ const server = http.createServer(async (req, res) => {
         backend: STORAGE_BACKEND,
         backupIntervalHours: BACKUP_INTERVAL_HOURS,
         backupRetentionDays: BACKUP_RETENTION_DAYS
+      },
+      ai: {
+        model: OPENAI_MODEL,
+        openAiConfigured: Boolean(OPENAI_API_KEY),
+        execBriefEnabled: AI_EXEC_BRIEF_ENABLED,
+        execBriefIntervalHours: AI_EXEC_BRIEF_INTERVAL_HOURS
       }
     });
     return;
@@ -5416,6 +6025,12 @@ const server = http.createServer(async (req, res) => {
         json(res, 422, { error: 'question is required' });
         return;
       }
+      const responseId = id('AIR');
+      const maxContextDocsRaw = Number(store?.aiPromptConfig?.maxContextDocs);
+      const maxContextDocs = Number.isFinite(maxContextDocsRaw)
+        ? Math.max(1, Math.min(8, Math.floor(maxContextDocsRaw)))
+        : 4;
+      const citations = findKnowledgeMatches(store, question, maxContextDocs);
 
       const local = localCopilotAnswer(store, question);
       let source = 'local-rules';
@@ -5435,8 +6050,20 @@ const server = http.createServer(async (req, res) => {
 
       if (OPENAI_API_KEY) {
         const summary = makeSummary(store);
+        const contextBlock = citations.length
+          ? citations
+            .map((doc, index) => {
+              const tags = Array.isArray(doc.tags) && doc.tags.length ? ` | tags: ${doc.tags.join(', ')}` : '';
+              return `[DOC-${index + 1}] ${doc.title}${doc.source ? ` (${doc.source})` : ''}${tags}\n${doc.snippet}`;
+            })
+            .join('\n\n')
+          : 'No knowledge documents matched this question.';
         const openAi = await callOpenAiJson(
-          'You are an operations copilot for an avocado platform. Give concise, actionable, factual guidance. Do not claim to execute payments or system changes.',
+          aiPromptPolicy(
+            store,
+            'copilotSystem',
+            'You are an operations copilot for an avocado platform. Give concise, actionable, factual guidance. Do not claim to execute payments or system changes.'
+          ),
           `Question: ${question}
 
 Platform snapshot:
@@ -5448,6 +6075,9 @@ Platform snapshot:
 - Payments received KES: ${summary.paymentsReceived || 0}
 - Payment success %: ${summary.paymentSuccessRate || 0}
 - SMS spend 24h KES: ${summary.smsSpentLast24hKes || 0}
+
+Knowledge context (use only if relevant):
+${contextBlock}
 
 Local baseline answer:
 ${local.answer}`,
@@ -5491,17 +6121,20 @@ ${local.answer}`,
         role: auth.session.role,
         action: 'ai.copilot.ask',
         entity: 'ai',
+        entityId: responseId,
         details: `Admin Copilot asked: "${question.slice(0, 140)}"`
       });
       await writeStore(store);
 
       json(res, 200, {
         data: {
+          responseId,
           question,
           intent: local.intent || 'operations_summary',
           answer,
           insights,
           actions,
+          citations,
           source,
           model,
           warning
@@ -5621,6 +6254,7 @@ ${local.answer}`,
       }
 
       const payload = await readBody(req, 300_000);
+      const responseId = id('AIR');
       const purpose = clean(payload.purpose || payload.goal);
       if (!purpose) {
         json(res, 422, { error: 'purpose is required' });
@@ -5651,7 +6285,11 @@ ${local.answer}`,
 
       if (OPENAI_API_KEY) {
         const openAi = await callOpenAiJson(
-          'Draft concise operational SMS messages for Kenyan farmers. Keep wording simple. Respect requested language and max length. Return only final draft text.',
+          aiPromptPolicy(
+            store,
+            'smsSystem',
+            'Draft concise operational SMS messages for Kenyan farmers. Keep wording simple. Respect requested language and max length. Return only final draft text.'
+          ),
           `Draft SMS for Agem Portal.
 Purpose: ${purpose}
 Audience: ${audience}
@@ -5701,12 +6339,14 @@ Max length: ${maxLength || 'none'}`,
         role: auth.session.role,
         action: 'ai.sms.draft',
         entity: 'ai',
+        entityId: responseId,
         details: `AI SMS draft generated for purpose "${purpose.slice(0, 120)}"`
       });
       await writeStore(store);
 
       json(res, 200, {
         data: {
+          responseId,
           purpose,
           audience,
           tone,
@@ -5735,6 +6375,7 @@ Max length: ${maxLength || 'none'}`,
       }
 
       const payload = await readBody(req, 300_000);
+      const responseId = id('AIR');
       const qcRecordId = clean(payload.qcRecordId);
       const limitRaw = parseNumber(payload.limit);
       const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 30;
@@ -5774,7 +6415,11 @@ Max length: ${maxLength || 'none'}`,
       if (OPENAI_API_KEY && items.length === 1) {
         const item = items[0];
         const openAi = await callOpenAiJson(
-          'You are a farm-gate avocado QC assistant. Improve explanation quality but keep decisions conservative and practical.',
+          aiPromptPolicy(
+            store,
+            'qcSystem',
+            'You are a farm-gate avocado QC assistant. Improve explanation quality but keep decisions conservative and practical.'
+          ),
           `QC Snapshot:
 - Variety: ${item.variety}
 - Lot weight kg: ${item.lotWeightKgs}
@@ -5826,12 +6471,14 @@ Max length: ${maxLength || 'none'}`,
         role: auth.session.role,
         action: 'ai.qc.intelligence',
         entity: 'ai',
+        entityId: responseId,
         details: `QC intelligence run on ${items.length} lot(s)`
       });
       await writeStore(store);
 
       json(res, 200, {
         data: {
+          responseId,
           qcRecordId: qcRecordId || '',
           limit,
           summary,
@@ -5857,6 +6504,7 @@ Max length: ${maxLength || 'none'}`,
       }
 
       const payload = await readBody(req, 200_000);
+      const responseId = id('AIR');
       const period = clean(payload.period) || 'week';
       const from = clean(payload.from);
       const to = clean(payload.to);
@@ -5869,7 +6517,11 @@ Max length: ${maxLength || 'none'}`,
 
       if (OPENAI_API_KEY) {
         const openAi = await callOpenAiJson(
-          'You are a payments risk assistant. Summarize risk and provide concise operational actions. Do not claim to execute payments.',
+          aiPromptPolicy(
+            store,
+            'paymentRiskSystem',
+            'You are a payments risk assistant. Summarize risk and provide concise operational actions. Do not claim to execute payments.'
+          ),
           `Payment risk report:
 - Period: ${report.range.period}
 - Payments analyzed: ${report.paymentCount}
@@ -5914,18 +6566,823 @@ Max length: ${maxLength || 'none'}`,
         role: auth.session.role,
         action: 'ai.payment.risk',
         entity: 'ai',
+        entityId: responseId,
         details: `Payment risk check run for period "${report.range.period}" (${report.paymentCount} payment(s))`
       });
       await writeStore(store);
 
       json(res, 200, {
         data: {
+          responseId,
           ...report,
           source,
           model,
           warning
         }
       });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/proposals' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...store.aiProposals];
+    rows = filterByQuery(rows, reqUrl.searchParams, ['id', 'status', 'actionType', 'title', 'description', 'source', 'createdBy']);
+    const statusFilter = normalizeAiProposalStatus(reqUrl.searchParams.get('status'));
+    if (clean(reqUrl.searchParams.get('status'))) {
+      rows = rows.filter((row) => normalizeAiProposalStatus(row.status) === statusFilter);
+    }
+
+    const actionType = clean(reqUrl.searchParams.get('actionType')).toLowerCase();
+    if (actionType) {
+      rows = rows.filter((row) => clean(row.actionType).toLowerCase() === actionType);
+    }
+
+    rows.sort((a, b) => dateMs(b.updatedAt || b.createdAt) - dateMs(a.updatedAt || a.createdAt));
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 100, 500);
+    const offset = safeQueryInt(reqUrl.searchParams, 'offset', 0, 5000);
+    const total = rows.length;
+    const paged = rows.slice(offset, offset + limit);
+    const counts = rows.reduce(
+      (acc, row) => {
+        const key = normalizeAiProposalStatus(row.status);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      },
+      { pending: 0, approved: 0, rejected: 0, executed: 0 }
+    );
+
+    json(res, 200, {
+      data: paged,
+      meta: {
+        total,
+        limit,
+        offset,
+        counts
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/ai/proposals' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 600_000);
+      const actionType = clean(payload.actionType).toLowerCase();
+      const allowedActionTypes = new Set([
+        'payment_risk_to_tasks',
+        'qc_risk_to_tasks',
+        'create_ops_tasks',
+        'generate_executive_brief'
+      ]);
+      if (!actionType || !allowedActionTypes.has(actionType)) {
+        json(res, 422, {
+          error:
+            'actionType is required and must be one of: payment_risk_to_tasks, qc_risk_to_tasks, create_ops_tasks, generate_executive_brief'
+        });
+        return;
+      }
+
+      const now = nowIso();
+      const confidenceRaw = Number(payload.confidence);
+      const confidence = Number.isFinite(confidenceRaw)
+        ? Number(Math.max(0, Math.min(1, confidenceRaw)).toFixed(2))
+        : '';
+      const title =
+        clean(payload.title) ||
+        (
+          actionType === 'payment_risk_to_tasks'
+            ? 'Create Ops Tasks from Payment Risk'
+            : actionType === 'qc_risk_to_tasks'
+              ? 'Create Ops Tasks from QC Risk'
+              : actionType === 'create_ops_tasks'
+                ? 'Create Custom Ops Tasks'
+                : 'Generate Executive Brief'
+        );
+      const proposal = {
+        id: id('AIP'),
+        status: 'pending',
+        actionType,
+        title,
+        description: clean(payload.description),
+        confidence,
+        source: clean(payload.source) || 'admin',
+        payload: payload.payload && typeof payload.payload === 'object' && !Array.isArray(payload.payload) ? payload.payload : {},
+        createdBy: auth.session.username,
+        createdAt: now,
+        updatedAt: now,
+        approvedBy: '',
+        approvedAt: '',
+        rejectedBy: '',
+        rejectedAt: '',
+        rejectionReason: '',
+        executedBy: '',
+        executedAt: '',
+        executionSummary: ''
+      };
+
+      pushWithCap(store.aiProposals, proposal, AI_PROPOSAL_CAP);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.proposal.create',
+        entity: 'ai',
+        entityId: proposal.id,
+        details: `Created proposal "${proposal.title}" (${proposal.actionType})`
+      });
+      await writeStore(store);
+
+      json(res, 201, { data: proposal });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/ai/proposals/') && pathname.endsWith('/approve') && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const proposalId = routeParamWithSuffix(pathname, '/api/ai/proposals/', '/approve');
+      const proposal = findById(store.aiProposals, proposalId);
+      if (!proposal) {
+        json(res, 404, { error: 'Proposal not found' });
+        return;
+      }
+      if (normalizeAiProposalStatus(proposal.status) !== 'pending') {
+        json(res, 409, { error: 'Only pending proposals can be approved.' });
+        return;
+      }
+
+      proposal.status = 'approved';
+      proposal.approvedBy = auth.session.username;
+      proposal.approvedAt = nowIso();
+      proposal.updatedAt = proposal.approvedAt;
+      proposal.rejectedBy = '';
+      proposal.rejectedAt = '';
+      proposal.rejectionReason = '';
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.proposal.approve',
+        entity: 'ai',
+        entityId: proposal.id,
+        details: `Approved proposal "${proposal.title}"`
+      });
+      await writeStore(store);
+      json(res, 200, { data: proposal });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/ai/proposals/') && pathname.endsWith('/reject') && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const proposalId = routeParamWithSuffix(pathname, '/api/ai/proposals/', '/reject');
+      const proposal = findById(store.aiProposals, proposalId);
+      if (!proposal) {
+        json(res, 404, { error: 'Proposal not found' });
+        return;
+      }
+      const currentStatus = normalizeAiProposalStatus(proposal.status);
+      if (!['pending', 'approved'].includes(currentStatus)) {
+        json(res, 409, { error: 'Only pending or approved proposals can be rejected.' });
+        return;
+      }
+
+      const payload = await readBody(req, 100_000);
+      proposal.status = 'rejected';
+      proposal.rejectedBy = auth.session.username;
+      proposal.rejectedAt = nowIso();
+      proposal.rejectionReason = clean(payload.reason);
+      proposal.updatedAt = proposal.rejectedAt;
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.proposal.reject',
+        entity: 'ai',
+        entityId: proposal.id,
+        details: `Rejected proposal "${proposal.title}"${proposal.rejectionReason ? ` (${proposal.rejectionReason.slice(0, 120)})` : ''}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: proposal });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/ai/proposals/') && pathname.endsWith('/execute') && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const proposalId = routeParamWithSuffix(pathname, '/api/ai/proposals/', '/execute');
+      const proposal = findById(store.aiProposals, proposalId);
+      if (!proposal) {
+        json(res, 404, { error: 'Proposal not found' });
+        return;
+      }
+      if (normalizeAiProposalStatus(proposal.status) !== 'approved') {
+        json(res, 409, { error: 'Only approved proposals can be executed.' });
+        return;
+      }
+
+      const result = await executeAiProposal(store, proposal, auth.session.username);
+      proposal.status = 'executed';
+      proposal.executedBy = auth.session.username;
+      proposal.executedAt = nowIso();
+      proposal.updatedAt = proposal.executedAt;
+      proposal.executionSummary = clean(result?.summary);
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.proposal.execute',
+        entity: 'ai',
+        entityId: proposal.id,
+        details: proposal.executionSummary || `Executed proposal "${proposal.title}"`
+      });
+      await writeStore(store);
+      json(res, 200, {
+        data: proposal,
+        result
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/briefs/run-now' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const brief = await generateExecutiveBrief(store, {
+        trigger: 'manual',
+        requestedBy: auth.session.username
+      });
+      pushWithCap(store.aiBriefs, brief, AI_EXEC_BRIEF_MAX_HISTORY);
+      if (brief.alert) {
+        pushWithCap(store.aiAlerts, brief.alert, AI_EXEC_BRIEF_MAX_HISTORY);
+      }
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.brief.run_now',
+        entity: 'ai',
+        entityId: brief.id,
+        details: `Generated executive brief (${brief.overallRisk} risk)`
+      });
+      await writeStore(store);
+      json(res, 201, { data: brief });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/briefs' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 20, 300);
+    const includeAlerts = reqUrl.searchParams.get('includeAlerts') !== 'false';
+    const briefs = [...store.aiBriefs]
+      .sort((a, b) => dateMs(b.generatedAt || b.createdAt) - dateMs(a.generatedAt || a.createdAt))
+      .slice(0, limit);
+    const alerts = includeAlerts
+      ? [...store.aiAlerts]
+        .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))
+        .slice(0, limit)
+      : [];
+
+    json(res, 200, {
+      data: {
+        briefs,
+        alerts
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/ai/alerts' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const severity = clean(reqUrl.searchParams.get('severity')).toLowerCase();
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 50, 500);
+    let rows = [...store.aiAlerts];
+    if (severity) {
+      rows = rows.filter((row) => normalizeRiskSeverity(row.severity, '') === severity);
+    }
+    rows.sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt));
+    json(res, 200, { data: rows.slice(0, limit) });
+    return;
+  }
+
+  if (pathname === '/api/ai/feedback' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin', 'agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 120_000);
+      const tool = clean(payload.tool).toLowerCase();
+      if (!tool) {
+        json(res, 422, { error: 'tool is required' });
+        return;
+      }
+
+      const rawRating = clean(payload.rating).toLowerCase();
+      const rating =
+        rawRating === 'up' || rawRating === 'positive'
+          ? 'up'
+          : rawRating === 'down' || rawRating === 'negative'
+            ? 'down'
+            : 'neutral';
+
+      const entry = {
+        id: id('AIFB'),
+        tool,
+        rating,
+        note: clean(payload.note).slice(0, 2000),
+        responseId: clean(payload.responseId),
+        prompt: clean(payload.prompt).slice(0, 3000),
+        actor: auth.session.username,
+        role: auth.session.role,
+        createdAt: nowIso()
+      };
+      pushWithCap(store.aiFeedback, entry, AI_FEEDBACK_CAP);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.feedback.submit',
+        entity: 'ai',
+        entityId: entry.id,
+        details: `Feedback submitted for ${entry.tool} (${entry.rating})`
+      });
+      await writeStore(store);
+      json(res, 201, { data: entry });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/feedback/summary' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 40, 500);
+    const summary = buildAiFeedbackSummary(store.aiFeedback);
+    const recent = [...store.aiFeedback]
+      .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))
+      .slice(0, limit);
+    json(res, 200, { data: { ...summary, recent } });
+    return;
+  }
+
+  if (pathname === '/api/ai/evals/run' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const checks = runAiEvalSuite(store);
+      const passCount = checks.filter((row) => Boolean(row.pass)).length;
+      const failCount = checks.length - passCount;
+      const run = {
+        id: id('AIEVAL'),
+        createdAt: nowIso(),
+        actor: auth.session.username,
+        totalChecks: checks.length,
+        passCount,
+        failCount,
+        scorePct: checks.length ? Number(((passCount / checks.length) * 100).toFixed(1)) : 0,
+        checks
+      };
+      pushWithCap(store.aiEvalRuns, run, AI_EVAL_CAP);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.eval.run',
+        entity: 'ai',
+        entityId: run.id,
+        details: `AI eval run completed: ${run.passCount}/${run.totalChecks} checks passed`
+      });
+      await writeStore(store);
+      json(res, 201, { data: run });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/evals' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 20, 200);
+    const rows = [...store.aiEvalRuns]
+      .sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt))
+      .slice(0, limit);
+    json(res, 200, { data: rows });
+    return;
+  }
+
+  if (pathname === '/api/ai/prompt-config' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+    json(res, 200, { data: store.aiPromptConfig || {} });
+    return;
+  }
+
+  if (pathname === '/api/ai/prompt-config' && req.method === 'PATCH') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 400_000);
+      const allowedStringKeys = [
+        'copilotSystem',
+        'smsSystem',
+        'qcSystem',
+        'paymentRiskSystem',
+        'executiveBriefSystem'
+      ];
+
+      for (const key of allowedStringKeys) {
+        if (payload[key] === undefined) continue;
+        const next = clean(payload[key]);
+        if (!next) {
+          delete store.aiPromptConfig[key];
+          continue;
+        }
+        store.aiPromptConfig[key] = next.slice(0, 4000);
+      }
+      if (payload.maxContextDocs !== undefined) {
+        const parsed = Number(payload.maxContextDocs);
+        if (!Number.isFinite(parsed)) {
+          json(res, 422, { error: 'maxContextDocs must be numeric.' });
+          return;
+        }
+        store.aiPromptConfig.maxContextDocs = Math.max(1, Math.min(8, Math.floor(parsed)));
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.prompt_config.update',
+        entity: 'ai',
+        details: 'Updated AI prompt policy configuration'
+      });
+      await writeStore(store);
+      json(res, 200, { data: store.aiPromptConfig || {} });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/knowledge' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const q = clean(reqUrl.searchParams.get('q'));
+    const includeContent = reqUrl.searchParams.get('includeContent') === 'true';
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 100, 1000);
+    let docs = [...store.aiKnowledgeDocs]
+      .sort((a, b) => dateMs(b.updatedAt || b.createdAt) - dateMs(a.updatedAt || a.createdAt));
+    if (q) {
+      const tokens = tokenizeSearchText(q);
+      docs = docs.filter((doc) => {
+        const haystack = [
+          clean(doc.title).toLowerCase(),
+          clean(doc.source).toLowerCase(),
+          Array.isArray(doc.tags) ? doc.tags.map((row) => clean(row).toLowerCase()).join(' ') : '',
+          clean(doc.content).toLowerCase()
+        ].join(' ');
+        return tokens.every((token) => haystack.includes(token));
+      });
+    }
+    docs = docs.slice(0, limit).map((doc) => ({
+      ...doc,
+      snippet: buildKnowledgeSnippet(doc.content, tokenizeSearchText(q)),
+      content: includeContent ? clean(doc.content) : ''
+    }));
+
+    json(res, 200, { data: docs });
+    return;
+  }
+
+  if (pathname === '/api/ai/knowledge' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 800_000);
+      const title = clean(payload.title);
+      const content = clean(payload.content);
+      if (!title || !content) {
+        json(res, 422, { error: 'title and content are required.' });
+        return;
+      }
+
+      const tagsRaw = Array.isArray(payload.tags)
+        ? payload.tags
+        : clean(payload.tags)
+          ? clean(payload.tags).split(',')
+          : [];
+      const tags = tagsRaw
+        .map((row) => clean(row).toLowerCase())
+        .filter(Boolean)
+        .slice(0, 20);
+      const now = nowIso();
+      const doc = {
+        id: id('KDOC'),
+        title: title.slice(0, 220),
+        source: clean(payload.source).slice(0, 220),
+        tags,
+        content: content.slice(0, 20000),
+        createdBy: auth.session.username,
+        createdAt: now,
+        updatedAt: now
+      };
+      pushWithCap(store.aiKnowledgeDocs, doc, AI_KNOWLEDGE_CAP);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.knowledge.add',
+        entity: 'ai',
+        entityId: doc.id,
+        details: `Added knowledge document "${doc.title}"`
+      });
+      await writeStore(store);
+      json(res, 201, { data: doc });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname.startsWith('/api/ai/knowledge/') && req.method === 'DELETE') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const docId = routeParam(pathname, '/api/ai/knowledge/');
+    const before = store.aiKnowledgeDocs.length;
+    const removed = store.aiKnowledgeDocs.find((row) => row.id === docId);
+    store.aiKnowledgeDocs = store.aiKnowledgeDocs.filter((row) => row.id !== docId);
+    if (before === store.aiKnowledgeDocs.length) {
+      json(res, 404, { error: 'Knowledge document not found.' });
+      return;
+    }
+
+    addActivity(store, {
+      actor: auth.session.username,
+      role: auth.session.role,
+      action: 'ai.knowledge.delete',
+      entity: 'ai',
+      entityId: docId,
+      details: `Deleted knowledge document "${clean(removed?.title) || docId}"`
+    });
+    await writeStore(store);
+    json(res, 200, { ok: true });
+    return;
+  }
+
+  if (pathname === '/api/ops/tasks/from-ai' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 800_000);
+      const source = clean(payload.source).toLowerCase();
+      const actor = auth.session.username;
+
+      let templates = [];
+      let sourceSummary = '';
+      if (source === 'payment-risk') {
+        const report = localPaymentRiskReport(store, {
+          period: clean(payload.period) || 'week',
+          from: clean(payload.from),
+          to: clean(payload.to)
+        });
+        templates = buildOpsTasksFromPaymentRisk(report, actor);
+        sourceSummary = `payment-risk (${report.summary?.overallRisk || 'unknown'} risk)`;
+      } else if (source === 'qc-intelligence') {
+        const qcRecordId = clean(payload.qcRecordId);
+        const limitRaw = Number(payload.limit);
+        const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(120, Math.floor(limitRaw))) : 30;
+        const allQc = [...(store.produce || [])].sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt));
+        const selected = qcRecordId ? allQc.filter((row) => row.id === qcRecordId) : allQc.slice(0, limit);
+        const insights = selected.map((row) => localQcIntelligence(row));
+        templates = buildOpsTasksFromQcInsights(insights, actor);
+        sourceSummary = `qc-intelligence (${insights.length} lot(s))`;
+      } else if (source === 'custom') {
+        const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+        templates = tasks.map((task) => ({
+          title: task?.title,
+          description: task?.description,
+          severity: task?.severity,
+          sourceType: clean(task?.sourceType) || 'ai-custom',
+          sourceRef: clean(task?.sourceRef),
+          assignedTo: clean(task?.assignedTo),
+          notes: clean(task?.notes),
+          createdBy: actor
+        }));
+        sourceSummary = 'custom';
+      } else {
+        json(res, 422, { error: 'source is required and must be one of: payment-risk, qc-intelligence, custom' });
+        return;
+      }
+
+      const created = templates.map((row) => createOpsTask(store, row));
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ops.tasks.create_from_ai',
+        entity: 'ai',
+        details: `Created ${created.length} ops task(s) from ${sourceSummary}`
+      });
+      await writeStore(store);
+      json(res, 201, {
+        data: created,
+        meta: {
+          source,
+          createdCount: created.length
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ops/tasks' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...store.opsTasks];
+    rows = filterByQuery(rows, reqUrl.searchParams, ['title', 'description', 'sourceType', 'sourceRef', 'assignedTo', 'status']);
+    const status = clean(reqUrl.searchParams.get('status')).toLowerCase();
+    const severity = clean(reqUrl.searchParams.get('severity')).toLowerCase();
+    if (status) rows = rows.filter((row) => normalizeOpsTaskStatus(row.status) === normalizeOpsTaskStatus(status));
+    if (severity) rows = rows.filter((row) => normalizeRiskSeverity(row.severity, '') === normalizeRiskSeverity(severity, ''));
+    rows.sort((a, b) => dateMs(b.updatedAt || b.createdAt) - dateMs(a.updatedAt || a.createdAt));
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
+    const offset = safeQueryInt(reqUrl.searchParams, 'offset', 0, 10000);
+    const total = rows.length;
+    const counts = rows.reduce(
+      (acc, row) => {
+        const key = normalizeOpsTaskStatus(row.status);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      },
+      { open: 0, in_progress: 0, resolved: 0, closed: 0 }
+    );
+    json(res, 200, {
+      data: rows.slice(offset, offset + limit),
+      meta: {
+        total,
+        limit,
+        offset,
+        counts
+      }
+    });
+    return;
+  }
+
+  if (pathname.startsWith('/api/ops/tasks/') && req.method === 'PATCH') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin', 'agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const taskId = routeParam(pathname, '/api/ops/tasks/');
+      const task = findById(store.opsTasks, taskId);
+      if (!task) {
+        json(res, 404, { error: 'Task not found.' });
+        return;
+      }
+
+      const payload = await readBody(req, 120_000);
+      if (payload.title !== undefined) task.title = clean(payload.title) || task.title;
+      if (payload.description !== undefined) task.description = clean(payload.description);
+      if (payload.severity !== undefined) task.severity = normalizeRiskSeverity(payload.severity, task.severity || 'medium');
+      if (payload.assignedTo !== undefined) task.assignedTo = clean(payload.assignedTo);
+      if (payload.notes !== undefined) task.notes = clean(payload.notes);
+      if (payload.status !== undefined) {
+        task.status = normalizeOpsTaskStatus(payload.status);
+      }
+      task.updatedAt = nowIso();
+      if (task.status === 'resolved' || task.status === 'closed') {
+        task.resolvedAt = task.resolvedAt || task.updatedAt;
+      } else {
+        task.resolvedAt = '';
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ops.task.update',
+        entity: 'ai',
+        entityId: task.id,
+        details: `Updated ops task "${task.title}" (${task.status})`
+      });
+      await writeStore(store);
+      json(res, 200, { data: task });
     } catch (error) {
       json(res, 400, { error: error.message });
     }
@@ -6598,6 +8055,14 @@ async function handleShutdown(signal) {
   shuttingDown = true;
   console.log(`[system] ${signal} received, shutting down gracefully...`);
   try {
+    if (backupScheduleHandle) {
+      clearInterval(backupScheduleHandle);
+      backupScheduleHandle = null;
+    }
+    if (executiveBriefScheduleHandle) {
+      clearInterval(executiveBriefScheduleHandle);
+      executiveBriefScheduleHandle = null;
+    }
     await shutdownStorage();
   } finally {
     process.exit(0);
@@ -6616,11 +8081,12 @@ async function startServer() {
     await ensureStore();
     pruneOldBackups();
     scheduleAutomaticBackups();
+    scheduleExecutiveBriefs();
 
     server.listen(PORT, HOST, () => {
       console.log(`Agem MVP server running on http://${HOST}:${PORT}`);
       console.log(
-        `[storage] backend=${STORAGE_BACKEND}, backupIntervalHours=${BACKUP_INTERVAL_HOURS}, backupRetentionDays=${BACKUP_RETENTION_DAYS}`
+        `[storage] backend=${STORAGE_BACKEND}, backupIntervalHours=${BACKUP_INTERVAL_HOURS}, backupRetentionDays=${BACKUP_RETENTION_DAYS}, aiExecBriefEnabled=${AI_EXEC_BRIEF_ENABLED}, aiExecBriefIntervalHours=${AI_EXEC_BRIEF_INTERVAL_HOURS}`
       );
     });
   } catch (error) {

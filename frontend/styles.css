@@ -949,7 +949,12 @@ button.mini-btn {
 #farmerImportQaWrap,
 #copilotWrap,
 #qcAiWrap,
-#paymentRiskWrap {
+#paymentRiskWrap,
+#proposalWrap,
+#briefWrap,
+#opsTaskWrap,
+#knowledgeWrap,
+#aiFeedbackWrap {
   border: 1px dashed #c8d8c8;
   border-radius: 10px;
   background: #f8fcf6;
@@ -961,8 +966,60 @@ button.mini-btn {
 #smsDraftWrap[hidden],
 #farmerImportQaWrap[hidden],
 #qcAiWrap[hidden],
-#paymentRiskWrap[hidden] {
+#paymentRiskWrap[hidden],
+#proposalWrap[hidden],
+#briefWrap[hidden],
+#opsTaskWrap[hidden],
+#knowledgeWrap[hidden],
+#aiFeedbackWrap[hidden] {
   display: none !important;
+}
+
+.proposal-actions,
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.proposal-card,
+.brief-card,
+.task-card,
+.knowledge-card,
+.feedback-card {
+  border: 1px solid #d6e3d1;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.severity-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border: 1px solid #b9cdb8;
+  background: #edf6ea;
+  color: #2d4f36;
+}
+
+.severity-badge.high,
+.severity-badge.critical {
+  background: #f9e7e7;
+  border-color: #efc7c7;
+  color: #7c2c2c;
+}
+
+.severity-badge.medium {
+  background: #fff3e1;
+  border-color: #ecd4aa;
+  color: #73521f;
 }
 
 .ai-result-title {

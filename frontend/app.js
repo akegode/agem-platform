@@ -27,7 +27,24 @@ const smsPicker = {
 const aiState = {
   smsDrafts: [],
   qcInsights: [],
-  paymentRiskFlags: []
+  paymentRiskFlags: [],
+  paymentRiskReport: null,
+  proposals: [],
+  proposalsMeta: null,
+  briefs: [],
+  alerts: [],
+  opsTasks: [],
+  opsTasksMeta: null,
+  knowledgeDocs: [],
+  feedbackSummary: null,
+  evalRuns: [],
+  lastResponseIds: {
+    copilot: '',
+    'sms-draft': '',
+    'qc-intelligence': '',
+    'payment-risk': '',
+    'executive-brief': ''
+  }
 };
 const owedPicker = {
   rows: [],
@@ -256,6 +273,46 @@ const elements = {
   paymentRiskRunBtn: document.getElementById('paymentRiskRunBtn'),
   paymentRiskMsg: document.getElementById('paymentRiskMsg'),
   paymentRiskWrap: document.getElementById('paymentRiskWrap'),
+  briefRunNowBtn: document.getElementById('briefRunNowBtn'),
+  briefRefreshBtn: document.getElementById('briefRefreshBtn'),
+  briefMsg: document.getElementById('briefMsg'),
+  briefWrap: document.getElementById('briefWrap'),
+  proposalForm: document.getElementById('proposalForm'),
+  proposalActionType: document.getElementById('proposalActionType'),
+  proposalConfidence: document.getElementById('proposalConfidence'),
+  proposalTitle: document.getElementById('proposalTitle'),
+  proposalDescription: document.getElementById('proposalDescription'),
+  proposalPayload: document.getElementById('proposalPayload'),
+  proposalStatusFilter: document.getElementById('proposalStatusFilter'),
+  proposalRefreshBtn: document.getElementById('proposalRefreshBtn'),
+  proposalMsg: document.getElementById('proposalMsg'),
+  proposalWrap: document.getElementById('proposalWrap'),
+  opsFromPaymentRiskBtn: document.getElementById('opsFromPaymentRiskBtn'),
+  opsFromQcBtn: document.getElementById('opsFromQcBtn'),
+  opsRefreshBtn: document.getElementById('opsRefreshBtn'),
+  opsTaskStatusFilter: document.getElementById('opsTaskStatusFilter'),
+  opsTaskSeverityFilter: document.getElementById('opsTaskSeverityFilter'),
+  opsTaskMsg: document.getElementById('opsTaskMsg'),
+  opsTaskWrap: document.getElementById('opsTaskWrap'),
+  knowledgeForm: document.getElementById('knowledgeForm'),
+  knowledgeTitle: document.getElementById('knowledgeTitle'),
+  knowledgeSource: document.getElementById('knowledgeSource'),
+  knowledgeTags: document.getElementById('knowledgeTags'),
+  knowledgeContent: document.getElementById('knowledgeContent'),
+  knowledgeSearch: document.getElementById('knowledgeSearch'),
+  knowledgeSearchBtn: document.getElementById('knowledgeSearchBtn'),
+  knowledgeMsg: document.getElementById('knowledgeMsg'),
+  knowledgeWrap: document.getElementById('knowledgeWrap'),
+  aiFeedbackForm: document.getElementById('aiFeedbackForm'),
+  aiFeedbackTool: document.getElementById('aiFeedbackTool'),
+  aiFeedbackRating: document.getElementById('aiFeedbackRating'),
+  aiFeedbackResponseId: document.getElementById('aiFeedbackResponseId'),
+  aiFeedbackNote: document.getElementById('aiFeedbackNote'),
+  aiFeedbackSummaryBtn: document.getElementById('aiFeedbackSummaryBtn'),
+  aiEvalRunBtn: document.getElementById('aiEvalRunBtn'),
+  aiEvalRefreshBtn: document.getElementById('aiEvalRefreshBtn'),
+  aiFeedbackMsg: document.getElementById('aiFeedbackMsg'),
+  aiFeedbackWrap: document.getElementById('aiFeedbackWrap'),
 
   exportButtons: document.querySelectorAll('.export-btn'),
   smsExportRange: document.getElementById('smsExportRange'),
@@ -2773,9 +2830,633 @@ function bindAiTools() {
       }
     });
   }
+
+  if (elements.briefRunNowBtn) {
+    elements.briefRunNowBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.briefMsg.textContent = 'Executive briefs require backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.briefMsg.textContent = 'Sign in first to run an executive brief.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.briefMsg.textContent = 'Run-Now brief is admin-only.';
+        return;
+      }
+
+      try {
+        const response = await apiRequest('/api/ai/briefs/run-now', {
+          method: 'POST',
+          body: {}
+        });
+        const brief = response.data || null;
+        if (brief) {
+          aiState.briefs = [brief, ...aiState.briefs.filter((row) => row.id !== brief.id)].slice(0, 60);
+          if (brief.alert) {
+            aiState.alerts = [brief.alert, ...aiState.alerts.filter((row) => row.id !== brief.alert.id)].slice(0, 60);
+          }
+          aiState.lastResponseIds['executive-brief'] = String(brief.id || '');
+          syncAiFeedbackResponseIdFromLatest(true);
+          renderExecutiveBriefs();
+        }
+        elements.briefMsg.textContent = brief?.warning || 'Executive brief generated.';
+      } catch (error) {
+        elements.briefMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.briefRefreshBtn) {
+    elements.briefRefreshBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.briefMsg.textContent = 'Executive briefs require backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.briefMsg.textContent = 'Sign in first to refresh executive briefs.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.briefMsg.textContent = 'Only admin or agent can view executive briefs.';
+        return;
+      }
+      try {
+        await fetchAiBriefs();
+        renderExecutiveBriefs();
+        elements.briefMsg.textContent = 'Executive briefs refreshed.';
+      } catch (error) {
+        elements.briefMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.proposalRefreshBtn) {
+    elements.proposalRefreshBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.proposalMsg.textContent = 'Proposal queue requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.proposalMsg.textContent = 'Sign in first to refresh proposal queue.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.proposalMsg.textContent = 'Proposal queue is admin-only.';
+        return;
+      }
+      try {
+        await fetchAiProposals();
+        renderProposalQueue();
+        elements.proposalMsg.textContent = 'Proposal queue refreshed.';
+      } catch (error) {
+        elements.proposalMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.proposalStatusFilter) {
+    elements.proposalStatusFilter.addEventListener('change', async () => {
+      if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+        renderProposalQueue();
+        return;
+      }
+      try {
+        await fetchAiProposals();
+      } catch (error) {
+        elements.proposalMsg.textContent = error.message;
+      }
+      renderProposalQueue();
+    });
+  }
+
+  if (elements.proposalForm) {
+    elements.proposalForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      if (!API.enabled) {
+        elements.proposalMsg.textContent = 'Proposal queue requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.proposalMsg.textContent = 'Sign in first to create a proposal.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.proposalMsg.textContent = 'Only admin can create proposals.';
+        return;
+      }
+
+      const actionType = String(elements.proposalActionType?.value || '').trim();
+      const confidenceRaw = String(elements.proposalConfidence?.value || '').trim();
+      const confidence = confidenceRaw ? Number(confidenceRaw) : undefined;
+      const title = String(elements.proposalTitle?.value || '').trim();
+      const description = String(elements.proposalDescription?.value || '').trim();
+      const payloadText = String(elements.proposalPayload?.value || '').trim();
+
+      let proposalPayload = {};
+      if (payloadText) {
+        try {
+          const parsed = JSON.parse(payloadText);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            elements.proposalMsg.textContent = 'Payload JSON must be an object.';
+            return;
+          }
+          proposalPayload = parsed;
+        } catch {
+          elements.proposalMsg.textContent = 'Payload JSON is invalid.';
+          return;
+        }
+      }
+
+      try {
+        const response = await apiRequest('/api/ai/proposals', {
+          method: 'POST',
+          body: {
+            actionType,
+            confidence,
+            title,
+            description,
+            payload: proposalPayload
+          }
+        });
+        const proposal = response.data || null;
+        if (proposal) {
+          aiState.proposals = [proposal, ...aiState.proposals.filter((row) => row.id !== proposal.id)];
+          elements.proposalForm.reset();
+          if (elements.proposalActionType) {
+            elements.proposalActionType.value = proposal.actionType || 'payment_risk_to_tasks';
+          }
+          renderProposalQueue();
+        }
+        elements.proposalMsg.textContent = 'Proposal created.';
+      } catch (error) {
+        elements.proposalMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.proposalWrap) {
+    elements.proposalWrap.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-proposal-action]');
+      if (!button) return;
+      clearMessages();
+      if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+        elements.proposalMsg.textContent = 'Sign in as admin to manage proposals.';
+        return;
+      }
+
+      const proposalId = String(button.getAttribute('data-proposal-id') || '').trim();
+      const action = String(button.getAttribute('data-proposal-action') || '').trim().toLowerCase();
+      if (!proposalId || !action) return;
+
+      button.disabled = true;
+      try {
+        if (action === 'approve') {
+          await apiRequest(`/api/ai/proposals/${encodeURIComponent(proposalId)}/approve`, {
+            method: 'POST',
+            body: {}
+          });
+          elements.proposalMsg.textContent = 'Proposal approved.';
+        } else if (action === 'reject') {
+          const reason = window.prompt('Optional rejection reason:', '') || '';
+          await apiRequest(`/api/ai/proposals/${encodeURIComponent(proposalId)}/reject`, {
+            method: 'POST',
+            body: { reason }
+          });
+          elements.proposalMsg.textContent = 'Proposal rejected.';
+        } else if (action === 'execute') {
+          const response = await apiRequest(`/api/ai/proposals/${encodeURIComponent(proposalId)}/execute`, {
+            method: 'POST',
+            body: {}
+          });
+          const resultSummary = String(response?.result?.summary || '').trim();
+          elements.proposalMsg.textContent = resultSummary || 'Proposal executed.';
+          await fetchAiOpsTasks();
+          await fetchAiBriefs();
+          renderOpsTasks();
+          renderExecutiveBriefs();
+        }
+
+        await fetchAiProposals();
+        renderProposalQueue();
+      } catch (error) {
+        elements.proposalMsg.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  if (elements.opsFromPaymentRiskBtn) {
+    elements.opsFromPaymentRiskBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.opsTaskMsg.textContent = 'Ops task creation requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.opsTaskMsg.textContent = 'Sign in first to create ops tasks.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.opsTaskMsg.textContent = 'Create-from-AI task actions are admin-only.';
+        return;
+      }
+
+      const period = String(elements.paymentRiskPeriod?.value || 'week').trim().toLowerCase();
+      const body = {
+        source: 'payment-risk',
+        period
+      };
+      if (period === 'custom') {
+        const from = String(elements.paymentRiskFrom?.value || '').trim();
+        const to = String(elements.paymentRiskTo?.value || '').trim();
+        if (!from || !to) {
+          elements.opsTaskMsg.textContent = 'Choose start and end date first for custom range.';
+          return;
+        }
+        body.from = from;
+        body.to = to;
+      }
+
+      try {
+        const response = await apiRequest('/api/ops/tasks/from-ai', {
+          method: 'POST',
+          body
+        });
+        const createdCount = Number(response.meta?.createdCount || (Array.isArray(response.data) ? response.data.length : 0));
+        elements.opsTaskMsg.textContent = `Created ${createdCount} ops task(s) from payment risk.`;
+        await fetchAiOpsTasks();
+        renderOpsTasks();
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.opsFromQcBtn) {
+    elements.opsFromQcBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.opsTaskMsg.textContent = 'Ops task creation requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.opsTaskMsg.textContent = 'Sign in first to create ops tasks.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.opsTaskMsg.textContent = 'Create-from-AI task actions are admin-only.';
+        return;
+      }
+
+      try {
+        const qcRecordId = String(elements.qcAiRecord?.value || '').trim();
+        const response = await apiRequest('/api/ops/tasks/from-ai', {
+          method: 'POST',
+          body: {
+            source: 'qc-intelligence',
+            qcRecordId,
+            limit: 30
+          }
+        });
+        const createdCount = Number(response.meta?.createdCount || (Array.isArray(response.data) ? response.data.length : 0));
+        elements.opsTaskMsg.textContent = `Created ${createdCount} ops task(s) from QC intelligence.`;
+        await fetchAiOpsTasks();
+        renderOpsTasks();
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.opsRefreshBtn) {
+    elements.opsRefreshBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.opsTaskMsg.textContent = 'Ops tasks require backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.opsTaskMsg.textContent = 'Sign in first to refresh ops tasks.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.opsTaskMsg.textContent = 'Only admin or agent can view ops tasks.';
+        return;
+      }
+      try {
+        await fetchAiOpsTasks();
+        renderOpsTasks();
+        elements.opsTaskMsg.textContent = 'Ops tasks refreshed.';
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.opsTaskStatusFilter) {
+    elements.opsTaskStatusFilter.addEventListener('change', async () => {
+      if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+        renderOpsTasks();
+        return;
+      }
+      try {
+        await fetchAiOpsTasks();
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      }
+      renderOpsTasks();
+    });
+  }
+
+  if (elements.opsTaskSeverityFilter) {
+    elements.opsTaskSeverityFilter.addEventListener('change', async () => {
+      if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+        renderOpsTasks();
+        return;
+      }
+      try {
+        await fetchAiOpsTasks();
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      }
+      renderOpsTasks();
+    });
+  }
+
+  if (elements.opsTaskWrap) {
+    elements.opsTaskWrap.addEventListener('click', async (event) => {
+      const saveBtn = event.target.closest('[data-task-save]');
+      if (!saveBtn) return;
+      clearMessages();
+      if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+        elements.opsTaskMsg.textContent = 'Sign in as admin or agent to update tasks.';
+        return;
+      }
+
+      const taskId = String(saveBtn.getAttribute('data-task-save') || '').trim();
+      const card = saveBtn.closest('[data-task-id]');
+      if (!taskId || !card) return;
+
+      const status = String(card.querySelector('[data-task-field="status"]')?.value || '').trim();
+      const assignedTo = String(card.querySelector('[data-task-field="assignedTo"]')?.value || '').trim();
+      const notes = String(card.querySelector('[data-task-field="notes"]')?.value || '').trim();
+
+      saveBtn.disabled = true;
+      try {
+        await apiRequest(`/api/ops/tasks/${encodeURIComponent(taskId)}`, {
+          method: 'PATCH',
+          body: { status, assignedTo, notes }
+        });
+        await fetchAiOpsTasks();
+        renderOpsTasks();
+        elements.opsTaskMsg.textContent = 'Task updated.';
+      } catch (error) {
+        elements.opsTaskMsg.textContent = error.message;
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+
+  if (elements.knowledgeForm) {
+    elements.knowledgeForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      if (!API.enabled) {
+        elements.knowledgeMsg.textContent = 'Knowledge base requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.knowledgeMsg.textContent = 'Sign in first to add knowledge.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.knowledgeMsg.textContent = 'Only admin can add knowledge documents.';
+        return;
+      }
+
+      const title = String(elements.knowledgeTitle?.value || '').trim();
+      const source = String(elements.knowledgeSource?.value || '').trim();
+      const tags = String(elements.knowledgeTags?.value || '').trim();
+      const content = String(elements.knowledgeContent?.value || '').trim();
+      if (!title || !content) {
+        elements.knowledgeMsg.textContent = 'Title and content are required.';
+        return;
+      }
+
+      try {
+        await apiRequest('/api/ai/knowledge', {
+          method: 'POST',
+          body: { title, source, tags, content }
+        });
+        elements.knowledgeForm.reset();
+        await fetchAiKnowledgeDocs();
+        renderKnowledgeDocs();
+        elements.knowledgeMsg.textContent = 'Knowledge document added.';
+      } catch (error) {
+        elements.knowledgeMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.knowledgeSearchBtn) {
+    elements.knowledgeSearchBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.knowledgeMsg.textContent = 'Knowledge base requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.knowledgeMsg.textContent = 'Sign in first to search knowledge.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.knowledgeMsg.textContent = 'Only admin or agent can view knowledge.';
+        return;
+      }
+
+      try {
+        await fetchAiKnowledgeDocs();
+        renderKnowledgeDocs();
+        elements.knowledgeMsg.textContent = 'Knowledge list refreshed.';
+      } catch (error) {
+        elements.knowledgeMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.knowledgeWrap) {
+    elements.knowledgeWrap.addEventListener('click', async (event) => {
+      const deleteBtn = event.target.closest('[data-knowledge-delete]');
+      if (!deleteBtn) return;
+      clearMessages();
+      if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+        elements.knowledgeMsg.textContent = 'Sign in as admin to delete knowledge documents.';
+        return;
+      }
+      const docId = String(deleteBtn.getAttribute('data-knowledge-delete') || '').trim();
+      if (!docId) return;
+      if (!window.confirm('Delete this knowledge document?')) return;
+
+      deleteBtn.disabled = true;
+      try {
+        await apiRequest(`/api/ai/knowledge/${encodeURIComponent(docId)}`, {
+          method: 'DELETE',
+          body: {}
+        });
+        await fetchAiKnowledgeDocs();
+        renderKnowledgeDocs();
+        elements.knowledgeMsg.textContent = 'Knowledge document deleted.';
+      } catch (error) {
+        elements.knowledgeMsg.textContent = error.message;
+      } finally {
+        deleteBtn.disabled = false;
+      }
+    });
+  }
+
+  if (elements.aiFeedbackTool) {
+    elements.aiFeedbackTool.addEventListener('change', () => {
+      syncAiFeedbackResponseIdFromLatest(true);
+    });
+  }
+
+  if (elements.aiFeedbackForm) {
+    elements.aiFeedbackForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      if (!API.enabled) {
+        elements.aiFeedbackMsg.textContent = 'AI feedback requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.aiFeedbackMsg.textContent = 'Sign in first to submit feedback.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.aiFeedbackMsg.textContent = 'Only admin or agent can submit AI feedback.';
+        return;
+      }
+
+      try {
+        const response = await apiRequest('/api/ai/feedback', {
+          method: 'POST',
+          body: {
+            tool: selectedAiFeedbackTool() || 'other',
+            rating: String(elements.aiFeedbackRating?.value || 'neutral').trim(),
+            responseId: String(elements.aiFeedbackResponseId?.value || '').trim(),
+            note: String(elements.aiFeedbackNote?.value || '').trim(),
+            prompt: String(elements.copilotPrompt?.value || '').trim()
+          }
+        });
+        const entry = response.data || null;
+        if (entry && currentRole() === 'admin') {
+          await fetchAiFeedbackSummary();
+        }
+        renderAiFeedbackAndEvals();
+        elements.aiFeedbackMsg.textContent = 'Feedback submitted.';
+      } catch (error) {
+        elements.aiFeedbackMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.aiFeedbackSummaryBtn) {
+    elements.aiFeedbackSummaryBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.aiFeedbackMsg.textContent = 'Feedback summary requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.aiFeedbackMsg.textContent = 'Sign in first to refresh feedback summary.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.aiFeedbackMsg.textContent = 'Feedback summary is admin-only.';
+        return;
+      }
+
+      try {
+        await fetchAiFeedbackSummary();
+        renderAiFeedbackAndEvals();
+        elements.aiFeedbackMsg.textContent = 'Feedback summary refreshed.';
+      } catch (error) {
+        elements.aiFeedbackMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.aiEvalRunBtn) {
+    elements.aiEvalRunBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.aiFeedbackMsg.textContent = 'AI eval suite requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.aiFeedbackMsg.textContent = 'Sign in first to run AI evals.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.aiFeedbackMsg.textContent = 'AI eval suite is admin-only.';
+        return;
+      }
+
+      try {
+        await apiRequest('/api/ai/evals/run', {
+          method: 'POST',
+          body: {}
+        });
+        await fetchAiEvalRuns();
+        renderAiFeedbackAndEvals();
+        elements.aiFeedbackMsg.textContent = 'AI eval run completed.';
+      } catch (error) {
+        elements.aiFeedbackMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.aiEvalRefreshBtn) {
+    elements.aiEvalRefreshBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.aiFeedbackMsg.textContent = 'AI eval history requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.aiFeedbackMsg.textContent = 'Sign in first to refresh AI eval runs.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.aiFeedbackMsg.textContent = 'AI eval history is admin-only.';
+        return;
+      }
+
+      try {
+        await fetchAiEvalRuns();
+        renderAiFeedbackAndEvals();
+        elements.aiFeedbackMsg.textContent = 'AI eval history refreshed.';
+      } catch (error) {
+        elements.aiFeedbackMsg.textContent = error.message;
+      }
+    });
+  }
 }
 
 function renderSmsDraftResult(data) {
+  const responseId = String(data?.responseId || '').trim();
+  if (responseId) {
+    aiState.lastResponseIds['sms-draft'] = responseId;
+    syncAiFeedbackResponseIdFromLatest();
+  }
   const drafts = Array.isArray(data?.drafts) ? data.drafts : [];
   const source = String(data?.source || 'local-rules');
   const warning = String(data?.warning || '').trim();
@@ -2817,6 +3498,11 @@ function renderSmsDraftResult(data) {
 }
 
 function renderCopilotResult(data) {
+  const responseId = String(data?.responseId || '').trim();
+  if (responseId) {
+    aiState.lastResponseIds.copilot = responseId;
+    syncAiFeedbackResponseIdFromLatest();
+  }
   const answer = String(data?.answer || '').trim();
   const insights = Array.isArray(data?.insights) ? data.insights.map((item) => String(item || '').trim()).filter(Boolean) : [];
   const actions = Array.isArray(data?.actions) ? data.actions.map((item) => String(item || '').trim()).filter(Boolean) : [];
@@ -2843,6 +3529,11 @@ function renderCopilotResult(data) {
 }
 
 function renderQcAiResult(data) {
+  const responseId = String(data?.responseId || '').trim();
+  if (responseId) {
+    aiState.lastResponseIds['qc-intelligence'] = responseId;
+    syncAiFeedbackResponseIdFromLatest();
+  }
   const summary = data?.summary || {};
   const items = Array.isArray(data?.items) ? data.items : [];
   const warning = String(data?.warning || '').trim();
@@ -2896,6 +3587,11 @@ function renderQcAiResult(data) {
 }
 
 function renderPaymentRiskResult(data) {
+  const responseId = String(data?.responseId || '').trim();
+  if (responseId) {
+    aiState.lastResponseIds['payment-risk'] = responseId;
+    syncAiFeedbackResponseIdFromLatest();
+  }
   const summary = data?.summary || {};
   const flags = Array.isArray(data?.flags) ? data.flags : [];
   const actions = Array.isArray(data?.actions) ? data.actions : [];
@@ -2949,6 +3645,600 @@ function syncPaymentRiskFilterUi() {
   elements.paymentRiskTo.hidden = !custom;
   elements.paymentRiskFrom.disabled = !custom;
   elements.paymentRiskTo.disabled = !custom;
+}
+
+function selectedAiFeedbackTool() {
+  return String(elements.aiFeedbackTool?.value || '').trim().toLowerCase();
+}
+
+function syncAiFeedbackResponseIdFromLatest(force = false) {
+  if (!elements.aiFeedbackResponseId || !elements.aiFeedbackTool) return;
+  const tool = selectedAiFeedbackTool();
+  const latest = String(aiState.lastResponseIds?.[tool] || '').trim();
+  if (!latest) return;
+  if (!force && String(elements.aiFeedbackResponseId.value || '').trim()) return;
+  elements.aiFeedbackResponseId.value = latest;
+}
+
+function normalizeProposalStatusClient(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['pending', 'approved', 'rejected', 'executed'].includes(normalized)) return normalized;
+  return 'pending';
+}
+
+function normalizeOpsTaskStatusClient(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['open', 'in_progress', 'resolved', 'closed'].includes(normalized)) return normalized;
+  return 'open';
+}
+
+function normalizeSeverityClient(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['critical', 'high', 'medium', 'low'].includes(normalized)) return normalized;
+  return 'low';
+}
+
+function textOrDash(value) {
+  const text = String(value || '').trim();
+  return text || '-';
+}
+
+async function fetchAiProposals() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    aiState.proposals = [];
+    aiState.proposalsMeta = null;
+    return [];
+  }
+
+  const params = new URLSearchParams({ limit: '100' });
+  const status = String(elements.proposalStatusFilter?.value || '').trim().toLowerCase();
+  if (status) params.set('status', status);
+  const response = await apiRequest(`/api/ai/proposals?${params.toString()}`);
+  aiState.proposals = Array.isArray(response.data) ? response.data : [];
+  aiState.proposalsMeta = response.meta || null;
+  return aiState.proposals;
+}
+
+async function fetchAiBriefs() {
+  if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+    aiState.briefs = [];
+    aiState.alerts = [];
+    return [];
+  }
+
+  const response = await apiRequest('/api/ai/briefs?limit=20&includeAlerts=true');
+  aiState.briefs = Array.isArray(response.data?.briefs) ? response.data.briefs : [];
+  aiState.alerts = Array.isArray(response.data?.alerts) ? response.data.alerts : [];
+  if (aiState.briefs.length) {
+    aiState.lastResponseIds['executive-brief'] = String(aiState.briefs[0].id || '').trim();
+    syncAiFeedbackResponseIdFromLatest();
+  }
+  return aiState.briefs;
+}
+
+async function fetchAiOpsTasks() {
+  if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+    aiState.opsTasks = [];
+    aiState.opsTasksMeta = null;
+    return [];
+  }
+
+  const params = new URLSearchParams({ limit: '200' });
+  const status = String(elements.opsTaskStatusFilter?.value || '').trim().toLowerCase();
+  const severity = String(elements.opsTaskSeverityFilter?.value || '').trim().toLowerCase();
+  if (status) params.set('status', status);
+  if (severity) params.set('severity', severity);
+  const response = await apiRequest(`/api/ops/tasks?${params.toString()}`);
+  aiState.opsTasks = Array.isArray(response.data) ? response.data : [];
+  aiState.opsTasksMeta = response.meta || null;
+  return aiState.opsTasks;
+}
+
+async function fetchAiKnowledgeDocs() {
+  if (!API.enabled || !isAuthenticated() || !['admin', 'agent'].includes(currentRole())) {
+    aiState.knowledgeDocs = [];
+    return [];
+  }
+
+  const params = new URLSearchParams({ limit: '80' });
+  const q = String(elements.knowledgeSearch?.value || '').trim();
+  if (q) params.set('q', q);
+  const response = await apiRequest(`/api/ai/knowledge?${params.toString()}`);
+  aiState.knowledgeDocs = Array.isArray(response.data) ? response.data : [];
+  return aiState.knowledgeDocs;
+}
+
+async function fetchAiFeedbackSummary() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    aiState.feedbackSummary = null;
+    return null;
+  }
+  const response = await apiRequest('/api/ai/feedback/summary?limit=30');
+  aiState.feedbackSummary = response.data || null;
+  return aiState.feedbackSummary;
+}
+
+async function fetchAiEvalRuns() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    aiState.evalRuns = [];
+    return [];
+  }
+  const response = await apiRequest('/api/ai/evals?limit=20');
+  aiState.evalRuns = Array.isArray(response.data) ? response.data : [];
+  return aiState.evalRuns;
+}
+
+function renderExecutiveBriefs() {
+  if (!elements.briefWrap) return;
+
+  if (!API.enabled) {
+    elements.briefWrap.classList.add('empty');
+    elements.briefWrap.textContent = 'Executive briefs are available in backend mode only.';
+    return;
+  }
+  if (!isAuthenticated()) {
+    elements.briefWrap.classList.add('empty');
+    elements.briefWrap.textContent = 'Sign in to view executive briefs.';
+    return;
+  }
+  if (!['admin', 'agent'].includes(currentRole())) {
+    elements.briefWrap.classList.add('empty');
+    elements.briefWrap.textContent = 'Executive briefs are available for admin and agent roles.';
+    return;
+  }
+
+  const briefs = [...(Array.isArray(aiState.briefs) ? aiState.briefs : [])]
+    .sort((a, b) => new Date(b.generatedAt || b.createdAt || 0).getTime() - new Date(a.generatedAt || a.createdAt || 0).getTime())
+    .slice(0, 20);
+  const alerts = [...(Array.isArray(aiState.alerts) ? aiState.alerts : [])]
+    .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+    .slice(0, 20);
+
+  if (!briefs.length && !alerts.length) {
+    elements.briefWrap.classList.add('empty');
+    elements.briefWrap.textContent = 'No executive briefs yet. Use "Run Brief Now" to generate one.';
+    return;
+  }
+
+  const briefCards = briefs
+    .map((brief) => {
+      const risk = normalizeSeverityClient(brief?.overallRisk);
+      const findings = Array.isArray(brief?.keyFindings) ? brief.keyFindings : [];
+      const actions = Array.isArray(brief?.actions) ? brief.actions : [];
+      return `
+        <article class="brief-card">
+          <div class="inline-actions wrap">
+            <strong>${escapeHtml(textOrDash(brief.title || `Brief ${brief.id}`))}</strong>
+            <span class="severity-badge ${escapeHtml(risk)}">${escapeHtml(risk)}</span>
+          </div>
+          <p class="meta compact">
+            ID: ${escapeHtml(textOrDash(brief.id))} | Trigger: ${escapeHtml(textOrDash(brief.trigger))} |
+            Time: ${escapeHtml(dateShort(brief.generatedAt || brief.createdAt))}
+          </p>
+          <p class="meta compact">${escapeHtml(textOrDash(brief.summary || brief.narrative))}</p>
+          ${
+            findings.length
+              ? `<div class="ai-result-title">Key Findings</div><ul class="ai-result-list">${findings
+                .slice(0, 4)
+                .map((row) => `<li>${escapeHtml(String(row))}</li>`)
+                .join('')}</ul>`
+              : ''
+          }
+          ${
+            actions.length
+              ? `<div class="ai-result-title">Recommended Actions</div><ul class="ai-result-list">${actions
+                .slice(0, 4)
+                .map((row) => `<li>${escapeHtml(String(row))}</li>`)
+                .join('')}</ul>`
+              : ''
+          }
+          ${brief.warning ? `<p class="dim">${escapeHtml(String(brief.warning))}</p>` : ''}
+        </article>
+      `;
+    })
+    .join('');
+
+  const alertCards = alerts
+    .map((alert) => {
+      const severity = normalizeSeverityClient(alert?.severity);
+      return `
+        <article class="brief-card">
+          <div class="inline-actions wrap">
+            <strong>${escapeHtml(textOrDash(alert.title || 'Alert'))}</strong>
+            <span class="severity-badge ${escapeHtml(severity)}">${escapeHtml(severity)}</span>
+          </div>
+          <p class="meta compact">${escapeHtml(textOrDash(alert.message || alert.summary))}</p>
+          <p class="dim">${escapeHtml(dateShort(alert.createdAt))}</p>
+        </article>
+      `;
+    })
+    .join('');
+
+  elements.briefWrap.classList.remove('empty');
+  elements.briefWrap.innerHTML = `
+    <p class="meta compact">Briefs: ${escapeHtml(String(briefs.length))} | Alerts: ${escapeHtml(String(alerts.length))}</p>
+    ${briefCards}
+    ${alertCards ? `<div class="ai-result-title">Alerts</div>${alertCards}` : ''}
+  `;
+}
+
+function renderProposalQueue() {
+  if (!elements.proposalWrap) return;
+
+  if (!API.enabled) {
+    elements.proposalWrap.classList.add('empty');
+    elements.proposalWrap.textContent = 'Proposal queue requires backend mode.';
+    return;
+  }
+  if (!isAuthenticated()) {
+    elements.proposalWrap.classList.add('empty');
+    elements.proposalWrap.textContent = 'Sign in to access the proposal queue.';
+    return;
+  }
+  if (currentRole() !== 'admin') {
+    elements.proposalWrap.classList.add('empty');
+    elements.proposalWrap.textContent = 'Proposal queue is visible to admin only.';
+    return;
+  }
+
+  const filter = String(elements.proposalStatusFilter?.value || '').trim().toLowerCase();
+  const rows = (Array.isArray(aiState.proposals) ? aiState.proposals : [])
+    .filter((row) => !filter || normalizeProposalStatusClient(row.status) === filter)
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+
+  if (!rows.length) {
+    elements.proposalWrap.classList.add('empty');
+    elements.proposalWrap.textContent = filter ? `No proposals with status "${filter}".` : 'No proposals available.';
+    return;
+  }
+
+  const counts = aiState.proposalsMeta?.counts || {};
+  const summaryLine = ['pending', 'approved', 'rejected', 'executed']
+    .map((status) => `${status}: ${Number(counts?.[status] || 0)}`)
+    .join(' | ');
+
+  const html = rows
+    .map((proposal) => {
+      const status = normalizeProposalStatusClient(proposal.status);
+      const canApprove = status === 'pending';
+      const canReject = status === 'pending' || status === 'approved';
+      const canExecute = status === 'approved';
+      const payloadText = proposal?.payload && Object.keys(proposal.payload).length
+        ? JSON.stringify(proposal.payload, null, 2)
+        : '';
+
+      return `
+        <article class="proposal-card">
+          <div class="inline-actions wrap">
+            <strong>${escapeHtml(textOrDash(proposal.title || proposal.actionType))}</strong>
+            <span class="severity-badge ${status === 'rejected' ? 'high' : status === 'executed' ? 'low' : 'medium'}">${escapeHtml(status)}</span>
+          </div>
+          <p class="meta compact">
+            ID: ${escapeHtml(textOrDash(proposal.id))} |
+            Action: ${escapeHtml(textOrDash(proposal.actionType))} |
+            Confidence: ${escapeHtml(proposal.confidence === '' || proposal.confidence === undefined ? '-' : String(proposal.confidence))}
+          </p>
+          <p class="meta compact">${escapeHtml(textOrDash(proposal.description))}</p>
+          ${payloadText ? `<pre class="meta compact">${escapeHtml(payloadText)}</pre>` : ''}
+          <p class="dim">
+            Created by ${escapeHtml(textOrDash(proposal.createdBy))} on ${escapeHtml(dateShort(proposal.createdAt))}
+            | Updated ${escapeHtml(dateShort(proposal.updatedAt || proposal.createdAt))}
+          </p>
+          ${
+            proposal.executionSummary
+              ? `<p class="meta compact"><strong>Execution:</strong> ${escapeHtml(String(proposal.executionSummary))}</p>`
+              : ''
+          }
+          ${
+            proposal.rejectionReason
+              ? `<p class="meta compact"><strong>Rejection reason:</strong> ${escapeHtml(String(proposal.rejectionReason))}</p>`
+              : ''
+          }
+          <div class="proposal-actions">
+            ${canApprove ? `<button class="table-btn" type="button" data-proposal-id="${escapeHtml(proposal.id)}" data-proposal-action="approve">Approve</button>` : ''}
+            ${canReject ? `<button class="table-btn" type="button" data-proposal-id="${escapeHtml(proposal.id)}" data-proposal-action="reject">Reject</button>` : ''}
+            ${canExecute ? `<button class="table-btn" type="button" data-proposal-id="${escapeHtml(proposal.id)}" data-proposal-action="execute">Execute</button>` : ''}
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+
+  elements.proposalWrap.classList.remove('empty');
+  elements.proposalWrap.innerHTML = `
+    <p class="meta compact">Queue counts: ${escapeHtml(summaryLine)}</p>
+    ${html}
+  `;
+}
+
+function renderOpsTasks() {
+  if (!elements.opsTaskWrap) return;
+
+  if (!API.enabled) {
+    elements.opsTaskWrap.classList.add('empty');
+    elements.opsTaskWrap.textContent = 'Operations tasks require backend mode.';
+    return;
+  }
+  if (!isAuthenticated()) {
+    elements.opsTaskWrap.classList.add('empty');
+    elements.opsTaskWrap.textContent = 'Sign in to view operations tasks.';
+    return;
+  }
+  if (!['admin', 'agent'].includes(currentRole())) {
+    elements.opsTaskWrap.classList.add('empty');
+    elements.opsTaskWrap.textContent = 'Operations tasks are available for admin and agent roles.';
+    return;
+  }
+
+  const statusFilter = String(elements.opsTaskStatusFilter?.value || '').trim().toLowerCase();
+  const severityFilter = String(elements.opsTaskSeverityFilter?.value || '').trim().toLowerCase();
+  const rows = (Array.isArray(aiState.opsTasks) ? aiState.opsTasks : [])
+    .filter((task) => {
+      const statusOk = !statusFilter || normalizeOpsTaskStatusClient(task.status) === statusFilter;
+      const severityOk = !severityFilter || normalizeSeverityClient(task.severity) === severityFilter;
+      return statusOk && severityOk;
+    })
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+
+  if (!rows.length) {
+    elements.opsTaskWrap.classList.add('empty');
+    elements.opsTaskWrap.textContent = 'No operations tasks for the selected filters.';
+    return;
+  }
+
+  const canEdit = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(currentRole());
+  const statusOptions = ['open', 'in_progress', 'resolved', 'closed'];
+  const counts = aiState.opsTasksMeta?.counts || {};
+  const countLine = statusOptions.map((status) => `${status}: ${Number(counts[status] || 0)}`).join(' | ');
+
+  const html = rows
+    .map((task) => {
+      const severity = normalizeSeverityClient(task.severity);
+      const status = normalizeOpsTaskStatusClient(task.status);
+      const statusSelect = statusOptions
+        .map((option) => `<option value="${option}" ${status === option ? 'selected' : ''}>${escapeHtml(option.replace('_', ' '))}</option>`)
+        .join('');
+      return `
+        <article class="task-card" data-task-id="${escapeHtml(task.id)}">
+          <div class="inline-actions wrap">
+            <strong>${escapeHtml(textOrDash(task.title))}</strong>
+            <span class="severity-badge ${escapeHtml(severity)}">${escapeHtml(severity)}</span>
+          </div>
+          <p class="meta compact">${escapeHtml(textOrDash(task.description))}</p>
+          <p class="meta compact">
+            Source: ${escapeHtml(textOrDash(task.sourceType))} (${escapeHtml(textOrDash(task.sourceRef))}) |
+            Created by ${escapeHtml(textOrDash(task.createdBy))}
+          </p>
+          <div class="row">
+            <select data-task-field="status" ${canEdit ? '' : 'disabled'}>${statusSelect}</select>
+            <input data-task-field="assignedTo" placeholder="Assigned to" value="${escapeHtml(String(task.assignedTo || ''))}" ${canEdit ? '' : 'disabled'}>
+          </div>
+          <textarea data-task-field="notes" rows="2" placeholder="Notes" ${canEdit ? '' : 'disabled'}>${escapeHtml(String(task.notes || ''))}</textarea>
+          <div class="task-actions">
+            <button class="table-btn" type="button" data-task-save="${escapeHtml(task.id)}" ${canEdit ? '' : 'disabled'}>Save Task</button>
+            <span class="dim">Updated: ${escapeHtml(dateShort(task.updatedAt || task.createdAt))}</span>
+          </div>
+        </article>
+      `;
+    })
+    .join('');
+
+  elements.opsTaskWrap.classList.remove('empty');
+  elements.opsTaskWrap.innerHTML = `
+    <p class="meta compact">Task counts: ${escapeHtml(countLine)}</p>
+    ${html}
+  `;
+}
+
+function renderKnowledgeDocs() {
+  if (!elements.knowledgeWrap) return;
+
+  if (!API.enabled) {
+    elements.knowledgeWrap.classList.add('empty');
+    elements.knowledgeWrap.textContent = 'Knowledge base requires backend mode.';
+    return;
+  }
+  if (!isAuthenticated()) {
+    elements.knowledgeWrap.classList.add('empty');
+    elements.knowledgeWrap.textContent = 'Sign in to view the knowledge base.';
+    return;
+  }
+  if (!['admin', 'agent'].includes(currentRole())) {
+    elements.knowledgeWrap.classList.add('empty');
+    elements.knowledgeWrap.textContent = 'Knowledge base is available for admin and agent roles.';
+    return;
+  }
+
+  const query = String(elements.knowledgeSearch?.value || '').trim().toLowerCase();
+  const tokens = query ? query.split(/\s+/).filter(Boolean) : [];
+  const docs = (Array.isArray(aiState.knowledgeDocs) ? aiState.knowledgeDocs : [])
+    .filter((doc) => {
+      if (!tokens.length) return true;
+      const haystack = [
+        doc?.title,
+        doc?.source,
+        Array.isArray(doc?.tags) ? doc.tags.join(' ') : '',
+        doc?.content,
+        doc?.snippet
+      ]
+        .map((row) => String(row || '').toLowerCase())
+        .join(' ');
+      return tokens.every((token) => haystack.includes(token));
+    })
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
+
+  if (!docs.length) {
+    elements.knowledgeWrap.classList.add('empty');
+    elements.knowledgeWrap.textContent = query ? `No knowledge docs matched "${query}".` : 'No knowledge documents available.';
+    return;
+  }
+
+  const canDelete = currentRole() === 'admin';
+  const html = docs
+    .map((doc) => {
+      const tags = Array.isArray(doc?.tags) ? doc.tags : [];
+      const snippet = String(doc.snippet || doc.content || '').trim();
+      return `
+        <article class="knowledge-card">
+          <div class="inline-actions wrap">
+            <strong>${escapeHtml(textOrDash(doc.title))}</strong>
+            ${canDelete ? `<button class="table-btn danger" type="button" data-knowledge-delete="${escapeHtml(doc.id)}">Delete</button>` : ''}
+          </div>
+          <p class="meta compact">Source: ${escapeHtml(textOrDash(doc.source))} | Updated: ${escapeHtml(dateShort(doc.updatedAt || doc.createdAt))}</p>
+          ${tags.length ? `<p class="meta compact">Tags: ${escapeHtml(tags.join(', '))}</p>` : ''}
+          <p class="meta compact">${escapeHtml(snippet || 'No snippet available.')}</p>
+        </article>
+      `;
+    })
+    .join('');
+
+  elements.knowledgeWrap.classList.remove('empty');
+  elements.knowledgeWrap.innerHTML = html;
+}
+
+function renderAiFeedbackAndEvals() {
+  if (!elements.aiFeedbackWrap) return;
+
+  if (!API.enabled) {
+    elements.aiFeedbackWrap.classList.add('empty');
+    elements.aiFeedbackWrap.textContent = 'AI feedback and evals require backend mode.';
+    return;
+  }
+  if (!isAuthenticated()) {
+    elements.aiFeedbackWrap.classList.add('empty');
+    elements.aiFeedbackWrap.textContent = 'Sign in to access AI feedback and evals.';
+    return;
+  }
+  if (!['admin', 'agent'].includes(currentRole())) {
+    elements.aiFeedbackWrap.classList.add('empty');
+    elements.aiFeedbackWrap.textContent = 'AI feedback tools are available for admin and agent roles.';
+    return;
+  }
+
+  const role = currentRole();
+  const summary = aiState.feedbackSummary || null;
+  const evalRuns = Array.isArray(aiState.evalRuns) ? aiState.evalRuns : [];
+  const cards = [];
+
+  if (role === 'admin' && summary) {
+    const totals = summary.totals || {};
+    cards.push(`
+      <article class="feedback-card">
+        <strong>Feedback Totals</strong>
+        <p class="meta compact">
+          Total: ${escapeHtml(String(totals.total || 0))} |
+          Positive: ${escapeHtml(String(totals.positive || 0))} |
+          Neutral: ${escapeHtml(String(totals.neutral || 0))} |
+          Negative: ${escapeHtml(String(totals.negative || 0))} |
+          Positive Rate: ${escapeHtml(String(totals.positiveRatePct || 0))}%
+        </p>
+      </article>
+    `);
+
+    const byTool = Array.isArray(summary.byTool) ? summary.byTool : [];
+    if (byTool.length) {
+      const toolRows = byTool
+        .map(
+          (row) => `
+            <tr>
+              <td>${escapeHtml(textOrDash(row.tool))}</td>
+              <td>${escapeHtml(String(row.total || 0))}</td>
+              <td>${escapeHtml(String(row.positive || 0))}</td>
+              <td>${escapeHtml(String(row.neutral || 0))}</td>
+              <td>${escapeHtml(String(row.negative || 0))}</td>
+              <td>${escapeHtml(String(row.positiveRatePct || 0))}%</td>
+            </tr>
+          `
+        )
+        .join('');
+      cards.push(`
+        <article class="feedback-card">
+          <strong>Feedback by Tool</strong>
+          <table>
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Total</th>
+                <th>Up</th>
+                <th>Neutral</th>
+                <th>Down</th>
+                <th>Up %</th>
+              </tr>
+            </thead>
+            <tbody>${toolRows}</tbody>
+          </table>
+        </article>
+      `);
+    }
+
+    const recent = Array.isArray(summary.recent) ? summary.recent.slice(0, 10) : [];
+    if (recent.length) {
+      cards.push(`
+        <article class="feedback-card">
+          <strong>Recent Feedback</strong>
+          <ul class="ai-result-list">
+            ${recent
+              .map((row) => `<li>${escapeHtml(dateShort(row.createdAt))} | ${escapeHtml(textOrDash(row.tool))} | ${escapeHtml(textOrDash(row.rating))} | ${escapeHtml(textOrDash(row.actor))}</li>`)
+              .join('')}
+          </ul>
+        </article>
+      `);
+    }
+  } else if (role === 'agent') {
+    cards.push(`
+      <article class="feedback-card">
+        <strong>Feedback Saved</strong>
+        <p class="meta compact">Agents can submit feedback. Summary and eval dashboards are visible to admin.</p>
+      </article>
+    `);
+  } else if (role === 'admin') {
+    cards.push(`
+      <article class="feedback-card">
+        <strong>Feedback Summary</strong>
+        <p class="meta compact">No feedback summary loaded yet. Click "Refresh Feedback Summary".</p>
+      </article>
+    `);
+  }
+
+  if (role === 'admin') {
+    if (evalRuns.length) {
+      const evalHtml = evalRuns
+        .slice(0, 10)
+        .map((run) => {
+          const failedChecks = Array.isArray(run?.checks) ? run.checks.filter((row) => !row.pass).slice(0, 3) : [];
+          const failList = failedChecks.length
+            ? `<ul class="ai-result-list">${failedChecks.map((row) => `<li>${escapeHtml(textOrDash(row.label || row.id))}: ${escapeHtml(textOrDash(row.details))}</li>`).join('')}</ul>`
+            : '<p class="meta compact">No failed checks.</p>';
+          return `
+            <article class="feedback-card">
+              <div class="inline-actions wrap">
+                <strong>${escapeHtml(textOrDash(run.id))}</strong>
+                <span class="severity-badge ${run.failCount > 0 ? 'high' : 'low'}">${escapeHtml(String(run.scorePct || 0))}%</span>
+              </div>
+              <p class="meta compact">
+                ${escapeHtml(dateShort(run.createdAt))} |
+                Checks: ${escapeHtml(String(run.totalChecks || 0))} |
+                Pass: ${escapeHtml(String(run.passCount || 0))} |
+                Fail: ${escapeHtml(String(run.failCount || 0))}
+              </p>
+              ${failList}
+            </article>
+          `;
+        })
+        .join('');
+      cards.push(`<div class="ai-result-title">Eval Runs</div>${evalHtml}`);
+    } else {
+      cards.push(`
+        <article class="feedback-card">
+          <strong>Eval Runs</strong>
+          <p class="meta compact">No eval runs yet. Click "Run AI Eval Suite".</p>
+        </article>
+      `);
+    }
+  }
+
+  elements.aiFeedbackWrap.classList.remove('empty');
+  elements.aiFeedbackWrap.innerHTML = cards.join('');
 }
 
 function currentSmsMode() {
@@ -3355,6 +4645,63 @@ async function restoreSession() {
   }
 }
 
+async function fetchPhase2bSnapshots(role) {
+  const fallback = {
+    proposals: [],
+    proposalsMeta: null,
+    briefs: [],
+    alerts: [],
+    opsTasks: [],
+    opsTasksMeta: null,
+    knowledgeDocs: [],
+    feedbackSummary: null,
+    evalRuns: []
+  };
+
+  if (!API.enabled || !isAuthenticated()) return fallback;
+
+  const calls = [];
+  if (role === 'admin') {
+    calls.push(['proposals', apiRequest('/api/ai/proposals?limit=100')]);
+    calls.push(['briefs', apiRequest('/api/ai/briefs?limit=20&includeAlerts=true')]);
+    calls.push(['opsTasks', apiRequest('/api/ops/tasks?limit=200')]);
+    calls.push(['knowledgeDocs', apiRequest('/api/ai/knowledge?limit=80')]);
+    calls.push(['feedbackSummary', apiRequest('/api/ai/feedback/summary?limit=30')]);
+    calls.push(['evalRuns', apiRequest('/api/ai/evals?limit=20')]);
+  } else if (role === 'agent') {
+    calls.push(['briefs', apiRequest('/api/ai/briefs?limit=20&includeAlerts=true')]);
+    calls.push(['opsTasks', apiRequest('/api/ops/tasks?limit=200')]);
+    calls.push(['knowledgeDocs', apiRequest('/api/ai/knowledge?limit=80')]);
+  } else {
+    return fallback;
+  }
+
+  const settled = await Promise.allSettled(calls.map((entry) => entry[1]));
+  settled.forEach((result, idx) => {
+    const key = calls[idx][0];
+    if (result.status !== 'fulfilled') return;
+    const payload = result.value || {};
+    if (key === 'proposals') {
+      fallback.proposals = Array.isArray(payload.data) ? payload.data : [];
+      fallback.proposalsMeta = payload.meta || null;
+    } else if (key === 'briefs') {
+      fallback.briefs = Array.isArray(payload.data?.briefs) ? payload.data.briefs : [];
+      fallback.alerts = Array.isArray(payload.data?.alerts) ? payload.data.alerts : [];
+    } else if (key === 'opsTasks') {
+      fallback.opsTasks = Array.isArray(payload.data) ? payload.data : [];
+      fallback.opsTasksMeta = payload.meta || null;
+    } else if (key === 'knowledgeDocs') {
+      fallback.knowledgeDocs = Array.isArray(payload.data) ? payload.data : [];
+    } else if (key === 'feedbackSummary') {
+      fallback.feedbackSummary = payload.data || null;
+    } else if (key === 'evalRuns') {
+      fallback.evalRuns = Array.isArray(payload.data) ? payload.data : [];
+    }
+  });
+
+  return fallback;
+}
+
 async function fetchAllData() {
   if (!API.enabled || !isAuthenticated()) {
     renderAll();
@@ -3379,6 +4726,8 @@ async function fetchAllData() {
       managedAgents = Array.isArray(agentAccounts.data) ? agentAccounts.data : [];
     }
 
+    const phase2b = await fetchPhase2bSnapshots(currentRole());
+
     state.farmers = farmers.data || [];
     state.produce = produce.data || [];
     state.producePurchases = producePurchases.data || [];
@@ -3387,6 +4736,16 @@ async function fetchAllData() {
     state.summary = summary.data || null;
     state.agentStats = agentStats.data || [];
     state.agents = managedAgents;
+
+    aiState.proposals = phase2b.proposals || [];
+    aiState.proposalsMeta = phase2b.proposalsMeta || null;
+    aiState.briefs = phase2b.briefs || [];
+    aiState.alerts = phase2b.alerts || [];
+    aiState.opsTasks = phase2b.opsTasks || [];
+    aiState.opsTasksMeta = phase2b.opsTasksMeta || null;
+    aiState.knowledgeDocs = phase2b.knowledgeDocs || [];
+    aiState.feedbackSummary = phase2b.feedbackSummary || null;
+    aiState.evalRuns = phase2b.evalRuns || [];
 
     hydrateFarmerSelectors();
     renderAll();
@@ -3562,6 +4921,17 @@ function updatePermissionUi() {
   const copilotAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const qcAiAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
   const paymentRiskAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const executiveBriefViewAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const executiveBriefRunAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const proposalViewAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const proposalManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const opsTaskViewAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const opsTaskCreateFromAiAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const knowledgeViewAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const knowledgeManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const feedbackAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const feedbackSummaryAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const evalAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const smartQaAllowed = role === 'admin';
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
@@ -3635,6 +5005,49 @@ function updatePermissionUi() {
   if (elements.paymentRiskRunBtn) elements.paymentRiskRunBtn.disabled = !paymentRiskAllowed;
   if (elements.paymentRiskFrom) elements.paymentRiskFrom.disabled = !paymentRiskAllowed || elements.paymentRiskFrom.hidden;
   if (elements.paymentRiskTo) elements.paymentRiskTo.disabled = !paymentRiskAllowed || elements.paymentRiskTo.hidden;
+  if (elements.briefRunNowBtn) elements.briefRunNowBtn.disabled = !executiveBriefRunAllowed;
+  if (elements.briefRefreshBtn) elements.briefRefreshBtn.disabled = !executiveBriefViewAllowed;
+
+  if (elements.proposalStatusFilter) elements.proposalStatusFilter.disabled = !proposalViewAllowed;
+  if (elements.proposalRefreshBtn) elements.proposalRefreshBtn.disabled = !proposalViewAllowed;
+  if (elements.proposalActionType) elements.proposalActionType.disabled = !proposalManageAllowed;
+  if (elements.proposalConfidence) elements.proposalConfidence.disabled = !proposalManageAllowed;
+  if (elements.proposalTitle) elements.proposalTitle.disabled = !proposalManageAllowed;
+  if (elements.proposalDescription) elements.proposalDescription.disabled = !proposalManageAllowed;
+  if (elements.proposalPayload) elements.proposalPayload.disabled = !proposalManageAllowed;
+  if (elements.proposalForm) {
+    const proposalSubmit = elements.proposalForm.querySelector('button[type="submit"]');
+    if (proposalSubmit) proposalSubmit.disabled = !proposalManageAllowed;
+  }
+
+  if (elements.opsFromPaymentRiskBtn) elements.opsFromPaymentRiskBtn.disabled = !opsTaskCreateFromAiAllowed;
+  if (elements.opsFromQcBtn) elements.opsFromQcBtn.disabled = !opsTaskCreateFromAiAllowed;
+  if (elements.opsRefreshBtn) elements.opsRefreshBtn.disabled = !opsTaskViewAllowed;
+  if (elements.opsTaskStatusFilter) elements.opsTaskStatusFilter.disabled = !opsTaskViewAllowed;
+  if (elements.opsTaskSeverityFilter) elements.opsTaskSeverityFilter.disabled = !opsTaskViewAllowed;
+
+  if (elements.knowledgeSearch) elements.knowledgeSearch.disabled = !knowledgeViewAllowed;
+  if (elements.knowledgeSearchBtn) elements.knowledgeSearchBtn.disabled = !knowledgeViewAllowed;
+  if (elements.knowledgeTitle) elements.knowledgeTitle.disabled = !knowledgeManageAllowed;
+  if (elements.knowledgeSource) elements.knowledgeSource.disabled = !knowledgeManageAllowed;
+  if (elements.knowledgeTags) elements.knowledgeTags.disabled = !knowledgeManageAllowed;
+  if (elements.knowledgeContent) elements.knowledgeContent.disabled = !knowledgeManageAllowed;
+  if (elements.knowledgeForm) {
+    const knowledgeSubmit = elements.knowledgeForm.querySelector('button[type="submit"]');
+    if (knowledgeSubmit) knowledgeSubmit.disabled = !knowledgeManageAllowed;
+  }
+
+  if (elements.aiFeedbackTool) elements.aiFeedbackTool.disabled = !feedbackAllowed;
+  if (elements.aiFeedbackRating) elements.aiFeedbackRating.disabled = !feedbackAllowed;
+  if (elements.aiFeedbackResponseId) elements.aiFeedbackResponseId.disabled = !feedbackAllowed;
+  if (elements.aiFeedbackNote) elements.aiFeedbackNote.disabled = !feedbackAllowed;
+  if (elements.aiFeedbackForm) {
+    const feedbackSubmit = elements.aiFeedbackForm.querySelector('button[type="submit"]');
+    if (feedbackSubmit) feedbackSubmit.disabled = !feedbackAllowed;
+  }
+  if (elements.aiFeedbackSummaryBtn) elements.aiFeedbackSummaryBtn.disabled = !feedbackSummaryAllowed;
+  if (elements.aiEvalRunBtn) elements.aiEvalRunBtn.disabled = !evalAllowed;
+  if (elements.aiEvalRefreshBtn) elements.aiEvalRefreshBtn.disabled = !evalAllowed;
 
   elements.seedBtn.disabled = !(adminAllowed || !API.enabled);
   elements.backupBtn.disabled = !adminAllowed;
@@ -4106,37 +5519,42 @@ function renderReports() {
 
   if (!state.agentStats.length) {
     elements.agentStatsWrap.innerHTML = '<div class="empty">No agent stats yet.</div>';
-    return;
+  } else {
+    const rows = state.agentStats
+      .map(
+        (row) => `
+          <tr>
+            <td>${escapeHtml(row.actor)}</td>
+            <td>${escapeHtml(String(row.farmers))}</td>
+            <td>${escapeHtml(String(row.produceKg))}</td>
+            <td>${escapeHtml(String(row.purchasedKg || 0))}</td>
+            <td>${escapeHtml(String(row.sms))}</td>
+          </tr>
+        `
+      )
+      .join('');
+
+    elements.agentStatsWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Actor</th>
+            <th>Farmers</th>
+            <th>QC Kg</th>
+            <th>Purchased Kg</th>
+            <th>SMS Sent</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
   }
 
-  const rows = state.agentStats
-    .map(
-      (row) => `
-        <tr>
-          <td>${escapeHtml(row.actor)}</td>
-          <td>${escapeHtml(String(row.farmers))}</td>
-          <td>${escapeHtml(String(row.produceKg))}</td>
-          <td>${escapeHtml(String(row.purchasedKg || 0))}</td>
-          <td>${escapeHtml(String(row.sms))}</td>
-        </tr>
-      `
-    )
-    .join('');
-
-  elements.agentStatsWrap.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Actor</th>
-          <th>Farmers</th>
-          <th>QC Kg</th>
-          <th>Purchased Kg</th>
-          <th>SMS Sent</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+  renderExecutiveBriefs();
+  renderProposalQueue();
+  renderOpsTasks();
+  renderKnowledgeDocs();
+  renderAiFeedbackAndEvals();
 }
 
 function renderBackups() {
@@ -5635,6 +7053,31 @@ function clearMessages() {
   if (elements.paymentRiskWrap) {
     elements.paymentRiskWrap.classList.add('empty');
     elements.paymentRiskWrap.textContent = 'Run analysis to detect duplicate refs, outliers, and payout risks.';
+  }
+  if (elements.briefMsg) elements.briefMsg.textContent = '';
+  if (elements.proposalMsg) elements.proposalMsg.textContent = '';
+  if (elements.opsTaskMsg) elements.opsTaskMsg.textContent = '';
+  if (elements.knowledgeMsg) elements.knowledgeMsg.textContent = '';
+  if (elements.aiFeedbackMsg) elements.aiFeedbackMsg.textContent = '';
+  if (elements.briefWrap) {
+    elements.briefWrap.classList.add('empty');
+    elements.briefWrap.textContent = 'Run or refresh executive briefs to view strategic summaries and alerts.';
+  }
+  if (elements.proposalWrap) {
+    elements.proposalWrap.classList.add('empty');
+    elements.proposalWrap.textContent = 'No proposals loaded yet.';
+  }
+  if (elements.opsTaskWrap) {
+    elements.opsTaskWrap.classList.add('empty');
+    elements.opsTaskWrap.textContent = 'No ops tasks loaded yet.';
+  }
+  if (elements.knowledgeWrap) {
+    elements.knowledgeWrap.classList.add('empty');
+    elements.knowledgeWrap.textContent = 'No knowledge documents loaded yet.';
+  }
+  if (elements.aiFeedbackWrap) {
+    elements.aiFeedbackWrap.classList.add('empty');
+    elements.aiFeedbackWrap.textContent = 'Feedback summary and eval runs will appear here.';
   }
   aiState.qcInsights = [];
   aiState.paymentRiskFlags = [];
