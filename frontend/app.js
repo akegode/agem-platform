@@ -546,6 +546,10 @@ function bindTabs() {
 function setActivePane(paneId, resetScroll = false) {
   if (!paneId) return;
 
+  if (paneId === 'agents' && currentRole() !== 'admin') {
+    paneId = 'overview';
+  }
+
   let activeFound = false;
   elements.tabs.forEach((button) => {
     const isActive = button.dataset.pane === paneId;
@@ -5378,12 +5382,31 @@ function updatePermissionUi() {
 
   if (elements.agentsNavBtn) {
     elements.agentsNavBtn.hidden = !agentManageAllowed;
+    elements.agentsNavBtn.disabled = !agentManageAllowed;
   }
   if (elements.agentsPaneOption) {
+    const inSelect = elements.agentsPaneOption.parentElement === elements.paneSelect;
+    if (!agentManageAllowed && inSelect) {
+      elements.paneSelect.removeChild(elements.agentsPaneOption);
+    } else if (agentManageAllowed && !inSelect) {
+      const produceOption = elements.paneSelect?.querySelector('option[value="produce"]');
+      if (produceOption) {
+        elements.paneSelect.insertBefore(elements.agentsPaneOption, produceOption);
+      } else {
+        elements.paneSelect.appendChild(elements.agentsPaneOption);
+      }
+    }
     elements.agentsPaneOption.hidden = !agentManageAllowed;
+    elements.agentsPaneOption.disabled = !agentManageAllowed;
+  }
+  if (elements.agentsPane) {
+    elements.agentsPane.hidden = !agentManageAllowed;
   }
   if (!agentManageAllowed && elements.agentsPane?.classList.contains('active')) {
     setActivePane('overview');
+  }
+  if (!agentManageAllowed && elements.paneSelect?.value === 'agents') {
+    elements.paneSelect.value = 'overview';
   }
   if (!agentManageAllowed) {
     clearAgentCredentialDisplay();
