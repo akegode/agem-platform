@@ -1549,6 +1549,16 @@ async function run() {
       'Farmers CSV header missing'
     );
     assert.ok(farmersCsv.includes('Grace Njoki'), 'Farmers CSV content missing');
+    const farmersCsvFuture = await request(baseUrl, '/api/exports/farmers.csv?period=custom&from=2099-01-01&to=2099-01-02', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.strictEqual(
+      farmersCsvFuture.trim().split('\n').length,
+      1,
+      'Future-range farmers export should return header only'
+    );
 
     const produceCsv = await request(baseUrl, '/api/exports/produce.csv', {
       token: adminToken,
@@ -1559,6 +1569,16 @@ async function run() {
       produceCsv.includes('lotWeightKgs,variety,sampleSize,visualGrade,dryMatterPct,firmnessValue,firmnessUnit,avgFruitWeightG,sizeCode,qcDecision,inspector'),
       'Produce CSV header missing farm-gate QC columns'
     );
+    const produceCsvFuture = await request(baseUrl, '/api/exports/produce.csv?period=custom&from=2099-01-01&to=2099-01-02', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.strictEqual(
+      produceCsvFuture.trim().split('\n').length,
+      1,
+      'Future-range produce export should return header only'
+    );
 
     const producePurchasesCsv = await request(baseUrl, '/api/exports/produce-purchases.csv', {
       token: adminToken,
@@ -1568,6 +1588,20 @@ async function run() {
     assert.ok(
       producePurchasesCsv.includes('qcRecordId,variety,sizeCode,purchasedKgs,pricePerKgKes,purchaseValueKes,paidAmountKes,balanceKes,settlementStatus,buyer'),
       'Produce purchases CSV header missing purchase columns'
+    );
+    const purchasesCsvFuture = await request(
+      baseUrl,
+      '/api/exports/produce-purchases.csv?period=custom&from=2099-01-01&to=2099-01-02',
+      {
+        token: adminToken,
+        responseType: 'text',
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(
+      purchasesCsvFuture.trim().split('\n').length,
+      1,
+      'Future-range produce purchases export should return header only'
     );
 
     const owedCsv = await request(baseUrl, '/api/exports/payments-owed.csv?period=all', {
@@ -1605,6 +1639,28 @@ async function run() {
     });
     const smsCsvFutureLines = smsCsvFuture.trim().split('\n');
     assert.strictEqual(smsCsvFutureLines.length, 1, 'Future-range SMS export should return header only');
+
+    const paymentsCsvFuture = await request(baseUrl, '/api/exports/payments.csv?period=custom&from=2099-01-01&to=2099-01-02', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.strictEqual(
+      paymentsCsvFuture.trim().split('\n').length,
+      1,
+      'Future-range payments export should return header only'
+    );
+
+    const activityCsvFuture = await request(baseUrl, '/api/exports/activity.csv?period=custom&from=2099-01-01&to=2099-01-02', {
+      token: adminToken,
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.strictEqual(
+      activityCsvFuture.trim().split('\n').length,
+      1,
+      'Future-range activity export should return header only'
+    );
 
     const backupCreated = await request(baseUrl, '/api/admin/backup', {
       method: 'POST',

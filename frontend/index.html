@@ -509,7 +509,12 @@
                   <button class="secondary" id="owedClearSelectedBtn" type="button">Clear Selected</button>
                   <button class="secondary" id="owedPrepareBtn" type="button">Prepare Selected (Pending)</button>
                   <button class="primary" id="owedPaySelectedBtn" type="button">Pay Selected Now</button>
-                  <button class="secondary" id="owedExportBtn" type="button">Export Owed CSV</button>
+                  <button class="secondary" id="owedExportBtn" type="button">Export Owed</button>
+                  <select id="owedExportFormat">
+                    <option value="csv">CSV</option>
+                    <option value="excel">Excel</option>
+                    <option value="pdf">PDF</option>
+                  </select>
                 </div>
                 <p class="meta compact" id="owedSummary">No owed balances loaded yet.</p>
                 <div id="owedTableWrap"></div>
@@ -875,28 +880,38 @@
           <h2>Exports & Admin Tools</h2>
 
           <details class="dropdown-card" open>
-            <summary>CSV Exports</summary>
+            <summary>Data Exports</summary>
             <div class="dropdown-body">
-            <div class="inline-actions wrap">
-              <button class="secondary export-btn" data-export="farmers">Export Farmers CSV</button>
-              <button class="secondary export-btn" data-export="produce">Export Produce CSV</button>
-              <button class="secondary export-btn" data-export="produce-purchases">Export Produce Purchases CSV</button>
-              <button class="secondary export-btn" data-export="payments">Export Payments CSV</button>
-              <button class="secondary export-btn" data-export="sms">Export SMS CSV</button>
-              <button class="secondary export-btn" data-export="activity">Export Activity CSV</button>
+            <div class="row">
+              <select id="exportRange">
+                <option value="today">Export Range: Today</option>
+                <option value="last7">Export Range: Last 7 Days</option>
+                <option value="thismonth">Export Range: This Month</option>
+                <option value="last30">Export Range: Last 30 Days</option>
+                <option value="all">Export Range: All Dates</option>
+                <option value="custom">Export Range: Custom Date Range</option>
+              </select>
+              <select id="exportFormat">
+                <option value="csv">Format: CSV</option>
+                <option value="excel">Format: Excel</option>
+                <option value="pdf">Format: PDF</option>
+              </select>
             </div>
             <div class="row">
-              <select id="smsExportRange">
-                <option value="today">SMS Export Range: Today</option>
-                <option value="last7">SMS Export Range: Last 7 Days</option>
-                <option value="custom">SMS Export Range: Custom Date Range</option>
-              </select>
-              <input id="smsExportFrom" type="date" hidden>
-              <input id="smsExportTo" type="date" hidden>
+              <input id="exportFrom" type="date" hidden>
+              <input id="exportTo" type="date" hidden>
             </div>
             <p class="meta compact">
-              SMS export uses the range above only when you click <strong>Export SMS CSV</strong>.
+              Range and format apply to every export button below.
             </p>
+            <div class="inline-actions wrap">
+              <button class="secondary export-btn" data-export="farmers">Export Farmers</button>
+              <button class="secondary export-btn" data-export="produce">Export Produce QC</button>
+              <button class="secondary export-btn" data-export="produce-purchases">Export Produce Purchases</button>
+              <button class="secondary export-btn" data-export="payments">Export Payments</button>
+              <button class="secondary export-btn" data-export="sms">Export SMS Log</button>
+              <button class="secondary export-btn" data-export="activity">Export Activity Log</button>
+            </div>
             </div>
           </details>
 
@@ -937,6 +952,8 @@
   <button id="scrollTopBtn" class="scroll-top" type="button" hidden>Top</button>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

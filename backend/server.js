@@ -2620,13 +2620,16 @@ function resolveRange(period, fromRaw, toRaw) {
     if (normalizedPeriod === 'today' || normalizedPeriod === 'day') {
       from = startOfDayUtc(now);
       to = endOfDayUtc(now);
-    } else if (normalizedPeriod === 'week') {
+    } else if (normalizedPeriod === 'week' || normalizedPeriod === 'last7') {
       to = endOfDayUtc(now);
       from = startOfDayUtc(now - 6 * 24 * 60 * 60 * 1000);
-    } else if (normalizedPeriod === 'month') {
+    } else if (normalizedPeriod === 'month' || normalizedPeriod === 'thismonth') {
       const nowDate = new Date(now);
       from = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1, 0, 0, 0, 0);
       to = endOfDayUtc(now);
+    } else if (normalizedPeriod === 'last30') {
+      to = endOfDayUtc(now);
+      from = startOfDayUtc(now - 29 * 24 * 60 * 60 * 1000);
     }
   }
 
@@ -7887,7 +7890,13 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const farmerRows = store.farmers.map((row) => {
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
+
+    const farmerRows = store.farmers.filter((row) => isInRange(row.createdAt, range)).map((row) => {
       const hectares = Number(row.hectares || 0);
       const avocadoHectares = Number(row.avocadoHectares || 0);
       const acres = Number.isFinite(hectares) ? hectares / HECTARES_PER_ACRE : 0;
@@ -7935,7 +7944,13 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const produceRows = store.produce.map((row) => ({
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
+
+    const produceRows = store.produce.filter((row) => isInRange(row.createdAt, range)).map((row) => ({
       ...row,
       lotWeightKgs: Number.isFinite(Number(row.lotWeightKgs)) ? Number(row.lotWeightKgs) : Number(row.kgs || 0),
       visualGrade: clean(row.visualGrade) || clean(row.quality),
@@ -7973,7 +7988,15 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const csvData = toCsv(store.producePurchases, [
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
+
+    const rows = store.producePurchases.filter((row) => isInRange(row.createdAt, range));
+
+    const csvData = toCsv(rows, [
       { key: 'id', label: 'id' },
       { key: 'farmerId', label: 'farmerId' },
       { key: 'farmerName', label: 'farmerName' },
@@ -8035,7 +8058,15 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const csvData = toCsv(store.payments, [
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
+
+    const rows = store.payments.filter((row) => isInRange(row.createdAt, range));
+
+    const csvData = toCsv(rows, [
       { key: 'id', label: 'id' },
       { key: 'farmerId', label: 'farmerId' },
       { key: 'farmerName', label: 'farmerName' },
@@ -8062,34 +8093,14 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const period = clean(reqUrl.searchParams.get('period')).toLowerCase();
-    let fromMs = parseDateBound(reqUrl.searchParams.get('from'), false);
-    let toMs = parseDateBound(reqUrl.searchParams.get('to'), true);
-
-    if (fromMs !== null && toMs !== null && fromMs > toMs) {
-      const swap = fromMs;
-      fromMs = toMs;
-      toMs = swap;
-    }
-
-    if (fromMs === null && toMs === null) {
-      const now = new Date();
-      if (period === 'today') {
-        fromMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
-        toMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999);
-      } else if (period === 'last7') {
-        fromMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6, 0, 0, 0, 0);
-        toMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999);
-      }
-    }
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
 
     let smsRows = [...store.smsLogs];
-    if (fromMs !== null) {
-      smsRows = smsRows.filter((row) => dateMs(row.createdAt) >= fromMs);
-    }
-    if (toMs !== null) {
-      smsRows = smsRows.filter((row) => dateMs(row.createdAt) <= toMs);
-    }
+    smsRows = smsRows.filter((row) => isInRange(row.createdAt, range));
 
     smsRows = smsRows.map((row) => ({
       ...row,
@@ -8122,7 +8133,15 @@ Max length: ${maxLength || 'none'}`,
       return;
     }
 
-    const csvData = toCsv(store.activityLogs, [
+    const range = resolveRange(
+      reqUrl.searchParams.get('period'),
+      reqUrl.searchParams.get('from'),
+      reqUrl.searchParams.get('to')
+    );
+
+    const rows = store.activityLogs.filter((row) => isInRange(row.at, range));
+
+    const csvData = toCsv(rows, [
       { key: 'id', label: 'id' },
       { key: 'at', label: 'at' },
       { key: 'actor', label: 'actor' },

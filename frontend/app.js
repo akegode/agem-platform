@@ -236,6 +236,7 @@ const elements = {
   owedPrepareBtn: document.getElementById('owedPrepareBtn'),
   owedPaySelectedBtn: document.getElementById('owedPaySelectedBtn'),
   owedExportBtn: document.getElementById('owedExportBtn'),
+  owedExportFormat: document.getElementById('owedExportFormat'),
   owedSummary: document.getElementById('owedSummary'),
   owedTableWrap: document.getElementById('owedTableWrap'),
   owedMsg: document.getElementById('owedMsg'),
@@ -341,9 +342,10 @@ const elements = {
   aiFeedbackWrap: document.getElementById('aiFeedbackWrap'),
 
   exportButtons: document.querySelectorAll('.export-btn'),
-  smsExportRange: document.getElementById('smsExportRange'),
-  smsExportFrom: document.getElementById('smsExportFrom'),
-  smsExportTo: document.getElementById('smsExportTo'),
+  exportRange: document.getElementById('exportRange'),
+  exportFrom: document.getElementById('exportFrom'),
+  exportTo: document.getElementById('exportTo'),
+  exportFormat: document.getElementById('exportFormat'),
   backupBtn: document.getElementById('backupBtn'),
   listBackupsBtn: document.getElementById('listBackupsBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -2234,21 +2236,21 @@ function formatDateInputValue(date) {
   return `${year}-${month}-${day}`;
 }
 
-function syncSmsExportFilterUi() {
-  if (!elements.smsExportRange || !elements.smsExportFrom || !elements.smsExportTo) return;
-  const range = String(elements.smsExportRange.value || 'today').trim().toLowerCase();
+function syncExportFilterUi() {
+  if (!elements.exportRange || !elements.exportFrom || !elements.exportTo) return;
+  const range = String(elements.exportRange.value || 'today').trim().toLowerCase();
   const custom = range === 'custom';
-  elements.smsExportFrom.hidden = !custom;
-  elements.smsExportTo.hidden = !custom;
-  elements.smsExportFrom.disabled = !custom;
-  elements.smsExportTo.disabled = !custom;
+  elements.exportFrom.hidden = !custom;
+  elements.exportTo.hidden = !custom;
+  elements.exportFrom.disabled = !custom;
+  elements.exportTo.disabled = !custom;
 }
 
-function buildSmsExportQueryParams() {
+function buildExportQueryParams() {
   const params = new URLSearchParams();
-  if (!elements.smsExportRange) return params;
+  if (!elements.exportRange) return params;
 
-  const range = String(elements.smsExportRange.value || 'today').trim().toLowerCase();
+  const range = String(elements.exportRange.value || 'today').trim().toLowerCase();
   params.set('period', range);
 
   if (range === 'today') {
@@ -2267,11 +2269,32 @@ function buildSmsExportQueryParams() {
     return params;
   }
 
+  if (range === 'thismonth' || range === 'month') {
+    const toDate = new Date();
+    const fromDate = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+    params.set('from', formatDateInputValue(fromDate));
+    params.set('to', formatDateInputValue(toDate));
+    return params;
+  }
+
+  if (range === 'last30') {
+    const toDate = new Date();
+    const fromDate = new Date(toDate);
+    fromDate.setDate(fromDate.getDate() - 29);
+    params.set('from', formatDateInputValue(fromDate));
+    params.set('to', formatDateInputValue(toDate));
+    return params;
+  }
+
+  if (range === 'all') {
+    return params;
+  }
+
   if (range === 'custom') {
-    let from = String(elements.smsExportFrom?.value || '').trim();
-    let to = String(elements.smsExportTo?.value || '').trim();
+    let from = String(elements.exportFrom?.value || '').trim();
+    let to = String(elements.exportTo?.value || '').trim();
     if (!from || !to) {
-      throw new Error('For custom SMS export, choose both start and end date.');
+      throw new Error('For custom export, choose both start and end date.');
     }
     if (from > to) {
       const swap = from;
@@ -2283,6 +2306,193 @@ function buildSmsExportQueryParams() {
   }
 
   return params;
+}
+
+function exportRangeLabel(periodRaw, fromRaw, toRaw) {
+  const period = String(periodRaw || '').trim().toLowerCase();
+  if (period === 'today') return 'Today';
+  if (period === 'last7') return 'Last 7 Days';
+  if (period === 'thismonth' || period === 'month') return 'This Month';
+  if (period === 'last30') return 'Last 30 Days';
+  if (period === 'all') return 'All Dates';
+  if (period === 'custom') {
+    const from = clean(fromRaw);
+    const to = clean(toRaw);
+    if (from && to) return `Custom (${from} to ${to})`;
+    return 'Custom Date Range';
+  }
+  return 'Selected Range';
+}
+
+let exportLogoDataUrlPromise = null;
+async function getExportLogoDataUrl() {
+  if (!exportLogoDataUrlPromise) {
+    exportLogoDataUrlPromise = fetch('/assets/agem-logo-transparent.png', { cache: 'force-cache' })
+      .then(async (response) => {
+        if (!response.ok) return '';
+        const blob = await response.blob();
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(blob);
+        });
+      })
+      .catch(() => '');
+  }
+  return exportLogoDataUrlPromise;
+}
+
+function parseCsvTextRows(csvText) {
+  if (!window.XLSX) {
+    throw new Error('Spreadsheet engine is not available yet. Refresh the page and retry.');
+  }
+  const workbook = window.XLSX.read(csvText, { type: 'string' });
+  const firstSheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[firstSheetName];
+  const headerRows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const headers = Array.isArray(headerRows[0]) ? headerRows[0].map((value) => String(value || '').trim()) : [];
+  const records = window.XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  return { headers, records };
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function escapeExportHtml(value) {
+  return String(value == null ? '' : value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+async function exportAsExcelHtml(type, csvText, rangeLabel) {
+  const parsed = parseCsvTextRows(csvText);
+  const logoDataUrl = await getExportLogoDataUrl();
+  const headers = parsed.headers;
+  const rows = parsed.records;
+  const generatedAt = new Date().toISOString();
+
+  const tableHead = headers.map((header) => `<th>${escapeExportHtml(header)}</th>`).join('');
+  const tableBody = rows
+    .map((record) => {
+      const cells = headers.map((header) => `<td>${escapeExportHtml(record?.[header])}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    })
+    .join('');
+
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: Arial, sans-serif; font-size: 12px; color: #123f2a; }
+      .header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+      .header img { height: 46px; width: auto; }
+      .title { font-size: 20px; font-weight: 700; margin: 0; }
+      .meta { margin: 2px 0; color: #2f5c45; }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+      th, td { border: 1px solid #b8cfc0; padding: 6px 8px; text-align: left; vertical-align: top; }
+      th { background: #e8f3ea; color: #123f2a; font-weight: 700; }
+      tr:nth-child(even) td { background: #f7fbf8; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      ${logoDataUrl ? `<img src="${logoDataUrl}" alt="Agem Handshake Logo" />` : ''}
+      <div>
+        <p class="title">Agem Portal Export: ${escapeExportHtml(type)}</p>
+        <p class="meta">Range: ${escapeExportHtml(rangeLabel)}</p>
+        <p class="meta">Generated: ${escapeExportHtml(generatedAt)}</p>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>${tableHead}</tr>
+      </thead>
+      <tbody>
+        ${tableBody}
+      </tbody>
+    </table>
+  </body>
+</html>`;
+
+  return new Blob([html], {
+    type: 'application/vnd.ms-excel;charset=utf-8'
+  });
+}
+
+async function exportAsPdf(type, csvText, rangeLabel) {
+  const parsed = parseCsvTextRows(csvText);
+  const headers = parsed.headers;
+  const rows = parsed.records;
+
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    throw new Error('PDF engine is not available yet. Refresh the page and retry.');
+  }
+  const orientation = headers.length > 8 ? 'landscape' : 'portrait';
+  const doc = new window.jspdf.jsPDF({ orientation, unit: 'pt', format: 'a4' });
+  if (typeof doc.autoTable !== 'function') {
+    throw new Error('PDF table engine is not available yet. Refresh the page and retry.');
+  }
+
+  const body = rows.map((record) => headers.map((header) => String(record?.[header] ?? '')));
+  const logoDataUrl = await getExportLogoDataUrl();
+
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, 'PNG', 40, 26, 120, 38);
+  }
+  doc.setFontSize(16);
+  doc.setTextColor(18, 63, 42);
+  doc.text(`Agem Portal Export: ${type}`, 40, 86);
+  doc.setFontSize(10);
+  doc.setTextColor(62, 94, 77);
+  doc.text(`Range: ${rangeLabel}`, 40, 104);
+  doc.text(`Generated: ${new Date().toISOString()}`, 40, 118);
+
+  doc.autoTable({
+    startY: 132,
+    head: [headers],
+    body,
+    styles: { fontSize: 8, cellPadding: 4, overflow: 'linebreak' },
+    headStyles: { fillColor: [22, 93, 58], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [246, 250, 247] },
+    margin: { left: 24, right: 24 }
+  });
+
+  return doc.output('blob');
+}
+
+async function exportDatasetFile({ type, csvText, format, rangeLabel, fileSuffix = '' }) {
+  const dateStamp = new Date().toISOString().slice(0, 10);
+  const safeType = String(type || 'export').toLowerCase();
+  const suffix = fileSuffix ? `-${fileSuffix}` : '';
+
+  if (format === 'excel') {
+    const excelBlob = await exportAsExcelHtml(type, csvText, rangeLabel);
+    downloadBlob(excelBlob, `${safeType}${suffix}-${dateStamp}.xls`);
+    return 'Excel';
+  }
+
+  if (format === 'pdf') {
+    const pdfBlob = await exportAsPdf(type, csvText, rangeLabel);
+    downloadBlob(pdfBlob, `${safeType}${suffix}-${dateStamp}.pdf`);
+    return 'PDF';
+  }
+
+  const csvBlob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+  downloadBlob(csvBlob, `${safeType}${suffix}-${dateStamp}.csv`);
+  return 'CSV';
 }
 
 function resolveOwedFilters() {
@@ -2834,16 +3044,18 @@ async function exportOwedCsv() {
       ]);
     }
 
-    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `payments-owed-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    elements.owedMsg.textContent = 'Owed balances CSV exported.';
+    const period = filters.period || 'all';
+    const rangeLabel = exportRangeLabel(period, filters.fromRaw, filters.toRaw);
+    const format = String(elements.owedExportFormat?.value || 'csv').toLowerCase();
+    const formatLabel = await exportDatasetFile({
+      type: 'payments-owed',
+      csvText: content,
+      format,
+      rangeLabel,
+      fileSuffix: period
+    });
+
+    elements.owedMsg.textContent = `Owed balances ${formatLabel} exported.`;
   } catch (error) {
     elements.owedMsg.textContent = error.message;
   }
@@ -4820,23 +5032,23 @@ function renderSmsRecipientList() {
 }
 
 function bindExports() {
-  if (elements.smsExportRange) {
+  if (elements.exportRange) {
     const today = formatDateInputValue(new Date());
-    const last7Start = new Date();
-    last7Start.setDate(last7Start.getDate() - 6);
+    const monthStart = new Date();
+    monthStart.setDate(1);
 
-    if (elements.smsExportFrom && !elements.smsExportFrom.value) {
-      elements.smsExportFrom.value = formatDateInputValue(last7Start);
+    if (elements.exportFrom && !elements.exportFrom.value) {
+      elements.exportFrom.value = formatDateInputValue(monthStart);
     }
-    if (elements.smsExportTo && !elements.smsExportTo.value) {
-      elements.smsExportTo.value = today;
+    if (elements.exportTo && !elements.exportTo.value) {
+      elements.exportTo.value = today;
     }
 
-    elements.smsExportRange.addEventListener('change', () => {
-      syncSmsExportFilterUi();
+    elements.exportRange.addEventListener('change', () => {
+      syncExportFilterUi();
     });
 
-    syncSmsExportFilterUi();
+    syncExportFilterUi();
   }
 
   elements.exportButtons.forEach((button) => {
@@ -4856,32 +5068,29 @@ function bindExports() {
       }
 
       try {
+        const params = buildExportQueryParams();
+        const period = String(params.get('period') || 'all').toLowerCase();
+        const format = String(elements.exportFormat?.value || 'csv').toLowerCase();
+        const rangeLabel = exportRangeLabel(period, params.get('from'), params.get('to'));
+
         let endpoint = `/api/exports/${encodeURIComponent(type)}.csv`;
-        let fileSuffix = '';
-        if (type === 'sms') {
-          const params = buildSmsExportQueryParams();
-          const query = params.toString();
-          if (query) endpoint = `${endpoint}?${query}`;
-          const period = params.get('period');
-          if (period) fileSuffix = `-${period}`;
-        }
+        const query = params.toString();
+        if (query) endpoint = `${endpoint}?${query}`;
 
         const content = await apiRequest(endpoint, {
           method: 'GET',
           response: 'text'
         });
 
-        const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${type}${fileSuffix}-${new Date().toISOString().slice(0, 10)}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        const formatLabel = await exportDatasetFile({
+          type,
+          csvText: content,
+          format,
+          rangeLabel,
+          fileSuffix: period
+        });
 
-        elements.exportsMsg.textContent = `Exported ${type}.csv`;
+        elements.exportsMsg.textContent = `Exported ${type} (${formatLabel}).`;
       } catch (error) {
         elements.exportsMsg.textContent = error.message;
       }
@@ -5534,12 +5743,19 @@ function updatePermissionUi() {
   elements.listBackupsBtn.disabled = !adminAllowed;
   elements.resetBtn.disabled = !(adminAllowed || !API.enabled);
 
+  const baseExportAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
+  if (elements.exportRange) elements.exportRange.disabled = !baseExportAllowed;
+  if (elements.exportFormat) elements.exportFormat.disabled = !baseExportAllowed;
+  if (elements.exportFrom) elements.exportFrom.disabled = !baseExportAllowed || elements.exportFrom.hidden;
+  if (elements.exportTo) elements.exportTo.disabled = !baseExportAllowed || elements.exportTo.hidden;
+  if (elements.owedExportFormat) elements.owedExportFormat.disabled = !owedAllowed;
+
   elements.exportButtons.forEach((button) => {
     const type = button.dataset.export;
     if (type === 'payments' || type === 'activity') {
       button.disabled = !adminAllowed;
     } else {
-      button.disabled = !(backendAuthReady && ['admin', 'agent'].includes(role));
+      button.disabled = !baseExportAllowed;
     }
   });
 
