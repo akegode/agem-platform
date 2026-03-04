@@ -102,6 +102,42 @@ body.dashboard-open {
   margin-top: 6px;
 }
 
+.hero-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.hero-logo-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.hero-logo-link-hass {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 84px;
+}
+
+.hero-logo-link-company {
+  height: 84px;
+  width: 230px;
+  max-width: 100%;
+}
+
+.hero-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .hero-brand {
   font-family: "Cormorant Garamond", "Source Serif 4", Georgia, serif;
   font-weight: 700;
@@ -109,6 +145,8 @@ body.dashboard-open {
   text-transform: uppercase;
   font-size: clamp(2rem, 3.4vw, 2.8rem);
   margin-bottom: 6px;
+  color: #ffffff;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.28);
 }
 
 .hero-kicker {
@@ -134,16 +172,6 @@ body.dashboard-open {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   background: rgba(255, 255, 255, 0.07);
-}
-
-.hero-media {
-  height: 106px;
-  border-radius: 12px;
-  border: 1px solid rgba(238, 246, 236, 0.32);
-  background:
-    linear-gradient(125deg, rgba(0, 0, 0, 0.34), rgba(0, 0, 0, 0.08)),
-    url("https://images.squarespace-cdn.com/content/v1/665b29b04cc2be40761051c0/9194ee7a-3c34-42a5-bb4d-d227f3aebb4c/Agem+Avocados+Logo.jpg") center / cover no-repeat;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 .auth-main-card {
@@ -1031,6 +1059,10 @@ button.mini-btn {
 
 .auth-hero .meta strong {
   color: #f1d295;
+}
+
+.auth-hero .hero-brand {
+  color: #ffffff;
 }
 
 .sidebar .auth-card {
