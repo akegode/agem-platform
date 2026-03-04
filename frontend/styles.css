@@ -141,9 +141,10 @@ body.dashboard-open {
 }
 
 .hero-company-logo {
-  filter: invert(1) grayscale(0.05) contrast(1.22) brightness(1.08);
-  mix-blend-mode: lighten;
+  filter: none;
+  mix-blend-mode: normal;
   object-position: left center;
+  opacity: 1;
 }
 
 .hero-logo {
