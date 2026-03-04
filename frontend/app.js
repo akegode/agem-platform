@@ -57,6 +57,17 @@ const owedPicker = {
     totalBalanceKes: 0
   }
 };
+const paymentRecommendationPicker = {
+  rows: [],
+  meta: {
+    total: 0,
+    counts: {
+      pending: 0,
+      approved: 0,
+      rejected: 0
+    }
+  }
+};
 
 const elements = {
   authShell: document.getElementById('authShell'),
@@ -227,6 +238,20 @@ const elements = {
   owedSummary: document.getElementById('owedSummary'),
   owedTableWrap: document.getElementById('owedTableWrap'),
   owedMsg: document.getElementById('owedMsg'),
+  paymentRecommendationCard: document.getElementById('paymentRecommendationCard'),
+  paymentRecommendationStatusFilter: document.getElementById('paymentRecommendationStatusFilter'),
+  paymentRecommendationSearch: document.getElementById('paymentRecommendationSearch'),
+  paymentRecommendationRefreshBtn: document.getElementById('paymentRecommendationRefreshBtn'),
+  paymentRecommendationSummary: document.getElementById('paymentRecommendationSummary'),
+  paymentRecommendationForm: document.getElementById('paymentRecommendationForm'),
+  paymentRecommendationFarmer: document.getElementById('paymentRecommendationFarmer'),
+  paymentRecommendationAmount: document.getElementById('paymentRecommendationAmount'),
+  paymentRecommendationReason: document.getElementById('paymentRecommendationReason'),
+  paymentRecommendationSubmitBtn: document.getElementById('paymentRecommendationSubmitBtn'),
+  paymentRecommendationAgentHint: document.getElementById('paymentRecommendationAgentHint'),
+  paymentRecommendationTableWrap: document.getElementById('paymentRecommendationTableWrap'),
+  paymentRecommendationMsg: document.getElementById('paymentRecommendationMsg'),
+  paymentLogCard: document.getElementById('paymentLogCard'),
   paymentMsg: document.getElementById('paymentMsg'),
   paymentTableWrap: document.getElementById('paymentTableWrap'),
 
@@ -366,6 +391,7 @@ async function init() {
   }
 
   await refreshOwedRows(false);
+  await loadPaymentRecommendations();
   updatePermissionUi();
 }
 
@@ -553,6 +579,7 @@ function bindRoleSelect() {
     persist();
     renderAll();
     await refreshOwedRows(true);
+    await loadPaymentRecommendations();
     updatePermissionUi();
   });
 }
@@ -1766,6 +1793,101 @@ function bindPayments() {
     }
   });
 
+  if (elements.paymentRecommendationStatusFilter) {
+    elements.paymentRecommendationStatusFilter.addEventListener('change', async () => {
+      clearMessages();
+      await loadPaymentRecommendations();
+    });
+  }
+
+  if (elements.paymentRecommendationSearch) {
+    elements.paymentRecommendationSearch.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      clearMessages();
+      await loadPaymentRecommendations();
+    });
+  }
+
+  if (elements.paymentRecommendationRefreshBtn) {
+    elements.paymentRecommendationRefreshBtn.addEventListener('click', async () => {
+      clearMessages();
+      await loadPaymentRecommendations();
+    });
+  }
+
+  if (elements.paymentRecommendationForm) {
+    elements.paymentRecommendationForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+
+      if (currentRole() !== 'agent') {
+        elements.paymentRecommendationMsg.textContent = 'Only agents can submit payment recommendations.';
+        return;
+      }
+
+      const payload = {
+        farmerId: String(elements.paymentRecommendationFarmer.value || '').trim(),
+        amount: Number(elements.paymentRecommendationAmount.value || 0),
+        reason: String(elements.paymentRecommendationReason.value || '').trim()
+      };
+
+      if (!payload.farmerId || !(payload.amount > 0) || !payload.reason) {
+        elements.paymentRecommendationMsg.textContent = 'Farmer, amount, and reason are required.';
+        return;
+      }
+
+      try {
+        if (API.enabled) {
+          if (!isAuthenticated()) {
+            elements.paymentRecommendationMsg.textContent = 'Sign in first to submit recommendation.';
+            return;
+          }
+          await apiRequest('/api/payments/recommendations', {
+            method: 'POST',
+            body: payload
+          });
+        elements.paymentRecommendationForm.reset();
+        elements.paymentRecommendationMsg.textContent = 'Recommendation sent to admin for approval.';
+        await fetchAllData();
+        await refreshOwedRows(false);
+        await loadPaymentRecommendations();
+        return;
+      }
+
+        const farmer = state.farmers.find((row) => row.id === payload.farmerId);
+        const now = new Date().toISOString();
+        state.paymentRecommendations = Array.isArray(state.paymentRecommendations) ? state.paymentRecommendations : [];
+        state.paymentRecommendations.unshift({
+          id: `PREQ-${Date.now()}`,
+          farmerId: payload.farmerId,
+          farmerName: farmer?.name || 'Unknown',
+          farmerPhone: farmer?.phone || '',
+          amount: Number(payload.amount.toFixed(2)),
+          requestedOwedKes: Number(payload.amount.toFixed(2)),
+          status: 'pending',
+          reason: payload.reason,
+          decisionNote: '',
+          createdBy: state.auth?.user?.username || 'agent-local',
+          createdAt: now,
+          updatedAt: now,
+          approvedBy: '',
+          approvedAt: '',
+          rejectedBy: '',
+          rejectedAt: '',
+          rejectionReason: '',
+          paymentId: ''
+        });
+        elements.paymentRecommendationForm.reset();
+        elements.paymentRecommendationMsg.textContent = 'Recommendation queued (local mode).';
+        await loadPaymentRecommendations();
+        persist();
+      } catch (error) {
+        elements.paymentRecommendationMsg.textContent = error.message;
+      }
+    });
+  }
+
   elements.owedPeriod.addEventListener('change', async () => {
     clearMessages();
     await refreshOwedRows(true);
@@ -1975,6 +2097,106 @@ function bindPayments() {
       elements.paymentMsg.textContent = error.message;
     }
   });
+
+  if (elements.paymentRecommendationTableWrap) {
+    elements.paymentRecommendationTableWrap.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+
+      const recId = String(button.dataset.id || '').trim();
+      const action = String(button.dataset.action || '').trim();
+      if (!recId || !action) return;
+
+      if (!['approve-payment-recommendation', 'reject-payment-recommendation'].includes(action)) return;
+      if (currentRole() !== 'admin') {
+        elements.paymentRecommendationMsg.textContent = 'Only admin can approve or reject recommendations.';
+        return;
+      }
+
+      try {
+        if (API.enabled) {
+          if (!isAuthenticated()) {
+            elements.paymentRecommendationMsg.textContent = 'Sign in first.';
+            return;
+          }
+
+          if (action === 'approve-payment-recommendation') {
+            const decisionNote = prompt('Optional approval note (press Cancel to skip):', '') || '';
+            const response = await apiRequest(
+              `/api/payments/recommendations/${encodeURIComponent(recId)}/approve`,
+              {
+                method: 'POST',
+                body: { decisionNote }
+              }
+            );
+            const smsFarmer = response?.meta?.smsNotified?.farmer ? 'farmer SMS sent' : 'farmer SMS skipped';
+            const smsAgent = response?.meta?.smsNotified?.agent ? 'agent SMS sent' : 'agent SMS skipped';
+            elements.paymentRecommendationMsg.textContent = `Recommendation approved and payment posted (${smsFarmer}, ${smsAgent}).`;
+          } else {
+            const reason = prompt('Reason for rejection (optional):', '') || '';
+            const response = await apiRequest(
+              `/api/payments/recommendations/${encodeURIComponent(recId)}/reject`,
+              {
+                method: 'POST',
+                body: { reason }
+              }
+            );
+            const smsFarmer = response?.meta?.smsNotified?.farmer ? 'farmer SMS sent' : 'farmer SMS skipped';
+            const smsAgent = response?.meta?.smsNotified?.agent ? 'agent SMS sent' : 'agent SMS skipped';
+            elements.paymentRecommendationMsg.textContent = `Recommendation rejected (${smsFarmer}, ${smsAgent}).`;
+          }
+          await fetchAllData();
+          await refreshOwedRows(false);
+          await loadPaymentRecommendations();
+          return;
+        }
+
+        state.paymentRecommendations = Array.isArray(state.paymentRecommendations) ? state.paymentRecommendations : [];
+        const rec = state.paymentRecommendations.find((row) => row.id === recId);
+        if (!rec || String(rec.status).toLowerCase() !== 'pending') return;
+        const now = new Date().toISOString();
+        if (action === 'approve-payment-recommendation') {
+          rec.status = 'approved';
+          rec.approvedBy = state.auth?.user?.username || 'admin-local';
+          rec.approvedAt = now;
+          rec.updatedAt = now;
+          const ref = `APR${Date.now().toString().slice(-8)}`;
+          const farmer = state.farmers.find((row) => row.id === rec.farmerId);
+          const paymentRecord = {
+            id: `TX-${Date.now()}`,
+            farmerId: rec.farmerId,
+            farmerName: rec.farmerName || farmer?.name || 'Unknown',
+            amount: Number(rec.amount || 0),
+            ref,
+            status: 'Received',
+            method: 'M-PESA(Mock)',
+            notes: `Approved from recommendation ${rec.id}`,
+            source: 'agent-recommendation',
+            recommendationId: rec.id,
+            createdBy: rec.approvedBy,
+            createdAt: now,
+            updatedAt: now
+          };
+          rec.paymentId = paymentRecord.id;
+          state.payments.unshift(paymentRecord);
+          elements.paymentRecommendationMsg.textContent = 'Recommendation approved and payment posted (local mode).';
+        } else {
+          const reason = prompt('Reason for rejection (optional):', '') || '';
+          rec.status = 'rejected';
+          rec.rejectedBy = state.auth?.user?.username || 'admin-local';
+          rec.rejectedAt = now;
+          rec.updatedAt = now;
+          rec.rejectionReason = reason;
+          elements.paymentRecommendationMsg.textContent = 'Recommendation rejected (local mode).';
+        }
+        await loadPaymentRecommendations();
+        renderAll();
+        persist();
+      } catch (error) {
+        elements.paymentRecommendationMsg.textContent = error.message;
+      }
+    });
+  }
 }
 
 function moneyValue(value) {
@@ -2254,12 +2476,195 @@ function renderOwedTable() {
   `;
 }
 
+function normalizeRecommendationStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'approved') return 'approved';
+  if (value === 'rejected') return 'rejected';
+  return 'pending';
+}
+
+function recommendationCounts(rows) {
+  const counts = { pending: 0, approved: 0, rejected: 0 };
+  for (const row of rows || []) {
+    const key = normalizeRecommendationStatus(row.status);
+    counts[key] += 1;
+  }
+  return counts;
+}
+
+function filteredLocalPaymentRecommendations(statusFilter, q) {
+  let rows = Array.isArray(state.paymentRecommendations) ? [...state.paymentRecommendations] : [];
+  if (currentRole() === 'agent') {
+    const me = String(state.auth?.user?.username || '').trim();
+    rows = rows.filter((row) => String(row.createdBy || '').trim() === me);
+  }
+
+  if (statusFilter && statusFilter !== 'all') {
+    rows = rows.filter((row) => normalizeRecommendationStatus(row.status) === statusFilter);
+  }
+
+  const query = String(q || '').trim().toLowerCase();
+  if (query) {
+    rows = rows.filter((row) =>
+      [row.id, row.farmerName, row.farmerPhone, row.reason, row.createdBy, row.status, row.rejectionReason]
+        .some((field) => String(field || '').toLowerCase().includes(query))
+    );
+  }
+
+  rows.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  return rows;
+}
+
+async function loadPaymentRecommendations() {
+  if (!['admin', 'agent'].includes(currentRole())) {
+    paymentRecommendationPicker.rows = [];
+    paymentRecommendationPicker.meta = {
+      total: 0,
+      counts: { pending: 0, approved: 0, rejected: 0 }
+    };
+    renderPaymentRecommendations();
+    return;
+  }
+
+  const status = String(elements.paymentRecommendationStatusFilter?.value || 'all').trim().toLowerCase();
+  const q = String(elements.paymentRecommendationSearch?.value || '').trim();
+
+  if (API.enabled) {
+    if (!isAuthenticated()) {
+      paymentRecommendationPicker.rows = [];
+      renderPaymentRecommendations();
+      return;
+    }
+    const query = new URLSearchParams();
+    if (status) query.set('status', status);
+    if (q) query.set('q', q);
+    query.set('limit', '500');
+
+    try {
+      const response = await apiRequest(`/api/payments/recommendations?${query.toString()}`);
+      const rows = Array.isArray(response.data) ? response.data : [];
+      state.paymentRecommendations = rows;
+      paymentRecommendationPicker.rows = rows;
+      paymentRecommendationPicker.meta = response.meta || {
+        total: rows.length,
+        counts: recommendationCounts(rows)
+      };
+      renderPaymentRecommendations();
+      persist();
+    } catch (error) {
+      elements.paymentRecommendationMsg.textContent = error.message;
+    }
+    return;
+  }
+
+  const rows = filteredLocalPaymentRecommendations(status, q);
+  paymentRecommendationPicker.rows = rows;
+  paymentRecommendationPicker.meta = {
+    total: rows.length,
+    counts: recommendationCounts(rows)
+  };
+  renderPaymentRecommendations();
+}
+
+function renderPaymentRecommendations() {
+  if (!elements.paymentRecommendationTableWrap) return;
+
+  const role = currentRole();
+  const isAgent = role === 'agent';
+  const isAdmin = role === 'admin';
+
+  if (elements.paymentRecommendationForm) {
+    elements.paymentRecommendationForm.hidden = !isAgent;
+  }
+  if (elements.paymentRecommendationAgentHint) {
+    elements.paymentRecommendationAgentHint.hidden = !isAgent;
+  }
+
+  if (!isAdmin && !isAgent) {
+    if (elements.paymentRecommendationSummary) {
+      elements.paymentRecommendationSummary.textContent = 'Only admin and agents can view payment recommendations.';
+    }
+    elements.paymentRecommendationTableWrap.innerHTML =
+      '<div class="empty">Sign in as admin or agent to access this queue.</div>';
+    return;
+  }
+
+  const rows =
+    Array.isArray(paymentRecommendationPicker.rows) && paymentRecommendationPicker.rows.length
+      ? paymentRecommendationPicker.rows
+      : Array.isArray(state.paymentRecommendations)
+        ? state.paymentRecommendations
+        : [];
+  const counts = paymentRecommendationPicker.meta?.counts || recommendationCounts(rows);
+  const total = Number(paymentRecommendationPicker.meta?.total ?? rows.length);
+  if (elements.paymentRecommendationSummary) {
+    elements.paymentRecommendationSummary.textContent =
+      `Total ${total} | Pending ${counts.pending || 0} | Approved ${counts.approved || 0} | Rejected ${counts.rejected || 0}`;
+  }
+
+  if (!rows.length) {
+    elements.paymentRecommendationTableWrap.innerHTML = '<div class="empty">No payment recommendations in this filter.</div>';
+    return;
+  }
+
+  const rowsHtml = rows
+    .slice(0, 300)
+    .map((row) => {
+      const status = normalizeRecommendationStatus(row.status);
+      const statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+      const canAdminAction = isAdmin && status === 'pending';
+      const actionButtons = canAdminAction
+        ? `
+          <button class="table-btn" data-action="approve-payment-recommendation" data-id="${escapeHtml(row.id)}">Approve</button>
+          <button class="table-btn danger" data-action="reject-payment-recommendation" data-id="${escapeHtml(row.id)}">Reject</button>
+        `
+        : '-';
+
+      return `
+        <tr>
+          <td>${escapeHtml(row.id || '-')}</td>
+          <td>${escapeHtml(row.farmerName || '-')}</td>
+          <td>${escapeHtml(row.farmerPhone || '-')}</td>
+          <td>${escapeHtml(formatCurrency(row.amount || 0))}</td>
+          <td>${escapeHtml(row.reason || '-')}</td>
+          <td>${escapeHtml(row.createdBy || '-')}</td>
+          <td><span class="severity-badge ${status === 'rejected' ? 'high' : status === 'approved' ? '' : 'medium'}">${escapeHtml(statusLabel)}</span></td>
+          <td>${escapeHtml(row.decisionNote || row.rejectionReason || '-')}</td>
+          <td>${escapeHtml(dateShort(row.updatedAt || row.createdAt))}</td>
+          <td class="actions">${actionButtons}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  elements.paymentRecommendationTableWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Farmer</th>
+          <th>Phone</th>
+          <th>Amount (KES)</th>
+          <th>Reason</th>
+          <th>Requested By</th>
+          <th>Status</th>
+          <th>Decision</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+}
+
 async function refreshOwedRows(resetSelection = false) {
   if (currentRole() !== 'admin') {
     owedPicker.rows = [];
     owedPicker.selectedFarmerIds.clear();
     elements.owedSummary.textContent = 'Owed list is visible to admin only.';
-    elements.owedTableWrap.innerHTML = '<div class="empty">Sign in as admin to view owed balances.</div>';
+    elements.owedTableWrap.innerHTML =
+      '<div class="empty">Sign in as admin to view owed balances. Agents can still submit payment recommendations.</div>';
     return;
   }
 
@@ -4706,6 +5111,7 @@ async function fetchAllData() {
   if (!API.enabled || !isAuthenticated()) {
     renderAll();
     updatePermissionUi();
+    await loadPaymentRecommendations();
     return;
   }
 
@@ -4720,6 +5126,11 @@ async function fetchAllData() {
       apiRequest('/api/reports/agents')
     ]);
 
+    let paymentRecommendations = { data: [], meta: null };
+    if (['admin', 'agent'].includes(currentRole())) {
+      paymentRecommendations = await apiRequest('/api/payments/recommendations?status=all&limit=500');
+    }
+
     let managedAgents = [];
     if (currentRole() === 'admin') {
       const agentAccounts = await apiRequest('/api/agents?includeDisabled=true&limit=500');
@@ -4732,10 +5143,12 @@ async function fetchAllData() {
     state.produce = produce.data || [];
     state.producePurchases = producePurchases.data || [];
     state.payments = payments.data || [];
+    state.paymentRecommendations = paymentRecommendations.data || [];
     state.smsLogs = sms.data || [];
     state.summary = summary.data || null;
     state.agentStats = agentStats.data || [];
     state.agents = managedAgents;
+    paymentRecommendationPicker.meta = paymentRecommendations.meta || paymentRecommendationPicker.meta;
 
     aiState.proposals = phase2b.proposals || [];
     aiState.proposalsMeta = phase2b.proposalsMeta || null;
@@ -4754,6 +5167,7 @@ async function fetchAllData() {
 
     notifySync(`Connected to backend as ${currentRole()}.`);
     await refreshOwedRows(false);
+    await loadPaymentRecommendations();
     if (currentSmsMode() === 'selected') {
       await loadSmsRecipients(false);
     }
@@ -4915,6 +5329,9 @@ function updatePermissionUi() {
   const produceAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const producePurchaseAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const owedAllowed = backendAuthReady && role === 'admin';
+  const paymentRecommendationViewAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
+  const paymentRecommendationCreateAllowed = backendAuthReady && role === 'agent';
+  const paymentRecommendationDecisionAllowed = backendAuthReady && role === 'admin';
   const paymentAllowed = backendAuthReady && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const aiSmsAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
@@ -4985,9 +5402,45 @@ function updatePermissionUi() {
   elements.owedPrepareBtn.disabled = !owedAllowed;
   elements.owedPaySelectedBtn.disabled = !owedAllowed;
   elements.owedExportBtn.disabled = !owedAllowed;
+  elements.owedPrepareBtn.hidden = !owedAllowed;
+  elements.owedPaySelectedBtn.hidden = !owedAllowed;
+
+  if (elements.paymentRecommendationCard) {
+    elements.paymentRecommendationCard.hidden = !paymentRecommendationViewAllowed;
+  }
+  if (elements.paymentRecommendationStatusFilter) {
+    elements.paymentRecommendationStatusFilter.disabled = !paymentRecommendationViewAllowed;
+  }
+  if (elements.paymentRecommendationSearch) {
+    elements.paymentRecommendationSearch.disabled = !paymentRecommendationViewAllowed;
+  }
+  if (elements.paymentRecommendationRefreshBtn) {
+    elements.paymentRecommendationRefreshBtn.disabled = !paymentRecommendationViewAllowed;
+  }
+  if (elements.paymentRecommendationFarmer) {
+    elements.paymentRecommendationFarmer.disabled = !paymentRecommendationCreateAllowed;
+  }
+  if (elements.paymentRecommendationAmount) {
+    elements.paymentRecommendationAmount.disabled = !paymentRecommendationCreateAllowed;
+  }
+  if (elements.paymentRecommendationReason) {
+    elements.paymentRecommendationReason.disabled = !paymentRecommendationCreateAllowed;
+  }
+  if (elements.paymentRecommendationSubmitBtn) {
+    elements.paymentRecommendationSubmitBtn.disabled = !paymentRecommendationCreateAllowed;
+  }
+  if (elements.paymentRecommendationAgentHint) {
+    elements.paymentRecommendationAgentHint.hidden = !paymentRecommendationCreateAllowed;
+  }
+  if (elements.paymentRecommendationTableWrap) {
+    elements.paymentRecommendationTableWrap.classList.toggle('admin-review-mode', paymentRecommendationDecisionAllowed);
+  }
 
   elements.paymentForm.querySelector('button[type="submit"]').disabled = !paymentAllowed;
   elements.mpesaDisburseBtn.disabled = !paymentAllowed;
+  if (elements.paymentLogCard) {
+    elements.paymentLogCard.hidden = !paymentAllowed;
+  }
 
   elements.smsForm.querySelector('button[type="submit"]').disabled = !smsAllowed;
   if (elements.smsDraftPurpose) elements.smsDraftPurpose.disabled = !aiSmsAllowed;
@@ -5085,6 +5538,7 @@ function renderAll() {
   renderProduce();
   renderProducePurchases();
   renderPayments();
+  renderPaymentRecommendations();
   renderSms();
   renderReports();
   renderBackups();
@@ -6687,6 +7141,9 @@ function hydrateFarmerSelectors() {
   elements.produceFarmer.innerHTML = options || fallback;
   elements.purchaseFarmer.innerHTML = options || fallback;
   elements.paymentFarmer.innerHTML = options || fallback;
+  if (elements.paymentRecommendationFarmer) {
+    elements.paymentRecommendationFarmer.innerHTML = options || fallback;
+  }
   hydrateFarmerPinOptions(state.farmers, selectedPinFarmerId);
   hydratePurchaseQcOptions();
   hydrateQcAiOptions();
@@ -6820,6 +7277,7 @@ function seedLocalData() {
       updatedAt: now
     }
   ];
+  state.paymentRecommendations = [];
   state.smsLogs = [];
   state.summary = deriveSummaryFromState();
   state.agentStats = [];
@@ -7031,6 +7489,7 @@ function clearMessages() {
   elements.produceMsg.textContent = '';
   elements.purchaseMsg.textContent = '';
   elements.owedMsg.textContent = '';
+  if (elements.paymentRecommendationMsg) elements.paymentRecommendationMsg.textContent = '';
   elements.paymentMsg.textContent = '';
   elements.smsMsg.textContent = '';
   if (elements.smsDraftMsg) elements.smsDraftMsg.textContent = '';
@@ -7196,6 +7655,7 @@ function loadState() {
       produce: Array.isArray(parsed.produce) ? parsed.produce : [],
       producePurchases: Array.isArray(parsed.producePurchases) ? parsed.producePurchases : [],
       payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+      paymentRecommendations: Array.isArray(parsed.paymentRecommendations) ? parsed.paymentRecommendations : [],
       smsLogs: Array.isArray(parsed.smsLogs) ? parsed.smsLogs : [],
       summary: parsed.summary || null,
       agentStats: Array.isArray(parsed.agentStats) ? parsed.agentStats : [],
@@ -7217,6 +7677,7 @@ function freshState() {
     produce: [],
     producePurchases: [],
     payments: [],
+    paymentRecommendations: [],
     smsLogs: [],
     summary: null,
     agentStats: [],

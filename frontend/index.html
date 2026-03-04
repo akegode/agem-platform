@@ -517,7 +517,39 @@
               </div>
             </details>
 
-            <details class="dropdown-card">
+            <details class="dropdown-card" id="paymentRecommendationCard" open>
+              <summary>Agent Payment Recommendations (Approve / Reject)</summary>
+              <div class="dropdown-body">
+                <div class="row">
+                  <select id="paymentRecommendationStatusFilter">
+                    <option value="all">All statuses</option>
+                    <option value="pending" selected>Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                  <input id="paymentRecommendationSearch" placeholder="Search by farmer, phone, reason, agent, or status">
+                </div>
+                <div class="inline-actions wrap">
+                  <button class="secondary" id="paymentRecommendationRefreshBtn" type="button">Refresh Recommendations</button>
+                </div>
+                <p class="meta compact" id="paymentRecommendationSummary">No recommendations loaded yet.</p>
+
+                <form id="paymentRecommendationForm">
+                  <div class="row">
+                    <select required id="paymentRecommendationFarmer"></select>
+                    <input required id="paymentRecommendationAmount" type="number" min="1" step="1" placeholder="Recommended amount (KES)">
+                  </div>
+                  <textarea required id="paymentRecommendationReason" rows="2" placeholder="Reason for recommendation (required)"></textarea>
+                  <button class="secondary" id="paymentRecommendationSubmitBtn" type="submit">Recommend For Payment</button>
+                  <p class="meta compact" id="paymentRecommendationAgentHint">Agent-only action: submit recommendation for admin approval.</p>
+                </form>
+
+                <div id="paymentRecommendationTableWrap"></div>
+                <div class="success" id="paymentRecommendationMsg"></div>
+              </div>
+            </details>
+
+            <details class="dropdown-card" id="paymentLogCard">
               <summary>Log Payment / Disbursement</summary>
               <div class="dropdown-body">
               <form id="paymentForm">

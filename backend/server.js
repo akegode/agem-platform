@@ -95,6 +95,7 @@ const AI_FEEDBACK_CAP = parseEnvInt('AI_FEEDBACK_CAP', 2000, 100, 20000);
 const AI_EVAL_CAP = parseEnvInt('AI_EVAL_CAP', 500, 20, 5000);
 const AI_KNOWLEDGE_CAP = parseEnvInt('AI_KNOWLEDGE_CAP', 500, 10, 5000);
 const OPS_TASK_CAP = parseEnvInt('OPS_TASK_CAP', 5000, 100, 50000);
+const PAYMENT_RECOMMENDATION_CAP = parseEnvInt('PAYMENT_RECOMMENDATION_CAP', 5000, 100, 50000);
 
 let sqlStoreAdapter = null;
 let backupScheduleHandle = null;
@@ -353,6 +354,7 @@ function freshStore() {
     produce: [],
     producePurchases: [],
     payments: [],
+    paymentRecommendations: [],
     smsLogs: [],
     activityLogs: [],
     sessions: {},
@@ -375,6 +377,7 @@ function normalizeStore(raw) {
     produce: Array.isArray(raw.produce) ? raw.produce : [],
     producePurchases: Array.isArray(raw.producePurchases) ? raw.producePurchases : [],
     payments: Array.isArray(raw.payments) ? raw.payments : [],
+    paymentRecommendations: Array.isArray(raw.paymentRecommendations) ? raw.paymentRecommendations : [],
     smsLogs: Array.isArray(raw.smsLogs) ? raw.smsLogs : [],
     activityLogs: Array.isArray(raw.activityLogs) ? raw.activityLogs : [],
     sessions: raw.sessions && typeof raw.sessions === 'object' ? raw.sessions : {},
@@ -441,6 +444,28 @@ function normalizeStore(raw) {
   store.aiFeedback = store.aiFeedback.slice(0, AI_FEEDBACK_CAP);
   store.aiEvalRuns = store.aiEvalRuns.slice(0, AI_EVAL_CAP);
   store.aiKnowledgeDocs = store.aiKnowledgeDocs.slice(0, AI_KNOWLEDGE_CAP);
+  store.paymentRecommendations = store.paymentRecommendations
+    .slice(0, PAYMENT_RECOMMENDATION_CAP)
+    .map((row) => ({
+      id: clean(row?.id) || id('PREQ'),
+      farmerId: clean(row?.farmerId),
+      farmerName: clean(row?.farmerName),
+      farmerPhone: clean(row?.farmerPhone),
+      amount: money(row?.amount),
+      requestedOwedKes: money(row?.requestedOwedKes),
+      status: normalizePaymentRecommendationStatus(row?.status),
+      reason: clean(row?.reason),
+      decisionNote: clean(row?.decisionNote),
+      createdBy: clean(row?.createdBy) || 'unknown-agent',
+      createdAt: clean(row?.createdAt) || nowIso(),
+      updatedAt: clean(row?.updatedAt) || clean(row?.createdAt) || nowIso(),
+      approvedBy: clean(row?.approvedBy),
+      approvedAt: clean(row?.approvedAt),
+      rejectedBy: clean(row?.rejectedBy),
+      rejectedAt: clean(row?.rejectedAt),
+      rejectionReason: clean(row?.rejectionReason),
+      paymentId: clean(row?.paymentId)
+    }));
   store.opsTasks = store.opsTasks.slice(0, OPS_TASK_CAP).map((row) => ({
     id: clean(row?.id) || id('TASK'),
     title: clean(row?.title) || 'Untitled task',
@@ -759,6 +784,12 @@ function normalizeOpsTaskStatus(value) {
   const normalized = clean(value).toLowerCase();
   if (['open', 'in_progress', 'resolved', 'closed'].includes(normalized)) return normalized;
   return 'open';
+}
+
+function normalizePaymentRecommendationStatus(value) {
+  const normalized = clean(value).toLowerCase();
+  if (['pending', 'approved', 'rejected'].includes(normalized)) return normalized;
+  return 'pending';
 }
 
 function aiPromptPolicy(store, key, fallback) {
@@ -2209,6 +2240,28 @@ function smsOwnerCostKes(log) {
   const legacyExplicitCost = parseNumber(log?.costKes);
   if (Number.isFinite(legacyExplicitCost) && legacyExplicitCost >= 0) return money(legacyExplicitCost);
   return money(SMS_OWNER_COST_PER_MESSAGE_KES);
+}
+
+function createSmsLog(store, payload) {
+  const phone = clean(payload?.phone);
+  const message = clean(payload?.message);
+  if (!phone || !message) return null;
+
+  const log = {
+    id: id('SMS'),
+    farmerId: clean(payload?.farmerId),
+    farmerName: clean(payload?.farmerName),
+    phone,
+    message,
+    provider: clean(payload?.provider) || 'AfricaTalking(Mock)',
+    ownerCostKes: money(SMS_OWNER_COST_PER_MESSAGE_KES),
+    status: clean(payload?.status) || 'Sent',
+    createdBy: clean(payload?.createdBy) || 'system',
+    createdAt: nowIso()
+  };
+
+  store.smsLogs.unshift(log);
+  return log;
 }
 
 function smsCostSnapshot(smsLogs, nowMs = Date.now()) {
@@ -5579,6 +5632,354 @@ const server = http.createServer(async (req, res) => {
         returned: Math.min(limit, owed.rows.length)
       }
     });
+    return;
+  }
+
+  if (pathname === '/api/payments/recommendations' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin', 'agent']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const statusFilter = clean(reqUrl.searchParams.get('status')).toLowerCase();
+    const q = clean(reqUrl.searchParams.get('q'));
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 200, 2000);
+    const offset = safeQueryOffset(reqUrl.searchParams, 'offset', 0, 2000000);
+
+    let rows = [...store.paymentRecommendations];
+    if (auth.session.role === 'agent') {
+      rows = rows.filter((row) => clean(row.createdBy) === clean(auth.session.username));
+    }
+
+    if (statusFilter && statusFilter !== 'all') {
+      rows = rows.filter((row) => normalizePaymentRecommendationStatus(row.status) === statusFilter);
+    }
+    rows = filterByTextQuery(rows, q, [
+      'id',
+      'farmerName',
+      'farmerPhone',
+      'reason',
+      'createdBy',
+      'status',
+      'rejectionReason'
+    ]);
+
+    rows = rows.sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt));
+    const total = rows.length;
+    const counts = rows.reduce(
+      (acc, row) => {
+        const key = normalizePaymentRecommendationStatus(row.status);
+        if (key in acc) acc[key] += 1;
+        return acc;
+      },
+      { pending: 0, approved: 0, rejected: 0 }
+    );
+
+    json(res, 200, {
+      data: rows.slice(offset, offset + limit),
+      meta: {
+        total,
+        limit,
+        offset,
+        q,
+        status: statusFilter || 'all',
+        counts
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/payments/recommendations' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const farmerId = clean(payload.farmerId);
+      const amountRaw = parseNumber(payload.amount);
+      const reason = clean(payload.reason);
+      if (!farmerId || !Number.isFinite(amountRaw) || amountRaw <= 0 || !reason) {
+        json(res, 422, { error: 'farmerId, amount (> 0), and reason are required.' });
+        return;
+      }
+
+      const farmer = findById(store.farmers, farmerId);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found.' });
+        return;
+      }
+
+      const owedSnapshot = buildOwedRows(store, { period: 'all' });
+      const owedRow = owedSnapshot.rows.find((row) => row.farmerId === farmerId);
+      const outstanding = money(owedRow?.balanceKes);
+      if (!(outstanding > 0)) {
+        json(res, 422, { error: 'This farmer currently has no outstanding balance.' });
+        return;
+      }
+
+      const amount = money(amountRaw);
+      if (amount > outstanding) {
+        json(res, 422, {
+          error: `Recommended amount (KES ${formatKes(amount)}) exceeds outstanding balance (KES ${formatKes(outstanding)}).`
+        });
+        return;
+      }
+
+      const recommendation = {
+        id: id('PREQ'),
+        farmerId: farmer.id,
+        farmerName: clean(farmer.name),
+        farmerPhone: clean(farmer.phone),
+        amount,
+        requestedOwedKes: outstanding,
+        status: 'pending',
+        reason,
+        decisionNote: '',
+        createdBy: auth.session.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        approvedBy: '',
+        approvedAt: '',
+        rejectedBy: '',
+        rejectedAt: '',
+        rejectionReason: '',
+        paymentId: ''
+      };
+
+      pushWithCap(store.paymentRecommendations, recommendation, PAYMENT_RECOMMENDATION_CAP);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payment.recommend.create',
+        entity: 'paymentRecommendation',
+        entityId: recommendation.id,
+        details: `Recommended payment of KES ${formatKes(amount)} for farmer ${recommendation.farmerName}`
+      });
+      await writeStore(store);
+
+      const pendingCount = store.paymentRecommendations.filter((row) => row.status === 'pending').length;
+      json(res, 201, {
+        data: recommendation,
+        meta: {
+          pendingForAdmin: pendingCount
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (
+    pathname.startsWith('/api/payments/recommendations/') &&
+    pathname.endsWith('/approve') &&
+    req.method === 'POST'
+  ) {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const recommendationId = routeParamWithSuffix(
+        pathname,
+        '/api/payments/recommendations/',
+        '/approve'
+      );
+      const recommendation = findById(store.paymentRecommendations, recommendationId);
+      if (!recommendation) {
+        json(res, 404, { error: 'Payment recommendation not found.' });
+        return;
+      }
+      if (normalizePaymentRecommendationStatus(recommendation.status) !== 'pending') {
+        json(res, 409, { error: 'Only pending recommendations can be approved.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const decisionNote = clean(payload.decisionNote);
+      const farmer = findById(store.farmers, recommendation.farmerId);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer linked to recommendation was not found.' });
+        return;
+      }
+
+      const owedSnapshot = buildOwedRows(store, { period: 'all' });
+      const owedRow = owedSnapshot.rows.find((row) => row.farmerId === recommendation.farmerId);
+      const outstanding = money(owedRow?.balanceKes);
+      if (!(outstanding > 0)) {
+        json(res, 409, { error: 'Farmer has no outstanding balance. Reject recommendation or review purchases.' });
+        return;
+      }
+
+      const amount = money(Math.min(money(recommendation.amount), outstanding));
+      const ref = `APR${Date.now().toString().slice(-8)}${crypto.randomInt(10, 99)}`;
+      const paymentRecord = {
+        id: id('TX'),
+        farmerId: farmer.id,
+        farmerName: farmer.name,
+        amount,
+        ref,
+        status: 'Received',
+        method: 'M-PESA(Mock)',
+        notes: clean(
+          `Approved from recommendation ${recommendation.id}${decisionNote ? `: ${decisionNote}` : ''}`
+        ),
+        source: 'agent-recommendation',
+        recommendationId: recommendation.id,
+        createdBy: auth.session.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      store.payments.unshift(paymentRecord);
+
+      recommendation.status = 'approved';
+      recommendation.approvedBy = auth.session.username;
+      recommendation.approvedAt = nowIso();
+      recommendation.updatedAt = recommendation.approvedAt;
+      recommendation.paymentId = paymentRecord.id;
+      recommendation.decisionNote = decisionNote;
+      recommendation.rejectedBy = '';
+      recommendation.rejectedAt = '';
+      recommendation.rejectionReason = '';
+
+      const agentUser = findUserByUsername(store, recommendation.createdBy);
+      const agentPhone = clean(agentUser?.phone);
+      const farmerPhone = clean(farmer.phone || recommendation.farmerPhone);
+
+      const farmerSms = createSmsLog(store, {
+        farmerId: farmer.id,
+        farmerName: farmer.name,
+        phone: farmerPhone,
+        message: `Agem Portal: Payment of KES ${formatKes(amount)} has been approved and processed. Ref ${ref}.`,
+        createdBy: auth.session.username
+      });
+      const agentSms = createSmsLog(store, {
+        farmerId: farmer.id,
+        farmerName: farmer.name,
+        phone: agentPhone,
+        message: `Agem Portal: Your recommendation ${recommendation.id} for ${farmer.name} was APPROVED. Payment ref ${ref}.`,
+        createdBy: auth.session.username
+      });
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payment.recommend.approve',
+        entity: 'paymentRecommendation',
+        entityId: recommendation.id,
+        details: `Approved recommendation and posted payment ${paymentRecord.ref} (KES ${formatKes(amount)})`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: recommendation,
+        payment: paymentRecord,
+        meta: {
+          smsNotified: {
+            farmer: Boolean(farmerSms),
+            agent: Boolean(agentSms)
+          }
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (
+    pathname.startsWith('/api/payments/recommendations/') &&
+    pathname.endsWith('/reject') &&
+    req.method === 'POST'
+  ) {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const recommendationId = routeParamWithSuffix(
+        pathname,
+        '/api/payments/recommendations/',
+        '/reject'
+      );
+      const recommendation = findById(store.paymentRecommendations, recommendationId);
+      if (!recommendation) {
+        json(res, 404, { error: 'Payment recommendation not found.' });
+        return;
+      }
+      if (normalizePaymentRecommendationStatus(recommendation.status) !== 'pending') {
+        json(res, 409, { error: 'Only pending recommendations can be rejected.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const reason = clean(payload.reason);
+      const farmer = findById(store.farmers, recommendation.farmerId);
+      const farmerName = clean(farmer?.name || recommendation.farmerName);
+      const farmerPhone = clean(farmer?.phone || recommendation.farmerPhone);
+
+      recommendation.status = 'rejected';
+      recommendation.rejectedBy = auth.session.username;
+      recommendation.rejectedAt = nowIso();
+      recommendation.updatedAt = recommendation.rejectedAt;
+      recommendation.rejectionReason = reason;
+      recommendation.decisionNote = reason;
+      recommendation.approvedBy = '';
+      recommendation.approvedAt = '';
+      recommendation.paymentId = '';
+
+      const agentUser = findUserByUsername(store, recommendation.createdBy);
+      const agentPhone = clean(agentUser?.phone);
+
+      const farmerSms = createSmsLog(store, {
+        farmerId: recommendation.farmerId,
+        farmerName,
+        phone: farmerPhone,
+        message: `Agem Portal: Payment recommendation for your account was not approved${reason ? ` (${reason})` : ''}. Contact your AGEM agent for details.`,
+        createdBy: auth.session.username
+      });
+      const agentSms = createSmsLog(store, {
+        farmerId: recommendation.farmerId,
+        farmerName,
+        phone: agentPhone,
+        message: `Agem Portal: Recommendation ${recommendation.id} for ${farmerName} was REJECTED${reason ? ` (${reason})` : ''}.`,
+        createdBy: auth.session.username
+      });
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payment.recommend.reject',
+        entity: 'paymentRecommendation',
+        entityId: recommendation.id,
+        details: `Rejected recommendation ${recommendation.id}${reason ? ` (${reason.slice(0, 120)})` : ''}`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: recommendation,
+        meta: {
+          smsNotified: {
+            farmer: Boolean(farmerSms),
+            agent: Boolean(agentSms)
+          }
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
     return;
   }
 
