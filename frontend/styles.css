@@ -57,7 +57,7 @@ body.dashboard-open {
 }
 
 .auth-hero {
-  background: linear-gradient(162deg, rgba(15, 49, 30, 0.95) 0%, rgba(29, 76, 48, 0.95) 58%, rgba(46, 95, 61, 0.92) 100%);
+  background: linear-gradient(162deg, rgba(39, 92, 60, 0.76) 0%, rgba(46, 108, 69, 0.76) 58%, rgba(61, 124, 78, 0.72) 100%);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -81,9 +81,9 @@ body.dashboard-open {
   inset: 0;
   z-index: -2;
   background:
-    linear-gradient(205deg, rgba(8, 27, 15, 0.74) 0%, rgba(8, 27, 15, 0.3) 48%, rgba(8, 27, 15, 0.7) 100%),
+    linear-gradient(205deg, rgba(8, 27, 15, 0.42) 0%, rgba(8, 27, 15, 0.12) 48%, rgba(8, 27, 15, 0.34) 100%),
     url("https://images.squarespace-cdn.com/content/v1/665b29b04cc2be40761051c0/390cbd53-d0bf-451d-9274-dc3a67a9da99/WhatsApp+Image+2025-04-23+at+07.03.42.jpeg") center / cover no-repeat;
-  opacity: 0.36;
+  opacity: 0.24;
 }
 
 .auth-hero::after {
@@ -105,7 +105,8 @@ body.dashboard-open {
 .hero-logo-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 4px;
 }
 
@@ -120,15 +121,24 @@ body.dashboard-open {
 }
 
 .hero-logo-link-hass {
-  width: 84px;
-  height: 84px;
-  flex: 0 0 84px;
+  width: 76px;
+  height: 76px;
+  flex: 0 0 76px;
+  margin-left: auto;
 }
 
 .hero-logo-link-company {
   height: 84px;
-  width: 230px;
-  max-width: 100%;
+  width: 430px;
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: calc(100% - 92px);
+  background: rgba(5, 12, 8, 0.9);
+  border-color: rgba(255, 255, 255, 0.36);
+}
+
+.hero-company-logo {
+  filter: invert(1) grayscale(0.06) contrast(1.14) brightness(1.06);
 }
 
 .hero-logo {
