@@ -25,7 +25,9 @@ const smsPicker = {
   selectedIds: new Set()
 };
 const aiState = {
-  smsDrafts: []
+  smsDrafts: [],
+  qcInsights: [],
+  paymentRiskFlags: []
 };
 const owedPicker = {
   rows: [],
@@ -152,6 +154,7 @@ const elements = {
   agentForm: document.getElementById('agentForm'),
   agentName: document.getElementById('agentName'),
   agentEmail: document.getElementById('agentEmail'),
+  agentPhone: document.getElementById('agentPhone'),
   agentMsg: document.getElementById('agentMsg'),
   agentCredentials: document.getElementById('agentCredentials'),
   agentSearch: document.getElementById('agentSearch'),
@@ -243,6 +246,16 @@ const elements = {
   copilotAskBtn: document.getElementById('copilotAskBtn'),
   copilotMsg: document.getElementById('copilotMsg'),
   copilotWrap: document.getElementById('copilotWrap'),
+  qcAiRecord: document.getElementById('qcAiRecord'),
+  qcAiRunBtn: document.getElementById('qcAiRunBtn'),
+  qcAiMsg: document.getElementById('qcAiMsg'),
+  qcAiWrap: document.getElementById('qcAiWrap'),
+  paymentRiskPeriod: document.getElementById('paymentRiskPeriod'),
+  paymentRiskFrom: document.getElementById('paymentRiskFrom'),
+  paymentRiskTo: document.getElementById('paymentRiskTo'),
+  paymentRiskRunBtn: document.getElementById('paymentRiskRunBtn'),
+  paymentRiskMsg: document.getElementById('paymentRiskMsg'),
+  paymentRiskWrap: document.getElementById('paymentRiskWrap'),
 
   exportButtons: document.querySelectorAll('.export-btn'),
   smsExportRange: document.getElementById('smsExportRange'),
@@ -1385,20 +1398,25 @@ function bindAgents() {
 
     const name = elements.agentName.value.trim();
     const email = elements.agentEmail.value.trim().toLowerCase();
+    const phone = cleanPhone(elements.agentPhone.value);
 
-    if (!name || !email) {
-      elements.agentMsg.textContent = 'Name and email are required.';
+    if (!name || !email || !phone) {
+      elements.agentMsg.textContent = 'Name, email, and phone are required.';
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       elements.agentMsg.textContent = 'Enter a valid email address.';
       return;
     }
+    if (!/^254\d{9}$/.test(phone)) {
+      elements.agentMsg.textContent = 'Enter a valid Kenyan phone number (e.g. 2547XXXXXXXX).';
+      return;
+    }
 
     try {
       const response = await apiRequest('/api/agents', {
         method: 'POST',
-        body: { name, email }
+        body: { name, email, phone }
       });
       elements.agentForm.reset();
       elements.agentMsg.textContent = `Agent account created for ${response.data.name}.`;
@@ -1436,6 +1454,7 @@ function showAgentCredentialDisplay(data) {
   const username = String(data?.username || '').trim();
   const temporaryPassword = String(data?.temporaryPassword || '').trim();
   const email = String(data?.email || '').trim();
+  const phone = String(data?.phone || '').trim();
   if (!username || !temporaryPassword) {
     elements.agentCredentials.hidden = true;
     elements.agentCredentials.textContent = '';
@@ -1446,6 +1465,7 @@ function showAgentCredentialDisplay(data) {
   elements.agentCredentials.innerHTML = `
     <strong>Temporary login created.</strong><br>
     Email: <code>${escapeHtml(email || '-')}</code><br>
+    Phone: <code>${escapeHtml(phone || '-')}</code><br>
     Username: <code>${escapeHtml(username)}</code><br>
     Password: <code>${escapeHtml(temporaryPassword)}</code><br>
     <span class="meta compact">Share these once, then ask the agent to change password after first sign-in.</span>
@@ -2570,6 +2590,13 @@ function bindAiTools() {
   if (elements.farmerImportQaWrap) {
     elements.farmerImportQaWrap.hidden = true;
   }
+  if (elements.qcAiWrap) {
+    elements.qcAiWrap.hidden = false;
+  }
+  if (elements.paymentRiskWrap) {
+    elements.paymentRiskWrap.hidden = false;
+  }
+  syncPaymentRiskFilterUi();
 
   if (elements.smsDraftBtn) {
     elements.smsDraftBtn.addEventListener('click', async () => {
@@ -2667,6 +2694,85 @@ function bindAiTools() {
       elements.copilotAskBtn?.click();
     });
   }
+
+  if (elements.qcAiRunBtn) {
+    elements.qcAiRunBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.qcAiMsg.textContent = 'QC intelligence requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.qcAiMsg.textContent = 'Sign in first to run QC intelligence.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.qcAiMsg.textContent = 'Only admin or agent can run QC intelligence.';
+        return;
+      }
+
+      try {
+        const qcRecordId = String(elements.qcAiRecord?.value || '').trim();
+        const response = await apiRequest('/api/ai/qc-intelligence', {
+          method: 'POST',
+          body: {
+            qcRecordId,
+            limit: 30
+          }
+        });
+        renderQcAiResult(response.data || {});
+      } catch (error) {
+        elements.qcAiMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.paymentRiskPeriod) {
+    elements.paymentRiskPeriod.addEventListener('change', () => {
+      syncPaymentRiskFilterUi();
+    });
+  }
+
+  if (elements.paymentRiskRunBtn) {
+    elements.paymentRiskRunBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.paymentRiskMsg.textContent = 'Payment risk check requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.paymentRiskMsg.textContent = 'Sign in first to run payment risk check.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.paymentRiskMsg.textContent = 'Payment risk check is admin-only.';
+        return;
+      }
+
+      try {
+        const period = String(elements.paymentRiskPeriod?.value || 'week').trim().toLowerCase();
+        const payload = { period };
+        if (period === 'custom') {
+          const from = String(elements.paymentRiskFrom?.value || '').trim();
+          const to = String(elements.paymentRiskTo?.value || '').trim();
+          if (!from || !to) {
+            elements.paymentRiskMsg.textContent = 'Choose start and end date for custom range.';
+            return;
+          }
+          payload.from = from;
+          payload.to = to;
+        }
+
+        const response = await apiRequest('/api/ai/payment-risk', {
+          method: 'POST',
+          body: payload
+        });
+        renderPaymentRiskResult(response.data || {});
+      } catch (error) {
+        elements.paymentRiskMsg.textContent = error.message;
+      }
+    });
+  }
 }
 
 function renderSmsDraftResult(data) {
@@ -2734,6 +2840,115 @@ function renderCopilotResult(data) {
     ${insightsHtml}
     ${actionsHtml}
   `;
+}
+
+function renderQcAiResult(data) {
+  const summary = data?.summary || {};
+  const items = Array.isArray(data?.items) ? data.items : [];
+  const warning = String(data?.warning || '').trim();
+  const source = String(data?.source || 'local-rules');
+  const sourceText = source === 'openai' ? `OpenAI (${escapeHtml(data.model || '')})` : 'Local fallback';
+
+  aiState.qcInsights = items;
+  if (!items.length) {
+    elements.qcAiMsg.textContent = warning || 'No QC intelligence results returned.';
+    if (elements.qcAiWrap) {
+      elements.qcAiWrap.classList.add('empty');
+      elements.qcAiWrap.textContent = 'No QC intelligence output returned for this request.';
+    }
+    return;
+  }
+
+  const rows = items
+    .slice(0, 30)
+    .map((item) => {
+      const reasons = Array.isArray(item?.reasons) ? item.reasons : [];
+      const actions = Array.isArray(item?.actions) ? item.actions : [];
+      return `
+        <li>
+          <strong>${escapeHtml(String(item.farmerName || '-'))}</strong> | Lot ${escapeHtml(String(item.qcRecordId || '-'))}
+          <br>Risk: <strong>${escapeHtml(String(item.riskLevel || '-').toUpperCase())}</strong>
+          | Score: ${escapeHtml(String(item.riskScore ?? '-'))}
+          | Current: ${escapeHtml(String(item.currentDecision || '-'))}
+          | Suggested: <strong>${escapeHtml(String(item.recommendedDecision || '-'))}</strong>
+          <br>${escapeHtml(String(item.summary || ''))}
+          ${reasons.length ? `<br><em>Reasons:</em> ${escapeHtml(reasons.join(' | '))}` : ''}
+          ${actions.length ? `<br><em>Actions:</em> ${escapeHtml(actions.join(' | '))}` : ''}
+        </li>
+      `;
+    })
+    .join('');
+
+  elements.qcAiMsg.textContent =
+    warning ||
+    `QC intelligence generated via ${sourceText}. High risk: ${summary.highRisk || 0}, medium: ${summary.mediumRisk || 0}, low: ${summary.lowRisk || 0}.`;
+
+  if (!elements.qcAiWrap) return;
+  elements.qcAiWrap.classList.remove('empty');
+  elements.qcAiWrap.innerHTML = `
+    <div class="ai-result-title">QC Intelligence Results</div>
+    <p class="meta compact">
+      Analyzed: ${escapeHtml(String(summary.totalAnalyzed || items.length))},
+      Flagged: ${escapeHtml(String(summary.flagged || 0))}
+    </p>
+    <ul class="ai-result-list">${rows}</ul>
+  `;
+}
+
+function renderPaymentRiskResult(data) {
+  const summary = data?.summary || {};
+  const flags = Array.isArray(data?.flags) ? data.flags : [];
+  const actions = Array.isArray(data?.actions) ? data.actions : [];
+  const warning = String(data?.warning || '').trim();
+  const source = String(data?.source || 'local-rules');
+  const sourceText = source === 'openai' ? `OpenAI (${escapeHtml(data.model || '')})` : 'Local fallback';
+  const narrative = String(data?.narrative || '').trim();
+
+  aiState.paymentRiskFlags = flags;
+
+  const actionsHtml = actions.length
+    ? `<div class="ai-result-title">Suggested Actions</div><ul class="ai-result-list">${actions.map((row) => `<li>${escapeHtml(String(row))}</li>`).join('')}</ul>`
+    : '';
+  const flagsHtml = flags.length
+    ? `<div class="ai-result-title">Risk Flags</div><ul class="ai-result-list">${flags
+      .slice(0, 40)
+      .map(
+        (flag) => `<li><strong>${escapeHtml(String(flag.severity || 'medium').toUpperCase())}</strong> - ${escapeHtml(
+          String(flag.title || flag.code || 'Flag')
+        )}: ${escapeHtml(String(flag.detail || ''))}</li>`
+      )
+      .join('')}</ul>`
+    : '<div class="empty">No risk flags detected for the selected period.</div>';
+
+  elements.paymentRiskMsg.textContent =
+    warning ||
+    `Payment risk report generated via ${sourceText}. Overall risk: ${String(summary.overallRisk || 'low').toUpperCase()}.`;
+
+  if (!elements.paymentRiskWrap) return;
+  elements.paymentRiskWrap.classList.remove('empty');
+  elements.paymentRiskWrap.innerHTML = `
+    <div class="ai-result-title">Payment Risk Summary</div>
+    <p class="meta compact">
+      Payments analyzed: ${escapeHtml(String(data.paymentCount || 0))} |
+      Overall risk: <strong>${escapeHtml(String(summary.overallRisk || 'low').toUpperCase())}</strong> |
+      High: ${escapeHtml(String(summary.highFlags || 0))},
+      Medium: ${escapeHtml(String(summary.mediumFlags || 0))},
+      Low: ${escapeHtml(String(summary.lowFlags || 0))}
+    </p>
+    <p class="meta compact">${escapeHtml(narrative || 'No narrative returned.')}</p>
+    ${actionsHtml}
+    ${flagsHtml}
+  `;
+}
+
+function syncPaymentRiskFilterUi() {
+  if (!elements.paymentRiskPeriod || !elements.paymentRiskFrom || !elements.paymentRiskTo) return;
+  const period = String(elements.paymentRiskPeriod.value || 'week').trim().toLowerCase();
+  const custom = period === 'custom';
+  elements.paymentRiskFrom.hidden = !custom;
+  elements.paymentRiskTo.hidden = !custom;
+  elements.paymentRiskFrom.disabled = !custom;
+  elements.paymentRiskTo.disabled = !custom;
 }
 
 function currentSmsMode() {
@@ -3345,6 +3560,8 @@ function updatePermissionUi() {
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const aiSmsAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
   const copilotAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const qcAiAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const paymentRiskAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const smartQaAllowed = role === 'admin';
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
@@ -3367,6 +3584,7 @@ function updatePermissionUi() {
   updateFarmerImportSmsUi();
   elements.agentName.disabled = !agentManageAllowed;
   elements.agentEmail.disabled = !agentManageAllowed;
+  elements.agentPhone.disabled = !agentManageAllowed;
   elements.agentRefreshBtn.disabled = !agentManageAllowed;
   elements.agentSearch.disabled = !agentManageAllowed;
   elements.agentForm.querySelector('button[type="submit"]').disabled = !agentManageAllowed;
@@ -3411,6 +3629,12 @@ function updatePermissionUi() {
 
   if (elements.copilotPrompt) elements.copilotPrompt.disabled = !copilotAllowed;
   if (elements.copilotAskBtn) elements.copilotAskBtn.disabled = !copilotAllowed;
+  if (elements.qcAiRecord) elements.qcAiRecord.disabled = !qcAiAllowed;
+  if (elements.qcAiRunBtn) elements.qcAiRunBtn.disabled = !qcAiAllowed;
+  if (elements.paymentRiskPeriod) elements.paymentRiskPeriod.disabled = !paymentRiskAllowed;
+  if (elements.paymentRiskRunBtn) elements.paymentRiskRunBtn.disabled = !paymentRiskAllowed;
+  if (elements.paymentRiskFrom) elements.paymentRiskFrom.disabled = !paymentRiskAllowed || elements.paymentRiskFrom.hidden;
+  if (elements.paymentRiskTo) elements.paymentRiskTo.disabled = !paymentRiskAllowed || elements.paymentRiskTo.hidden;
 
   elements.seedBtn.disabled = !(adminAllowed || !API.enabled);
   elements.backupBtn.disabled = !adminAllowed;
@@ -3581,6 +3805,7 @@ function renderAgents() {
         <td>${escapeHtml(agent.name || '-')}</td>
         <td>${escapeHtml(agent.username || '-')}</td>
         <td>${escapeHtml(agent.email || '-')}</td>
+        <td>${escapeHtml(agent.phone || '-')}</td>
         <td>${escapeHtml(agent.status || '-')}</td>
         <td>${escapeHtml(agent.provisioning === 'environment' ? 'Environment' : 'Admin')}</td>
         <td>${escapeHtml(dateShort(agent.updatedAt || agent.createdAt))}</td>
@@ -3595,6 +3820,7 @@ function renderAgents() {
           <th>Name</th>
           <th>Username</th>
           <th>Email</th>
+          <th>Phone</th>
           <th>Status</th>
           <th>Source</th>
           <th>Updated</th>
@@ -3609,6 +3835,7 @@ function renderProduce() {
   if (!state.produce.length) {
     elements.produceTableWrap.innerHTML = '<div class="empty">No produce entries yet.</div>';
     hydratePurchaseQcOptions();
+    hydrateQcAiOptions();
     return;
   }
 
@@ -3666,6 +3893,7 @@ function renderProduce() {
     </table>
   `;
   hydratePurchaseQcOptions();
+  hydrateQcAiOptions();
 }
 
 function renderProducePurchases() {
@@ -5043,6 +5271,7 @@ function hydrateFarmerSelectors() {
   elements.paymentFarmer.innerHTML = options || fallback;
   hydrateFarmerPinOptions(state.farmers, selectedPinFarmerId);
   hydratePurchaseQcOptions();
+  hydrateQcAiOptions();
 
   if (!API.enabled && currentSmsMode() === 'selected') {
     void loadSmsRecipients(false);
@@ -5062,6 +5291,23 @@ function hydratePurchaseQcOptions() {
     .join('');
 
   elements.purchaseQcRecord.innerHTML = '<option value="">Link QC lot (optional)</option>' + qcOptions;
+}
+
+function hydrateQcAiOptions() {
+  if (!elements.qcAiRecord) return;
+  const selectedId = String(elements.qcAiRecord.value || '').trim();
+  const options = state.produce
+    .slice(0, 300)
+    .map((row) => {
+      const label = `${row.id} | ${row.farmerName || '-'} | ${row.variety || '-'} | ${row.qcDecision || '-'} | ${dateShort(row.createdAt)}`;
+      return `<option value="${escapeHtml(row.id)}">${escapeHtml(label)}</option>`;
+    })
+    .join('');
+
+  elements.qcAiRecord.innerHTML = '<option value="">Analyze latest QC lots (up to 30)</option>' + options;
+  if (selectedId && state.produce.some((row) => row.id === selectedId)) {
+    elements.qcAiRecord.value = selectedId;
+  }
 }
 
 function seedLocalData() {
@@ -5380,6 +5626,18 @@ function clearMessages() {
     elements.copilotWrap.classList.add('empty');
     elements.copilotWrap.textContent = 'Ask a question to get AI-guided operational insights.';
   }
+  if (elements.qcAiMsg) elements.qcAiMsg.textContent = '';
+  if (elements.qcAiWrap) {
+    elements.qcAiWrap.classList.add('empty');
+    elements.qcAiWrap.textContent = 'Run analysis to get lot risk levels and pass/hold/reject guidance.';
+  }
+  if (elements.paymentRiskMsg) elements.paymentRiskMsg.textContent = '';
+  if (elements.paymentRiskWrap) {
+    elements.paymentRiskWrap.classList.add('empty');
+    elements.paymentRiskWrap.textContent = 'Run analysis to detect duplicate refs, outliers, and payout risks.';
+  }
+  aiState.qcInsights = [];
+  aiState.paymentRiskFlags = [];
   elements.exportsMsg.textContent = '';
 }
 

@@ -833,6 +833,10 @@ function normalizePhone(value) {
   return digits;
 }
 
+function isValidKenyaPhone(value) {
+  return /^254\d{9}$/.test(clean(value));
+}
+
 function isTruthy(value) {
   if (typeof value === 'boolean') return value;
   const lower = clean(value).toLowerCase();
@@ -1060,6 +1064,7 @@ function agentView(user) {
     username: user.username,
     name: user.name || '',
     email: user.email || '',
+    phone: user.phone || '',
     role: user.role || 'agent',
     status: user.status || 'active',
     provisioning: user.provisioning || 'admin',
@@ -2416,6 +2421,358 @@ function localCopilotAnswer(store, question) {
   };
 }
 
+function normalizeFirmnessToNewton(value, unit) {
+  const raw = parseNumber(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const normalizedUnit = normalizeFirmnessUnit(unit) || 'N';
+  if (normalizedUnit === 'kgf') {
+    return Number((raw * 9.80665).toFixed(2));
+  }
+  return Number(raw.toFixed(2));
+}
+
+function sizeCodeNumber(code) {
+  const normalized = normalizeSizeCode(code);
+  if (!normalized) return null;
+  const parsed = Number(normalized.slice(1));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function localQcIntelligence(record) {
+  const reasons = [];
+  const actions = [];
+  let riskScore = 0;
+  let missingSignals = 0;
+
+  const visual = normalizeVisualGrade(record?.visualGrade || record?.quality);
+  if (visual === 'Reject') {
+    riskScore += 4;
+    reasons.push('Visual grade is Reject.');
+  } else if (visual === 'Borderline') {
+    riskScore += 2;
+    reasons.push('Visual grade is Borderline.');
+  } else if (!visual) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Visual grade is missing.');
+  }
+
+  const dryMatter = parseNumber(record?.dryMatterPct);
+  if (!Number.isFinite(dryMatter) || dryMatter <= 0) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Dry matter is missing.');
+  } else if (dryMatter < 21) {
+    riskScore += 4;
+    reasons.push(`Dry matter is low (${dryMatter}%).`);
+  } else if (dryMatter < 23) {
+    riskScore += 2;
+    reasons.push(`Dry matter is borderline (${dryMatter}%).`);
+  } else if (dryMatter > 35) {
+    riskScore += 1;
+    reasons.push(`Dry matter looks unusually high (${dryMatter}%).`);
+  }
+
+  const firmnessN = normalizeFirmnessToNewton(record?.firmnessValue, record?.firmnessUnit);
+  if (!Number.isFinite(firmnessN) || firmnessN <= 0) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Firmness reading is missing.');
+  } else if (firmnessN < 45) {
+    riskScore += 4;
+    reasons.push(`Firmness is very low (${firmnessN} N).`);
+  } else if (firmnessN < 60) {
+    riskScore += 2;
+    reasons.push(`Firmness is slightly low (${firmnessN} N).`);
+  } else if (firmnessN > 130) {
+    riskScore += 1;
+    reasons.push(`Firmness is unusually high (${firmnessN} N).`);
+  }
+
+  const avgFruitWeightG = parseNumber(record?.avgFruitWeightG);
+  if (!Number.isFinite(avgFruitWeightG) || avgFruitWeightG <= 0) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Average fruit weight is missing.');
+  } else if (avgFruitWeightG < 150) {
+    riskScore += 2;
+    reasons.push(`Average fruit weight is low (${avgFruitWeightG} g).`);
+  } else if (avgFruitWeightG > 420) {
+    riskScore += 1;
+    reasons.push(`Average fruit weight is high (${avgFruitWeightG} g).`);
+  }
+
+  const sampleSize = parseNumber(record?.sampleSize);
+  if (Number.isFinite(sampleSize) && sampleSize > 0 && sampleSize < 10) {
+    riskScore += 1;
+    reasons.push(`Sample size is small (${sampleSize}).`);
+  } else if (!Number.isFinite(sampleSize) || sampleSize <= 0) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Sample size is missing.');
+  }
+
+  const sizeNum = sizeCodeNumber(record?.sizeCode);
+  if (sizeNum === null) {
+    riskScore += 1;
+    missingSignals += 1;
+    reasons.push('Size code is missing.');
+  } else if (sizeNum > 26) {
+    riskScore += 1;
+    reasons.push(`Small-size pack code (${record.sizeCode}).`);
+  }
+
+  const currentDecision = normalizeQcDecision(record?.qcDecision) || clean(record?.qcDecision) || '';
+  if (currentDecision === 'Reject') riskScore += 1;
+  if (currentDecision === 'Hold') riskScore += 1;
+
+  let riskLevel = 'low';
+  let recommendedDecision = 'Accept';
+  if (riskScore >= 8) {
+    riskLevel = 'high';
+    recommendedDecision = 'Reject';
+  } else if (riskScore >= 4) {
+    riskLevel = 'medium';
+    recommendedDecision = 'Hold';
+  }
+
+  if (visual === 'Reject' && recommendedDecision === 'Accept') {
+    recommendedDecision = 'Hold';
+  }
+  if (currentDecision === 'Reject') {
+    recommendedDecision = 'Reject';
+  }
+
+  if (riskLevel === 'high') {
+    actions.push('Hold this lot and run immediate re-sampling before dispatch.');
+    actions.push('Escalate to supervisor and confirm maturity window with farm records.');
+  } else if (riskLevel === 'medium') {
+    actions.push('Re-test dry matter and firmness on a larger sample before final release.');
+    actions.push('Tag lot for closer monitoring at loading.');
+  } else {
+    actions.push('Proceed with normal handling and keep standard QC trace logs.');
+  }
+
+  const confidenceBase = 0.62 + Math.min(0.3, riskScore * 0.03) - Math.min(0.2, missingSignals * 0.04);
+  const confidence = Number(Math.max(0.35, Math.min(0.96, confidenceBase)).toFixed(2));
+  const summary = reasons.length
+    ? reasons.slice(0, 3).join(' ')
+    : 'Signals are within expected farm-gate ranges.';
+
+  return {
+    qcRecordId: record.id,
+    farmerId: record.farmerId || '',
+    farmerName: record.farmerName || '',
+    variety: record.variety || '',
+    lotWeightKgs: Number(parseNumber(record.lotWeightKgs ?? record.kgs)).toFixed(1),
+    createdAt: record.createdAt || '',
+    currentDecision: currentDecision || '-',
+    recommendedDecision,
+    riskLevel,
+    riskScore,
+    confidence,
+    summary,
+    reasons,
+    actions
+  };
+}
+
+function median(values) {
+  const cleanValues = (Array.isArray(values) ? values : [])
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (!cleanValues.length) return 0;
+  const mid = Math.floor(cleanValues.length / 2);
+  if (cleanValues.length % 2 === 0) {
+    return (cleanValues[mid - 1] + cleanValues[mid]) / 2;
+  }
+  return cleanValues[mid];
+}
+
+function localPaymentRiskReport(store, options = {}) {
+  const range = resolveRange(options.period, options.from, options.to);
+  const payments = (store.payments || []).filter((row) => isInRange(row.createdAt, range));
+  const farmersById = new Map((store.farmers || []).map((row) => [clean(row.id), row]));
+  const flags = [];
+  const addFlag = (flag) => {
+    if (!flag || !flag.code) return;
+    flags.push({
+      severity: flag.severity || 'medium',
+      code: flag.code,
+      title: flag.title || '',
+      detail: flag.detail || '',
+      paymentId: clean(flag.paymentId),
+      farmerName: clean(flag.farmerName),
+      ref: clean(flag.ref),
+      amountKes: Number.isFinite(Number(flag.amountKes)) ? money(flag.amountKes) : ''
+    });
+  };
+
+  const byRef = new Map();
+  for (const payment of payments) {
+    const ref = clean(payment.ref).toUpperCase();
+    if (!ref) continue;
+    const rows = byRef.get(ref) || [];
+    rows.push(payment);
+    byRef.set(ref, rows);
+  }
+  for (const [ref, rows] of byRef.entries()) {
+    if (rows.length < 2) continue;
+    addFlag({
+      severity: 'high',
+      code: 'duplicate_ref',
+      title: 'Duplicate payment reference',
+      detail: `Reference ${ref} appears ${rows.length} times in the selected period.`,
+      paymentId: rows[0]?.id,
+      farmerName: rows[0]?.farmerName,
+      ref
+    });
+  }
+
+  const byFarmerAmount = new Map();
+  for (const payment of payments) {
+    const farmerId = clean(payment.farmerId);
+    const amountKes = money(payment.amount);
+    const key = `${farmerId}|${amountKes}`;
+    const rows = byFarmerAmount.get(key) || [];
+    rows.push(payment);
+    byFarmerAmount.set(key, rows);
+  }
+
+  for (const rows of byFarmerAmount.values()) {
+    if (rows.length < 2) continue;
+    const ordered = rows.slice().sort((a, b) => dateMs(a.createdAt) - dateMs(b.createdAt));
+    for (let idx = 1; idx < ordered.length; idx += 1) {
+      const prev = ordered[idx - 1];
+      const next = ordered[idx];
+      const gapMinutes = Math.abs(dateMs(next.createdAt) - dateMs(prev.createdAt)) / (60 * 1000);
+      if (gapMinutes <= 15) {
+        addFlag({
+          severity: 'high',
+          code: 'rapid_repeat_payment',
+          title: 'Rapid repeat payment',
+          detail: `Same farmer and amount posted ${Math.round(gapMinutes)} minute(s) apart.`,
+          paymentId: next.id,
+          farmerName: next.farmerName,
+          ref: next.ref,
+          amountKes: next.amount
+        });
+      }
+    }
+  }
+
+  const amounts = payments
+    .map((row) => money(row.amount))
+    .filter((value) => value > 0);
+  const amountMedian = median(amounts);
+  const outlierThreshold = Math.max(5000, amountMedian * 3);
+  if (amountMedian > 0) {
+    for (const payment of payments) {
+      const amountKes = money(payment.amount);
+      if (amountKes >= outlierThreshold) {
+        addFlag({
+          severity: 'medium',
+          code: 'high_amount_outlier',
+          title: 'High amount outlier',
+          detail: `Amount KES ${formatKes(amountKes)} is above outlier threshold KES ${formatKes(outlierThreshold)}.`,
+          paymentId: payment.id,
+          farmerName: payment.farmerName,
+          ref: payment.ref,
+          amountKes
+        });
+      }
+    }
+  }
+
+  for (const payment of payments) {
+    const farmerId = clean(payment.farmerId);
+    const farmerExists = farmerId && farmersById.has(farmerId);
+    if (!farmerExists) {
+      addFlag({
+        severity: 'medium',
+        code: 'unknown_farmer_link',
+        title: 'Payment linked to unknown farmer',
+        detail: 'Payment record is missing a valid farmer link.',
+        paymentId: payment.id,
+        farmerName: payment.farmerName,
+        ref: payment.ref,
+        amountKes: payment.amount
+      });
+    }
+  }
+
+  const pendingCount = payments.filter((row) => normalizePaymentStatus(row.status) === 'Pending').length;
+  const failedCount = payments.filter((row) => normalizePaymentStatus(row.status) === 'Failed').length;
+  if (payments.length >= 5 && pendingCount / payments.length >= 0.35) {
+    addFlag({
+      severity: 'medium',
+      code: 'pending_ratio_high',
+      title: 'Pending ratio is high',
+      detail: `${pendingCount} of ${payments.length} payments are still pending.`
+    });
+  }
+  if (failedCount >= 3) {
+    addFlag({
+      severity: 'high',
+      code: 'failed_payments_spike',
+      title: 'Failed payment spike',
+      detail: `${failedCount} failed payments detected in selected period.`
+    });
+  }
+
+  const severityCounts = flags.reduce(
+    (acc, flag) => {
+      const key = flag.severity || 'medium';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    },
+    { high: 0, medium: 0, low: 0 }
+  );
+  const overallRisk = severityCounts.high > 0 ? 'high' : severityCounts.medium > 0 ? 'medium' : 'low';
+
+  const actions = [];
+  if (severityCounts.high > 0) {
+    actions.push('Pause bulk disbursement and review high-severity flagged rows first.');
+  }
+  if (flags.some((flag) => flag.code === 'duplicate_ref' || flag.code === 'rapid_repeat_payment')) {
+    actions.push('Cross-check M-PESA references for duplicate posting before settlement.');
+  }
+  if (flags.some((flag) => flag.code === 'high_amount_outlier')) {
+    actions.push('Require supervisor approval for outlier payment amounts.');
+  }
+  if (pendingCount > 0) {
+    actions.push('Resolve pending payments and retry failed transactions.');
+  }
+  if (!actions.length) {
+    actions.push('No major payment risks detected. Continue normal reconciliation.');
+  }
+
+  return {
+    range: {
+      period: range.period || 'all',
+      from: range.from !== null ? new Date(range.from).toISOString() : '',
+      to: range.to !== null ? new Date(range.to).toISOString() : ''
+    },
+    paymentCount: payments.length,
+    summary: {
+      overallRisk,
+      highFlags: severityCounts.high || 0,
+      mediumFlags: severityCounts.medium || 0,
+      lowFlags: severityCounts.low || 0,
+      pendingCount,
+      failedCount,
+      medianAmountKes: money(amountMedian || 0),
+      outlierThresholdKes: money(outlierThreshold || 0)
+    },
+    narrative:
+      flags.length > 0
+        ? `Detected ${flags.length} payment risk flag(s): ${severityCounts.high} high, ${severityCounts.medium} medium, ${severityCounts.low} low.`
+        : 'No payment risk flags detected in the selected period.',
+    actions,
+    flags: flags.slice(0, 200)
+  };
+}
+
 function smartImportAutofix(mapped, invalid) {
   const totalHectares = resolveHectares(mapped);
   const avocadoHectares = resolveAvocadoHectares(mapped);
@@ -3590,7 +3947,7 @@ const server = http.createServer(async (req, res) => {
 
     if (query) {
       rows = rows.filter((row) =>
-        [row.username, row.name, row.email, row.status, row.provisioning].some((field) =>
+        [row.username, row.name, row.email, row.phone, row.status, row.provisioning].some((field) =>
           clean(field).toLowerCase().includes(query)
         )
       );
@@ -3632,17 +3989,26 @@ const server = http.createServer(async (req, res) => {
       const payload = await readBody(req);
       const name = clean(payload.name);
       const email = normalizedEmail(payload.email);
+      const phone = normalizePhone(payload.phone) || clean(payload.phone);
 
-      if (!name || !email) {
-        json(res, 422, { error: 'name and email are required.' });
+      if (!name || !email || !phone) {
+        json(res, 422, { error: 'name, email, and phone are required.' });
         return;
       }
       if (!isValidEmail(email)) {
         json(res, 422, { error: 'Enter a valid email address.' });
         return;
       }
+      if (!isValidKenyaPhone(phone)) {
+        json(res, 422, { error: 'Enter a valid Kenyan phone number (e.g. 2547XXXXXXXX).' });
+        return;
+      }
       if (findUserByEmail(store, email)) {
         json(res, 409, { error: 'This email is already linked to an existing user.' });
+        return;
+      }
+      if (findUserByPhone(store, phone)) {
+        json(res, 409, { error: 'This phone number is already linked to an existing user.' });
         return;
       }
       const username = generateAgentUsername(store, name);
@@ -3653,6 +4019,7 @@ const server = http.createServer(async (req, res) => {
         username,
         name,
         email,
+        phone,
         role: 'agent',
         status: 'active',
         password: hashPassword(temporaryPassword),
@@ -3668,7 +4035,7 @@ const server = http.createServer(async (req, res) => {
         action: 'agent.create',
         entity: 'user',
         entityId: agent.id,
-        details: `Created agent account ${agent.username} (${agent.email})`
+        details: `Created agent account ${agent.username} (${agent.email}, ${agent.phone})`
       });
 
       await writeStore(store);
@@ -5350,6 +5717,213 @@ Max length: ${maxLength || 'none'}`,
           model,
           warning,
           metadata: localDraft.metadata
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/qc-intelligence' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin', 'agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 300_000);
+      const qcRecordId = clean(payload.qcRecordId);
+      const limitRaw = parseNumber(payload.limit);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(100, Math.floor(limitRaw))) : 30;
+
+      const allQc = [...store.produce].sort((a, b) => dateMs(b.createdAt) - dateMs(a.createdAt));
+      if (!allQc.length) {
+        json(res, 422, { error: 'No QC records found yet.' });
+        return;
+      }
+
+      let selected = [];
+      if (qcRecordId) {
+        const match = allQc.find((row) => row.id === qcRecordId);
+        if (!match) {
+          json(res, 404, { error: 'QC record not found.' });
+          return;
+        }
+        selected = [match];
+      } else {
+        selected = allQc.slice(0, limit);
+      }
+
+      let source = 'local-rules';
+      let model = 'local-rules';
+      let warning = '';
+
+      let items = selected.map((record) => localQcIntelligence(record));
+      const summary = {
+        totalAnalyzed: items.length,
+        highRisk: items.filter((item) => item.riskLevel === 'high').length,
+        mediumRisk: items.filter((item) => item.riskLevel === 'medium').length,
+        lowRisk: items.filter((item) => item.riskLevel === 'low').length,
+        flagged:
+          items.filter((item) => item.recommendedDecision !== 'Accept' || item.riskLevel !== 'low').length
+      };
+
+      if (OPENAI_API_KEY && items.length === 1) {
+        const item = items[0];
+        const openAi = await callOpenAiJson(
+          'You are a farm-gate avocado QC assistant. Improve explanation quality but keep decisions conservative and practical.',
+          `QC Snapshot:
+- Variety: ${item.variety}
+- Lot weight kg: ${item.lotWeightKgs}
+- Current decision: ${item.currentDecision}
+- Suggested decision (local): ${item.recommendedDecision}
+- Risk level: ${item.riskLevel}
+- Risk score: ${item.riskScore}
+- Reasons: ${(item.reasons || []).join(' | ')}`,
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['summary', 'reasons', 'actions'],
+            properties: {
+              summary: { type: 'string' },
+              reasons: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 5,
+                items: { type: 'string' }
+              },
+              actions: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 5,
+                items: { type: 'string' }
+              }
+            }
+          }
+        );
+
+        if (openAi.ok) {
+          source = 'openai';
+          model = OPENAI_MODEL;
+          item.summary = clean(openAi.data?.summary) || item.summary;
+          if (Array.isArray(openAi.data?.reasons) && openAi.data.reasons.length) {
+            item.reasons = openAi.data.reasons.map((row) => clean(row)).filter(Boolean).slice(0, 5);
+          }
+          if (Array.isArray(openAi.data?.actions) && openAi.data.actions.length) {
+            item.actions = openAi.data.actions.map((row) => clean(row)).filter(Boolean).slice(0, 5);
+          }
+          items = [item];
+        } else {
+          warning = openAi.error || 'OpenAI unavailable. Showing local QC intelligence.';
+        }
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.qc.intelligence',
+        entity: 'ai',
+        details: `QC intelligence run on ${items.length} lot(s)`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          qcRecordId: qcRecordId || '',
+          limit,
+          summary,
+          items,
+          source,
+          model,
+          warning
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/payment-risk' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 200_000);
+      const period = clean(payload.period) || 'week';
+      const from = clean(payload.from);
+      const to = clean(payload.to);
+
+      let source = 'local-rules';
+      let model = 'local-rules';
+      let warning = '';
+
+      const report = localPaymentRiskReport(store, { period, from, to });
+
+      if (OPENAI_API_KEY) {
+        const openAi = await callOpenAiJson(
+          'You are a payments risk assistant. Summarize risk and provide concise operational actions. Do not claim to execute payments.',
+          `Payment risk report:
+- Period: ${report.range.period}
+- Payments analyzed: ${report.paymentCount}
+- Overall risk: ${report.summary.overallRisk}
+- High flags: ${report.summary.highFlags}
+- Medium flags: ${report.summary.mediumFlags}
+- Low flags: ${report.summary.lowFlags}
+- Pending count: ${report.summary.pendingCount}
+- Failed count: ${report.summary.failedCount}
+- Local narrative: ${report.narrative}
+- Top flags: ${report.flags.slice(0, 5).map((row) => `${row.code}: ${row.detail}`).join(' | ')}`,
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['narrative', 'actions'],
+            properties: {
+              narrative: { type: 'string' },
+              actions: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 6,
+                items: { type: 'string' }
+              }
+            }
+          }
+        );
+
+        if (openAi.ok) {
+          source = 'openai';
+          model = OPENAI_MODEL;
+          report.narrative = clean(openAi.data?.narrative) || report.narrative;
+          if (Array.isArray(openAi.data?.actions) && openAi.data.actions.length) {
+            report.actions = openAi.data.actions.map((row) => clean(row)).filter(Boolean).slice(0, 6);
+          }
+        } else {
+          warning = openAi.error || 'OpenAI unavailable. Showing local payment risk report.';
+        }
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.payment.risk',
+        entity: 'ai',
+        details: `Payment risk check run for period "${report.range.period}" (${report.paymentCount} payment(s))`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          ...report,
+          source,
+          model,
+          warning
         }
       });
     } catch (error) {

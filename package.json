@@ -6,6 +6,11 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node backend/server.js",
-    "test": "node scripts/test.js"
+    "test": "node scripts/test.js",
+    "test:restore": "node scripts/restore-test.js"
+  },
+  "dependencies": {
+    "mysql2": "^3.11.5",
+    "pg": "^8.13.1"
   }
 }

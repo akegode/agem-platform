@@ -12,7 +12,21 @@ services:
         value: "20"
       - key: HOST
         value: "0.0.0.0"
+      - key: STORAGE_BACKEND
+        value: "postgres"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agem-platform-db
+          property: connectionString
+      - key: BACKUP_INTERVAL_HOURS
+        value: "24"
+      - key: BACKUP_RETENTION_DAYS
+        value: "30"
     disk:
       name: agem-data
       mountPath: /opt/render/project/src/backend/data
       sizeGB: 10
+
+databases:
+  - name: agem-platform-db
+    plan: starter

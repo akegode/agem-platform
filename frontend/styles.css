@@ -804,7 +804,9 @@ button.mini-btn {
 
 #smsDraftWrap,
 #farmerImportQaWrap,
-#copilotWrap {
+#copilotWrap,
+#qcAiWrap,
+#paymentRiskWrap {
   border: 1px dashed #d7d7d2;
   border-radius: 10px;
   background: #fafaf8;
@@ -814,7 +816,9 @@ button.mini-btn {
 }
 
 #smsDraftWrap[hidden],
-#farmerImportQaWrap[hidden] {
+#farmerImportQaWrap[hidden],
+#qcAiWrap[hidden],
+#paymentRiskWrap[hidden] {
   display: none !important;
 }
 

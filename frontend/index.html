@@ -321,6 +321,9 @@
                     <input required id="agentName" placeholder="Agent full name">
                     <input required id="agentEmail" type="email" placeholder="Agent email">
                   </div>
+                  <div class="row">
+                    <input required id="agentPhone" inputmode="numeric" placeholder="Agent phone (e.g. 2547xxxxxxx)">
+                  </div>
                   <button class="primary" type="submit">Create Agent</button>
                   <div class="success" id="agentMsg"></div>
                   <div id="agentCredentials" class="empty" hidden></div>
@@ -333,7 +336,7 @@
               <summary>Registered Agents</summary>
               <div class="dropdown-body">
                 <div class="row">
-                  <input id="agentSearch" placeholder="Search by name, username, email, or status">
+                  <input id="agentSearch" placeholder="Search by name, username, email, phone, or status">
                   <button class="secondary" id="agentRefreshBtn" type="button">Search</button>
                 </div>
                 <div id="agentTableWrap"></div>
@@ -631,6 +634,45 @@
               <div id="copilotWrap" class="empty">Ask a question to get AI-guided operational insights.</div>
             </div>
           </details>
+
+          <div class="grid">
+            <details class="dropdown-card">
+              <summary>QC Intelligence (AI)</summary>
+              <div class="dropdown-body">
+                <div class="row">
+                  <select id="qcAiRecord">
+                    <option value="">Analyze latest QC lots (up to 30)</option>
+                  </select>
+                  <button class="secondary" id="qcAiRunBtn" type="button">Run QC Intelligence</button>
+                </div>
+                <p class="meta compact">Optional: choose one specific lot for focused analysis.</p>
+                <div class="success" id="qcAiMsg"></div>
+                <div id="qcAiWrap" class="empty">Run analysis to get lot risk levels and pass/hold/reject guidance.</div>
+              </div>
+            </details>
+
+            <details class="dropdown-card">
+              <summary>Payment Risk Check (AI)</summary>
+              <div class="dropdown-body">
+                <div class="row">
+                  <select id="paymentRiskPeriod">
+                    <option value="today">Today</option>
+                    <option value="week" selected>Last 7 Days</option>
+                    <option value="month">This Month</option>
+                    <option value="all">All Dates</option>
+                    <option value="custom">Custom Date Range</option>
+                  </select>
+                  <button class="secondary" id="paymentRiskRunBtn" type="button">Run Payment Risk Check</button>
+                </div>
+                <div class="row">
+                  <input id="paymentRiskFrom" type="date" hidden>
+                  <input id="paymentRiskTo" type="date" hidden>
+                </div>
+                <div class="success" id="paymentRiskMsg"></div>
+                <div id="paymentRiskWrap" class="empty">Run analysis to detect duplicate refs, outliers, and payout risks.</div>
+              </div>
+            </details>
+          </div>
 
           <div class="kpis" id="reportMetrics"></div>
 

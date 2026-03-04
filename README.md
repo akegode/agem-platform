@@ -5,7 +5,7 @@ This project is now a full working web application with authentication, role-bas
 ## What is implemented
 - Secure sign-in sessions with private staff accounts (admin, agent roles)
 - Farmer self-registration from the sign-in card (creates farmer account + farmer profile)
-- Admin-only agent account management (enter name + email, auto-generate temporary username/password, and list multiple agent logins)
+- Admin-only agent account management (enter name + email + phone, auto-generate temporary username/password, and list multiple agent logins)
 - Signed-in password change flow
 - Recovery endpoints for forgotten username/password for admin and agent accounts via role recovery codes
 - Farmer management (create, edit, view, delete with safeguards) with mandatory National ID, total farm size + area under avocado, and auto-conversion across hectares, acres, and square feet
@@ -21,10 +21,13 @@ This project is now a full working web application with authentication, role-bas
 - SMS sending simulation + message logs
 - Bulk SMS for admin (all farmers or selected recipients) with searchable recipient picker
 - SMS cost tracking for code-owner spend (total + rolling 24-hour spend in dashboard/reports)
+- AI Phase 2A: QC Intelligence assistant (lot risk scoring + pass/hold/reject guidance) and Payment Risk Check assistant (duplicate ref/outlier/pending risk detection)
 - Safaricom-ready USSD callback endpoint (`/api/ussd/callback`) with language selection (English/Kiswahili), self-registration for new phone numbers, and menu for payment status, latest QC, profile, and help (via gateway such as Africa's Talking)
 - Operational KPI dashboard and agent performance report
 - CSV exports (farmers, produce, payments, activity)
-- Backup snapshots + backup listing
+- Backup snapshots + backup listing + backup restore endpoint
+- SQL-backed persistence (PostgreSQL or MySQL) with automatic migration from existing `store.json`
+- Scheduled automatic backups with retention policy
 - Admin reset workflow with pre-reset backup
 - Offline fallback mode when backend is unavailable
 
@@ -35,10 +38,11 @@ This project is now a full working web application with authentication, role-bas
   - `frontend/app.js`
 - Backend:
   - `backend/server.js`
-  - `backend/data/store.json`
+  - `backend/data/store.json` (legacy/local JSON mode only)
   - `backend/data/backups/`
 - Tests:
   - `scripts/test.js`
+  - `scripts/restore-test.js`
 
 ## Run the site (simple)
 1. Open terminal in this folder.
@@ -57,6 +61,10 @@ This project is now a full working web application with authentication, role-bas
    export USSD_HELP_PHONE="+254700000000"
    export USSD_SHARED_SECRET="set-a-secret-used-by-your-ussd-gateway"
    export SMS_OWNER_COST_PER_MESSAGE_KES="0.25"
+   export STORAGE_BACKEND="postgres"   # postgres | mysql | json
+   export DATABASE_URL="postgres://user:password@host:5432/dbname"
+   export BACKUP_INTERVAL_HOURS="24"
+   export BACKUP_RETENTION_DAYS="30"
    ```
 3. Run:
    ```bash
@@ -75,6 +83,13 @@ npm test
 
 This runs end-to-end checks for auth, permissions, CRUD, reports, exports, backup, and reset.
 
+Run storage restore verification:
+```bash
+npm run test:restore
+```
+
+This verifies backup -> reset -> restore end-to-end using the currently configured storage backend.
+
 ## Deploy to your website (Render + subdomain)
 This is the easiest path if you are new to deployment.
 
@@ -82,6 +97,10 @@ This is the easiest path if you are new to deployment.
 2. In Render, create a **Blueprint** service from that GitHub repo.
 3. Render will read `render.yaml` and deploy automatically.
 4. In Render service settings, set environment variables:
+   - `STORAGE_BACKEND=postgres`
+   - `DATABASE_URL=<from Render PostgreSQL connection string>`
+   - `BACKUP_INTERVAL_HOURS=24`
+   - `BACKUP_RETENTION_DAYS=30`
    - `ALLOW_DEMO_USERS=false`
    - `ALLOW_FARMER_REGISTRATION=true` (or `false` to disable public farmer signup)
    - `ADMIN_USERNAME` + `ADMIN_PASSWORD`
@@ -99,9 +118,11 @@ This is the easiest path if you are new to deployment.
 Your current website stays as-is, and this app runs as a portal under a subdomain.
 
 ## Important notes
-- Data is stored locally in `backend/data/store.json`.
-- Backups are saved in `backend/data/backups/`.
-- This is implemented with Node.js built-ins only (no external packages).
+- Data can be stored in PostgreSQL/MySQL (`STORAGE_BACKEND=postgres|mysql`) or JSON (`STORAGE_BACKEND=json` for local fallback).
+- If SQL storage is enabled and a legacy `backend/data/store.json` exists, the server seeds SQL from that file on first run.
+- Backups are saved in `backend/data/backups/` and can be restored with `POST /api/admin/restore`.
+- Automatic backup schedule is controlled by `BACKUP_INTERVAL_HOURS` and backup cleanup by `BACKUP_RETENTION_DAYS`.
+- SQL backends use `pg` and `mysql2`.
 - Excel import parsing is handled in-browser via the `xlsx` CDN script; CSV import works without it.
 - Default demo credentials are disabled when `ALLOW_DEMO_USERS=false` (recommended for production).
 - Farmer self-registration can be turned off by setting `ALLOW_FARMER_REGISTRATION=false`.

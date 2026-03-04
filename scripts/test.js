@@ -75,6 +75,7 @@ async function run() {
   const agentPassword = 'FieldAgent#2026!';
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
   const additionalAgentEmail = 'mary.wanjiku@agemlimited.com';
+  const additionalAgentPhone = '254711223344';
   const agentRecoveryCode = 'AgentRecovery#2026';
   const farmerSelfPhone = '254700111222';
   const farmerSelfPin = '1728';
@@ -195,12 +196,14 @@ async function run() {
       token: adminToken,
       body: {
         name: 'Mary Wanjiku',
-        email: additionalAgentEmail
+        email: additionalAgentEmail,
+        phone: additionalAgentPhone
       },
       expectStatus: 201
     });
     assert.strictEqual(createAgent.data.role, 'agent');
     assert.strictEqual(createAgent.data.email, additionalAgentEmail);
+    assert.strictEqual(createAgent.data.phone, additionalAgentPhone);
     assert.ok(/^[a-z0-9._-]{3,32}$/.test(createAgent.data.username), 'Expected generated username format');
     assert.ok(
       typeof createAgent.data.temporaryPassword === 'string' && createAgent.data.temporaryPassword.length >= 10,
@@ -212,7 +215,19 @@ async function run() {
       token: adminToken,
       body: {
         name: 'Duplicate Agent',
-        email: additionalAgentEmail
+        email: additionalAgentEmail,
+        phone: '254712000000'
+      },
+      expectStatus: 409
+    });
+
+    await request(baseUrl, '/api/agents', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Duplicate Phone Agent',
+        email: 'duplicate.phone@agemlimited.com',
+        phone: additionalAgentPhone
       },
       expectStatus: 409
     });
@@ -224,8 +239,10 @@ async function run() {
     assert.ok(Array.isArray(agentsList.data), 'Expected list of agents');
     const agentUsernames = new Set((agentsList.data || []).map((row) => row.username));
     const agentEmails = new Set((agentsList.data || []).map((row) => row.email).filter(Boolean));
+    const agentPhones = new Set((agentsList.data || []).map((row) => row.phone).filter(Boolean));
     assert.ok(agentUsernames.has(agentUsername), 'Expected env agent in list');
     assert.ok(agentEmails.has(additionalAgentEmail), 'Expected created agent email in list');
+    assert.ok(agentPhones.has(additionalAgentPhone), 'Expected created agent phone in list');
 
     await request(baseUrl, '/api/auth/login', {
       method: 'POST',
@@ -567,7 +584,7 @@ async function run() {
       expectStatus: 200
     });
 
-    await request(baseUrl, '/api/produce', {
+    const produceResponse = await request(baseUrl, '/api/produce', {
       method: 'POST',
       token: agentToken,
       body: {
@@ -588,6 +605,7 @@ async function run() {
       },
       expectStatus: 201
     });
+    assert.ok(produceResponse.data?.id, 'QC record ID missing');
 
     const purchaseResponse = await request(baseUrl, '/api/produce-purchases', {
       method: 'POST',
@@ -680,6 +698,37 @@ async function run() {
       },
       expectStatus: 201
     });
+
+    const qcIntelligence = await request(baseUrl, '/api/ai/qc-intelligence', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        qcRecordId: produceResponse.data.id
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(qcIntelligence.data.items.length, 1);
+    assert.ok(
+      ['Accept', 'Hold', 'Reject'].includes(qcIntelligence.data.items[0].recommendedDecision),
+      'QC intelligence should return recommended decision'
+    );
+    assert.ok(qcIntelligence.data.items[0].summary, 'QC intelligence summary should be returned');
+
+    await request(baseUrl, '/api/ai/payment-risk', {
+      method: 'POST',
+      token: agentToken,
+      body: { period: 'week' },
+      expectStatus: 403
+    });
+
+    const paymentRisk = await request(baseUrl, '/api/ai/payment-risk', {
+      method: 'POST',
+      token: adminToken,
+      body: { period: 'week' },
+      expectStatus: 200
+    });
+    assert.ok(paymentRisk.data.summary, 'Payment risk summary should be returned');
+    assert.ok(Array.isArray(paymentRisk.data.flags), 'Payment risk flags should be an array');
 
     await request(baseUrl, '/api/sms/send', {
       method: 'POST',
@@ -1113,12 +1162,14 @@ async function run() {
     const smsCsvFutureLines = smsCsvFuture.trim().split('\n');
     assert.strictEqual(smsCsvFutureLines.length, 1, 'Future-range SMS export should return header only');
 
-    await request(baseUrl, '/api/admin/backup', {
+    const backupCreated = await request(baseUrl, '/api/admin/backup', {
       method: 'POST',
       token: adminToken,
       body: {},
       expectStatus: 201
     });
+    const backupFilename = backupCreated.data?.filename;
+    assert.ok(backupFilename, 'Backup filename should be returned');
 
     const backups = await request(baseUrl, '/api/admin/backups', {
       token: adminToken,
@@ -1140,6 +1191,25 @@ async function run() {
     });
     assert.strictEqual(summaryAfterReset.data.farmers, 0);
     assert.strictEqual(summaryAfterReset.data.purchasedRecords, 0);
+
+    const restoreResponse = await request(baseUrl, '/api/admin/restore', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        filename: backupFilename,
+        confirm: true
+      },
+      expectStatus: 200
+    });
+    assert.strictEqual(restoreResponse.data.restored, true);
+    assert.strictEqual(restoreResponse.data.fromBackup, backupFilename);
+
+    const summaryAfterRestore = await request(baseUrl, '/api/reports/summary', {
+      token: adminToken,
+      expectStatus: 200
+    });
+    assert.ok(summaryAfterRestore.data.farmers >= 4, 'Expected farmers after restore');
+    assert.ok(summaryAfterRestore.data.purchasedRecords >= 1, 'Expected produce purchases after restore');
 
     await request(baseUrl, '/api/auth/logout', {
       method: 'POST',
