@@ -14,6 +14,7 @@ const BACKUP_DIR = path.join(DATA_ROOT, 'backups');
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 const ACTIVITY_CAP = 1000;
 const HECTARES_PER_ACRE = 0.40468564224;
+const ACRES_PER_HECTARE = 1 / HECTARES_PER_ACRE;
 const SQFT_PER_HECTARE = 107639.1041671;
 const MIN_PASSWORD_LENGTH = 10;
 const FARMER_PIN_PATTERN = /^\d{4}$/;
@@ -28,7 +29,45 @@ function envValue(key) {
   return String(process.env[key] || '').trim();
 }
 
+function parseEnvInt(key, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  const raw = envValue(key);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  const normalized = Math.floor(parsed);
+  if (normalized < min || normalized > max) return fallback;
+  return normalized;
+}
+
+function sanitizeSqlIdentifier(value, fallback = 'agem_store') {
+  const candidate = String(value || '').trim();
+  if (!candidate) return fallback;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(candidate)) return fallback;
+  return candidate;
+}
+
+function detectStorageBackend() {
+  const explicit = envValue('STORAGE_BACKEND').toLowerCase();
+  if (explicit === 'json' || explicit === 'postgres' || explicit === 'mysql') {
+    return explicit;
+  }
+
+  const databaseUrl = envValue('DATABASE_URL');
+  if (databaseUrl.startsWith('postgres://') || databaseUrl.startsWith('postgresql://')) {
+    return 'postgres';
+  }
+  if (databaseUrl.startsWith('mysql://') || databaseUrl.startsWith('mysql2://')) {
+    return 'mysql';
+  }
+  return 'json';
+}
+
 const RUNNING_ON_RENDER = Boolean(envValue('RENDER'));
+const STORAGE_BACKEND = detectStorageBackend();
+const DATABASE_URL = envValue('DATABASE_URL');
+const SQL_STORE_TABLE = sanitizeSqlIdentifier(envValue('SQL_STORE_TABLE') || 'agem_store');
+const BACKUP_INTERVAL_HOURS = parseEnvInt('BACKUP_INTERVAL_HOURS', 24, 1, 24 * 365);
+const BACKUP_RETENTION_DAYS = parseEnvInt('BACKUP_RETENTION_DAYS', 30, 1, 3650);
 const ALLOW_DEMO_USERS =
   envValue('ALLOW_DEMO_USERS') === 'true' ||
   (!RUNNING_ON_RENDER && envValue('ALLOW_DEMO_USERS') !== 'false');
@@ -45,6 +84,12 @@ const SMS_OWNER_COST_PER_MESSAGE_KES = (() => {
   if (!Number.isFinite(parsed) || parsed < 0) return 0.25;
   return Number(parsed.toFixed(4));
 })();
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODEL = envValue('OPENAI_MODEL') || 'gpt-4.1-mini';
+const OPENAI_TIMEOUT_MS = parseEnvInt('OPENAI_TIMEOUT_MS', 12000, 1000, 120000);
+
+let sqlStoreAdapter = null;
+let backupScheduleHandle = null;
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
@@ -350,34 +395,204 @@ function normalizeStore(raw) {
 }
 
 function ensureDataPaths() {
+  fs.mkdirSync(DATA_ROOT, { recursive: true });
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
   fs.mkdirSync(BACKUP_DIR, { recursive: true });
 }
 
-function ensureStore() {
-  ensureDataPaths();
-  if (!fs.existsSync(STORE_PATH)) {
-    fs.writeFileSync(STORE_PATH, JSON.stringify(freshStore(), null, 2));
-    return;
-  }
-
-  const store = readStore();
-  writeStore(store);
-}
-
-function readStore() {
-  ensureDataPaths();
+function readStoreFromDisk() {
   try {
+    if (!fs.existsSync(STORE_PATH)) return null;
     const raw = fs.readFileSync(STORE_PATH, 'utf-8');
     return normalizeStore(JSON.parse(raw));
   } catch {
-    return freshStore();
+    return null;
   }
 }
 
-function writeStore(store) {
-  store.meta.lastWriteAt = nowIso();
+function writeStoreToDisk(store) {
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
+}
+
+function requireStorageDriver(pkgName, backendLabel) {
+  try {
+    return require(pkgName);
+  } catch (error) {
+    throw new Error(
+      `${backendLabel} storage backend requires "${pkgName}". Run "npm install" to install dependencies. (${error.message})`
+    );
+  }
+}
+
+async function buildPostgresStoreAdapter() {
+  const { Pool } = requireStorageDriver('pg', 'PostgreSQL');
+  if (!DATABASE_URL) {
+    throw new Error('DATABASE_URL is required for PostgreSQL storage backend.');
+  }
+
+  const sslMode = envValue('PGSSLMODE').toLowerCase();
+  const ssl =
+    sslMode === 'disable'
+      ? false
+      : sslMode === 'require' || RUNNING_ON_RENDER
+        ? { rejectUnauthorized: false }
+        : undefined;
+
+  const pool = new Pool({
+    connectionString: DATABASE_URL,
+    ssl
+  });
+
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ${SQL_STORE_TABLE} (
+      id SMALLINT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+
+  return {
+    backend: 'postgres',
+    async read() {
+      const result = await pool.query(
+        `SELECT payload FROM ${SQL_STORE_TABLE} WHERE id = $1 LIMIT 1`,
+        [1]
+      );
+      if (!result.rows.length) return null;
+      const value = result.rows[0].payload;
+      return typeof value === 'string' ? JSON.parse(value) : value;
+    },
+    async write(payload) {
+      await pool.query(
+        `INSERT INTO ${SQL_STORE_TABLE} (id, payload, updated_at)
+         VALUES ($1, $2::jsonb, NOW())
+         ON CONFLICT (id)
+         DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()`,
+        [1, JSON.stringify(payload)]
+      );
+    },
+    async close() {
+      await pool.end();
+    }
+  };
+}
+
+async function buildMysqlStoreAdapter() {
+  const mysql = requireStorageDriver('mysql2/promise', 'MySQL');
+  const connectionConfig = DATABASE_URL
+    ? DATABASE_URL
+    : {
+        host: envValue('MYSQL_HOST') || '127.0.0.1',
+        port: parseEnvInt('MYSQL_PORT', 3306, 1, 65535),
+        user: envValue('MYSQL_USER'),
+        password: process.env.MYSQL_PASSWORD || '',
+        database: envValue('MYSQL_DATABASE'),
+        waitForConnections: true,
+        connectionLimit: parseEnvInt('MYSQL_POOL_SIZE', 10, 1, 100),
+        queueLimit: 0
+      };
+
+  if (!DATABASE_URL && (!connectionConfig.user || !connectionConfig.database)) {
+    throw new Error('MYSQL_USER and MYSQL_DATABASE are required for MySQL storage backend.');
+  }
+
+  const pool = mysql.createPool(connectionConfig);
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ${SQL_STORE_TABLE} (
+      id TINYINT PRIMARY KEY,
+      payload JSON NOT NULL,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`
+  );
+
+  return {
+    backend: 'mysql',
+    async read() {
+      const [rows] = await pool.query(
+        `SELECT payload FROM ${SQL_STORE_TABLE} WHERE id = ? LIMIT 1`,
+        [1]
+      );
+      if (!rows.length) return null;
+      const value = rows[0].payload;
+      return typeof value === 'string' ? JSON.parse(value) : value;
+    },
+    async write(payload) {
+      await pool.query(
+        `INSERT INTO ${SQL_STORE_TABLE} (id, payload, updated_at)
+         VALUES (?, ?, CURRENT_TIMESTAMP)
+         ON DUPLICATE KEY UPDATE payload = VALUES(payload), updated_at = CURRENT_TIMESTAMP`,
+        [1, JSON.stringify(payload)]
+      );
+    },
+    async close() {
+      await pool.end();
+    }
+  };
+}
+
+async function ensureSqlStoreAdapter() {
+  if (sqlStoreAdapter) return sqlStoreAdapter;
+  if (STORAGE_BACKEND === 'postgres') {
+    sqlStoreAdapter = await buildPostgresStoreAdapter();
+    return sqlStoreAdapter;
+  }
+  if (STORAGE_BACKEND === 'mysql') {
+    sqlStoreAdapter = await buildMysqlStoreAdapter();
+    return sqlStoreAdapter;
+  }
+  return null;
+}
+
+async function ensureStore() {
+  ensureDataPaths();
+
+  if (STORAGE_BACKEND === 'json') {
+    if (!fs.existsSync(STORE_PATH)) {
+      writeStoreToDisk(freshStore());
+      return;
+    }
+    const store = readStoreFromDisk() || freshStore();
+    await writeStore(store);
+    return;
+  }
+
+  const adapter = await ensureSqlStoreAdapter();
+  let existing = await adapter.read();
+  if (!existing) {
+    existing = readStoreFromDisk() || freshStore();
+    const snapshot = createBackupSnapshot(existing, 'migration-seed');
+    console.log(`[storage] Seeded ${STORAGE_BACKEND} store from snapshot ${snapshot.filename}`);
+  }
+  await writeStore(existing);
+}
+
+async function readStore() {
+  ensureDataPaths();
+
+  if (STORAGE_BACKEND === 'json') {
+    return readStoreFromDisk() || freshStore();
+  }
+
+  const adapter = await ensureSqlStoreAdapter();
+  const persisted = await adapter.read();
+  if (persisted) return normalizeStore(persisted);
+
+  const fallback = readStoreFromDisk() || freshStore();
+  await adapter.write(fallback);
+  return normalizeStore(fallback);
+}
+
+async function writeStore(store) {
+  const nextStore = normalizeStore(store || freshStore());
+  nextStore.meta.lastWriteAt = nowIso();
+
+  if (STORAGE_BACKEND === 'json') {
+    writeStoreToDisk(nextStore);
+    return;
+  }
+
+  const adapter = await ensureSqlStoreAdapter();
+  await adapter.write(nextStore);
 }
 
 function backupFilename(label) {
@@ -391,6 +606,50 @@ function createBackupSnapshot(store, label) {
   const filepath = path.join(BACKUP_DIR, filename);
   fs.writeFileSync(filepath, JSON.stringify(store, null, 2));
   return { filename, filepath, createdAt: nowIso() };
+}
+
+function pruneOldBackups(retentionDays = BACKUP_RETENTION_DAYS) {
+  ensureDataPaths();
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const removed = [];
+
+  for (const name of fs.readdirSync(BACKUP_DIR)) {
+    if (!name.endsWith('.json')) continue;
+    const filepath = path.join(BACKUP_DIR, name);
+    const stat = fs.statSync(filepath);
+    if (stat.mtimeMs >= cutoffMs) continue;
+    fs.unlinkSync(filepath);
+    removed.push(name);
+  }
+
+  return removed;
+}
+
+async function runScheduledBackup() {
+  const store = await readStore();
+  const snapshot = createBackupSnapshot(store, 'scheduled');
+  const removed = pruneOldBackups();
+  console.log(
+    `[backup] Scheduled snapshot ${snapshot.filename} created (retention ${BACKUP_RETENTION_DAYS}d, pruned ${removed.length}).`
+  );
+  return { snapshot, removed };
+}
+
+function scheduleAutomaticBackups() {
+  if (backupScheduleHandle) {
+    clearInterval(backupScheduleHandle);
+    backupScheduleHandle = null;
+  }
+
+  const intervalMs = BACKUP_INTERVAL_HOURS * 60 * 60 * 1000;
+  backupScheduleHandle = setInterval(() => {
+    runScheduledBackup().catch((error) => {
+      console.error(`[backup] Scheduled backup failed: ${error.message}`);
+    });
+  }, intervalMs);
+  if (typeof backupScheduleHandle.unref === 'function') {
+    backupScheduleHandle.unref();
+  }
 }
 
 function addActivity(store, entry) {
@@ -1984,6 +2243,449 @@ function makeAgentStats(store) {
     }));
 }
 
+function toAreaBundle(hectaresValue) {
+  const hectares = Number(hectaresValue);
+  if (!Number.isFinite(hectares) || hectares <= 0) {
+    return {
+      hectares: '',
+      acres: '',
+      squareFeet: ''
+    };
+  }
+  const acres = hectares / HECTARES_PER_ACRE;
+  const squareFeet = hectares * SQFT_PER_HECTARE;
+  return {
+    hectares: Number(hectares.toFixed(3)),
+    acres: Number(acres.toFixed(3)),
+    squareFeet: Number(squareFeet.toFixed(1))
+  };
+}
+
+function paymentStatsInRange(payments, fromMs, toMs) {
+  const rows = (Array.isArray(payments) ? payments : []).filter((row) => {
+    const at = dateMs(row?.createdAt);
+    return at >= fromMs && at <= toMs;
+  });
+  const total = rows.length;
+  const received = rows.filter((row) => normalizePaymentStatus(row?.status) === 'Received').length;
+  const failed = rows.filter((row) => normalizePaymentStatus(row?.status) === 'Failed').length;
+  const pending = rows.filter((row) => normalizePaymentStatus(row?.status) === 'Pending').length;
+  const rate = total ? Number(((received / total) * 100).toFixed(1)) : 0;
+  return { total, received, failed, pending, rate };
+}
+
+function extractCopilotPeriod(question) {
+  const textValue = clean(question).toLowerCase();
+  if (/\btoday\b|\b24h\b|\b24 hours?\b/.test(textValue)) return 'today';
+  if (/\bweek\b|\bweekly\b|\blast 7\b|\b7 days?\b/.test(textValue)) return 'week';
+  if (/\bmonth\b|\bmonthly\b|\b30 days?\b/.test(textValue)) return 'month';
+  if (/\ball\b|\boverall\b/.test(textValue)) return 'all';
+  return 'week';
+}
+
+function detectLocationFromQuestion(question, store) {
+  const textValue = clean(question).toLowerCase();
+  const uniqueLocations = Array.from(
+    new Set((store.farmers || []).map((row) => clean(row.location)).filter(Boolean))
+  );
+  for (const location of uniqueLocations) {
+    if (textValue.includes(location.toLowerCase())) return location;
+  }
+  return '';
+}
+
+function localCopilotAnswer(store, question) {
+  const prompt = clean(question);
+  const lower = prompt.toLowerCase();
+  const summary = makeSummary(store);
+
+  if (/\bowed\b|\bbalance\b|\bunpaid\b/.test(lower)) {
+    const period = extractCopilotPeriod(prompt);
+    const location = detectLocationFromQuestion(prompt, store);
+    const owed = buildOwedRows(store, { period });
+    let rows = owed.rows;
+    if (location) {
+      rows = rows.filter((row) => clean(row.location).toLowerCase() === location.toLowerCase());
+    }
+    const top = rows.slice(0, 10);
+    const totalKes = money(rows.reduce((sum, row) => sum + money(row.balanceKes), 0));
+    const preview = top.map((row) => ({
+      farmerName: row.farmerName,
+      location: row.location || '-',
+      phone: row.phone || '-',
+      balanceKes: money(row.balanceKes)
+    }));
+
+    return {
+      intent: 'owed_farmers',
+      answer:
+        top.length > 0
+          ? `Found ${rows.length} owed farmers${location ? ` in ${location}` : ''} for period "${period}". Total owed is KES ${totalKes}.`
+          : `No owed farmers found${location ? ` in ${location}` : ''} for period "${period}".`,
+      insights: preview,
+      actions: [
+        {
+          label: 'Payments > Farmers Owed',
+          description: 'Select rows and use Prepare Selected or Pay Selected Now.'
+        },
+        {
+          label: 'Export Owed CSV',
+          description: 'Download owed list for finance reconciliation.'
+        }
+      ]
+    };
+  }
+
+  if ((/\bpayment\b/.test(lower) && /\b(success|drop|decline|failed|pending)\b/.test(lower)) || /\bwhy\b.*\bpayment\b/.test(lower)) {
+    const now = new Date();
+    const startToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
+    const endToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999);
+    const startYesterday = startToday - 24 * 60 * 60 * 1000;
+    const endYesterday = startToday - 1;
+
+    const today = paymentStatsInRange(store.payments, startToday, endToday);
+    const yesterday = paymentStatsInRange(store.payments, startYesterday, endYesterday);
+    const delta = Number((today.rate - yesterday.rate).toFixed(1));
+
+    const trend =
+      delta < 0
+        ? `Payment success dropped by ${Math.abs(delta)} percentage points vs yesterday.`
+        : delta > 0
+          ? `Payment success improved by ${delta} percentage points vs yesterday.`
+          : 'Payment success is unchanged vs yesterday.';
+
+    return {
+      intent: 'payment_success',
+      answer: `${trend} Today: ${today.received}/${today.total} received (${today.rate}%). Failed: ${today.failed}, Pending: ${today.pending}.`,
+      insights: [
+        { period: 'today', total: today.total, received: today.received, failed: today.failed, pending: today.pending, successRatePct: today.rate },
+        { period: 'yesterday', total: yesterday.total, received: yesterday.received, failed: yesterday.failed, pending: yesterday.pending, successRatePct: yesterday.rate }
+      ],
+      actions: [
+        {
+          label: 'Review Pending/Failed Payments',
+          description: 'Use Payments table status buttons to resolve failed and pending transactions.'
+        },
+        {
+          label: 'Cross-check Owed Panel',
+          description: 'Ensure purchases and settlements are reconciled before disbursement.'
+        }
+      ]
+    };
+  }
+
+  if (/\bsms\b/.test(lower) && /\b(draft|message|campaign)\b/.test(lower)) {
+    return {
+      intent: 'sms_drafting',
+      answer:
+        'Use AI SMS Draft in the SMS panel to generate bilingual messages. You can then send to selected farmers, all farmers, or one number.',
+      insights: [
+        {
+          smsSentLast24h: summary.smsSentLast24h || 0,
+          smsSpentLast24hKes: summary.smsSpentLast24hKes || 0,
+          smsSpentTotalKes: summary.smsSpentKes || 0
+        }
+      ],
+      actions: [
+        { label: 'Open SMS Panel', description: 'Set audience and click Draft with AI.' }
+      ]
+    };
+  }
+
+  return {
+    intent: 'operations_summary',
+    answer:
+      `Current snapshot: ${summary.farmers || 0} farmers, ${summary.qcRecords || 0} QC records, ` +
+      `${summary.purchasedRecords || 0} purchase logs, ${summary.owedFarmers || 0} owed farmers, ` +
+      `${summary.paymentSuccessRate || 0}% payment success, and SMS spend KES ${summary.smsSpentLast24hKes || 0} in the last 24h.`,
+    insights: [
+      {
+        farmers: summary.farmers || 0,
+        qcRecords: summary.qcRecords || 0,
+        purchasedRecords: summary.purchasedRecords || 0,
+        owedFarmers: summary.owedFarmers || 0,
+        totalOwedKes: summary.totalOwedKes || 0,
+        paymentSuccessRatePct: summary.paymentSuccessRate || 0,
+        smsSpentLast24hKes: summary.smsSpentLast24hKes || 0
+      }
+    ],
+    actions: [
+      { label: 'Open Reports', description: 'Review KPI and agent performance trends.' },
+      { label: 'Open Payments', description: 'Resolve owed balances and pending payouts.' }
+    ]
+  };
+}
+
+function smartImportAutofix(mapped, invalid) {
+  const totalHectares = resolveHectares(mapped);
+  const avocadoHectares = resolveAvocadoHectares(mapped);
+  const patch = {};
+  let reason = '';
+  let confidence = 0;
+
+  if (invalid === 'area under avocado cannot be greater than total farm size') {
+    if (Number.isFinite(totalHectares) && totalHectares > 0) {
+      patch.avocadoHectares = Number(totalHectares.toFixed(3));
+      reason = 'Set area under avocado equal to total farm size.';
+      confidence = 0.92;
+    }
+  } else if (invalid === 'avocadoHectares/avocadoAcres/avocadoSquareFeet is required') {
+    if (Number.isFinite(totalHectares) && totalHectares > 0) {
+      patch.avocadoHectares = Number(totalHectares.toFixed(3));
+      reason = 'Missing avocado area; copied total farm size as a placeholder for admin review.';
+      confidence = 0.58;
+    }
+  } else if (invalid === 'hectares/acres/square feet is required') {
+    if (Number.isFinite(avocadoHectares) && avocadoHectares > 0) {
+      patch.hectares = Number(avocadoHectares.toFixed(3));
+      reason = 'Missing total area; copied avocado area as a minimum placeholder for review.';
+      confidence = 0.55;
+    }
+  } else if (invalid === 'trees must be a number') {
+    patch.trees = 0;
+    reason = 'Tree count was not numeric; set to 0.';
+    confidence = 0.82;
+  }
+
+  const hasPatch = Object.keys(patch).length > 0;
+  if (!hasPatch) {
+    return { hasPatch: false, reason: '', confidence: 0, corrected: null };
+  }
+
+  const corrected = {
+    ...mapped,
+    ...patch
+  };
+  return { hasPatch: true, reason, confidence, corrected };
+}
+
+function summarizeSmartImportRow(raw, rowIndex, existingByPhone, existingByNationalId) {
+  const mapped = mapFarmerImportRecord(raw);
+  const invalid = validateFarmer(mapped);
+  const issues = [];
+  let duplicate = null;
+
+  const phoneKey = normalizePhone(mapped.phone) || clean(mapped.phone);
+  const nationalIdKey = normalizedNationalId(mapped.nationalId);
+  const existingPhone = phoneKey ? existingByPhone.get(phoneKey) : null;
+  const existingNational = nationalIdKey ? existingByNationalId.get(nationalIdKey) : null;
+
+  if (existingPhone || existingNational) {
+    const found = existingNational || existingPhone;
+    duplicate = {
+      farmerId: found.id,
+      farmerName: found.name || '-',
+      phone: found.phone || '',
+      nationalId: found.nationalId || '',
+      match: existingPhone && existingNational ? 'phone+nationalId' : existingPhone ? 'phone' : 'nationalId'
+    };
+    issues.push({
+      code: 'duplicate_farmer',
+      severity: 'warning',
+      message: 'This row matches an existing farmer by phone or National ID.',
+      suggestion: 'Use overwrite mode if new file values should replace old farmer values.'
+    });
+  }
+
+  let proposedFix = null;
+  let confidence = 0.9;
+
+  if (invalid) {
+    const issue = buildFarmerImportIssue(mapped, invalid);
+    issues.unshift({
+      code: issue.code || 'invalid_import_row',
+      severity: 'error',
+      message: issue.error || invalid,
+      suggestion: issue.suggestion || 'Check row values before import.',
+      observed: issue.observed || null
+    });
+    const autoFix = smartImportAutofix(mapped, invalid);
+    if (autoFix.hasPatch) {
+      proposedFix = {
+        ...autoFix.corrected,
+        totalArea: toAreaBundle(resolveHectares(autoFix.corrected)),
+        avocadoArea: toAreaBundle(resolveAvocadoHectares(autoFix.corrected))
+      };
+      issues.push({
+        code: 'auto_fix_proposed',
+        severity: 'info',
+        message: autoFix.reason,
+        suggestion: 'Review suggested values and confirm overwrite/adjustment before import.'
+      });
+      confidence = autoFix.confidence;
+    } else {
+      confidence = 0.4;
+    }
+  } else {
+    const hectares = resolveHectares(mapped);
+    const avocadoHectares = resolveAvocadoHectares(mapped);
+    const treeCount = Number(parseTrees(mapped.trees));
+    const density = Number.isFinite(treeCount) && Number.isFinite(avocadoHectares) && avocadoHectares > 0
+      ? treeCount / avocadoHectares
+      : 0;
+
+    if (Number.isFinite(hectares) && hectares > 50) {
+      issues.push({
+        code: 'large_farm_size',
+        severity: 'warning',
+        message: `Large farm area detected (${hectares.toFixed(2)} ha).`,
+        suggestion: 'Confirm unit conversion (acres vs hectares) in source file.'
+      });
+      confidence = Math.min(confidence, 0.72);
+    }
+
+    if (density > 2000) {
+      issues.push({
+        code: 'tree_density_outlier',
+        severity: 'warning',
+        message: `Tree density looks high (${density.toFixed(0)} trees/ha under avocado).`,
+        suggestion: 'Confirm tree count or avocado area values for this row.'
+      });
+      confidence = Math.min(confidence, 0.7);
+    }
+  }
+
+  const status = issues.some((item) => item.severity === 'error')
+    ? 'blocked'
+    : issues.length
+      ? 'review'
+      : 'ready';
+  return {
+    row: rowIndex,
+    status,
+    confidence: Number(confidence.toFixed(2)),
+    mapped: {
+      ...mapped,
+      totalArea: toAreaBundle(resolveHectares(mapped)),
+      avocadoArea: toAreaBundle(resolveAvocadoHectares(mapped))
+    },
+    issues,
+    proposedFix,
+    duplicate
+  };
+}
+
+function buildSmsDraftsLocal(payload, store) {
+  const purpose = clean(payload?.purpose) || 'general update';
+  const audience = clean(payload?.audience) || 'selected farmers';
+  const tone = clean(payload?.tone).toLowerCase() || 'professional';
+  const language = clean(payload?.language).toLowerCase() || 'bilingual';
+  const maxLength = Number(payload?.maxLength);
+  const summary = makeSummary(store);
+
+  const tighten = (text) => {
+    const normalized = clean(text).replace(/\s+/g, ' ');
+    if (!Number.isFinite(maxLength) || maxLength < 30) return normalized;
+    if (normalized.length <= maxLength) return normalized;
+    return normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd() + '…';
+  };
+
+  const englishCore = `Agem Portal: ${purpose}. Audience: ${audience}. Reply for support if needed.`;
+  const swCore = `Agem Portal: ${purpose}. Walengwa: ${audience}. Jibu kwa msaada ukihitaji.`;
+  const englishFormal = `Agem Portal update: ${purpose}. This message is for ${audience}. Contact your Agem agent for help.`;
+  const swFormal = `Taarifa ya Agem Portal: ${purpose}. Ujumbe huu ni kwa ${audience}. Wasiliana na wakala wa Agem kwa msaada.`;
+
+  const english = tone === 'friendly' ? englishCore : englishFormal;
+  const swahili = tone === 'friendly' ? swCore : swFormal;
+
+  const drafts = [];
+  if (language === 'en' || language === 'english') {
+    drafts.push({ language: 'English', message: tighten(english) });
+  } else if (language === 'sw' || language === 'kiswahili') {
+    drafts.push({ language: 'Kiswahili', message: tighten(swahili) });
+  } else {
+    drafts.push({ language: 'English', message: tighten(english) });
+    drafts.push({ language: 'Kiswahili', message: tighten(swahili) });
+  }
+
+  return {
+    drafts,
+    metadata: {
+      model: 'local-rules',
+      smsSentLast24h: summary.smsSentLast24h || 0,
+      smsSpendLast24hKes: summary.smsSpentLast24hKes || 0
+    }
+  };
+}
+
+function extractResponseText(payload) {
+  if (typeof payload?.output_text === 'string' && clean(payload.output_text)) {
+    return payload.output_text;
+  }
+  if (!Array.isArray(payload?.output)) return '';
+
+  const chunks = [];
+  for (const item of payload.output) {
+    if (!Array.isArray(item?.content)) continue;
+    for (const content of item.content) {
+      if (typeof content?.text === 'string' && clean(content.text)) {
+        chunks.push(content.text);
+      }
+    }
+  }
+  return chunks.join('\n').trim();
+}
+
+async function callOpenAiJson(systemPrompt, userPrompt, schema) {
+  if (!OPENAI_API_KEY || typeof fetch !== 'function') {
+    return { ok: false, error: 'OPENAI_API_KEY not configured.' };
+  }
+
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: [
+          { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+          { role: 'user', content: [{ type: 'input_text', text: userPrompt }] }
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'agem_phase1_response',
+            strict: true,
+            schema
+          }
+        }
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = clean(payload?.error?.message) || `OpenAI request failed (${response.status})`;
+      return { ok: false, error: message };
+    }
+
+    const rawText = extractResponseText(payload);
+    if (!clean(rawText)) {
+      return { ok: false, error: 'OpenAI response did not include text output.' };
+    }
+
+    try {
+      const parsed = JSON.parse(rawText);
+      return { ok: true, data: parsed };
+    } catch (error) {
+      return { ok: false, error: `OpenAI output parsing failed: ${error.message}` };
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return { ok: false, error: 'OpenAI request timed out.' };
+    }
+    return { ok: false, error: error.message || 'OpenAI request failed.' };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = reqUrl.pathname;
@@ -2002,7 +2704,12 @@ const server = http.createServer(async (req, res) => {
     json(res, 200, {
       service: 'agem-platform-api',
       status: 'ok',
-      now: nowIso()
+      now: nowIso(),
+      storage: {
+        backend: STORAGE_BACKEND,
+        backupIntervalHours: BACKUP_INTERVAL_HOURS,
+        backupRetentionDays: BACKUP_RETENTION_DAYS
+      }
     });
     return;
   }
@@ -2057,7 +2764,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStore();
       const parts = inputText
         .split('*')
         .map((part) => clean(part))
@@ -2288,7 +2995,7 @@ const server = http.createServer(async (req, res) => {
           pin,
           language: lang
         });
-        writeStore(store);
+        await writeStore(store);
         ussdReply(res, ussdRegistrationCompleteMessage(registeredFarmer, lang), true);
         return;
       }
@@ -2296,7 +3003,7 @@ const server = http.createServer(async (req, res) => {
       if (languageOrDefault(farmer.preferredLanguage) !== lang) {
         farmer.preferredLanguage = lang;
         farmer.updatedAt = nowIso();
-        writeStore(store);
+        await writeStore(store);
       }
 
       if (!menuParts.length) {
@@ -2356,7 +3063,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      const store = readStore();
+      const store = await readStore();
       addActivity(store, {
         actor: 'ussd-gateway',
         role: 'system',
@@ -2364,7 +3071,7 @@ const server = http.createServer(async (req, res) => {
         entity: 'ussd',
         details: `USSD event received: ${clean(payload.status || payload.event || payload.sessionStatus || 'unknown')}`
       });
-      writeStore(store);
+      await writeStore(store);
 
       json(res, 200, { data: { ok: true } });
     } catch (error) {
@@ -2380,7 +3087,7 @@ const server = http.createServer(async (req, res) => {
       const secret = String(payload.password || payload.pin || '');
       const username = normalizedUsername(identityRaw);
       const phone = normalizePhone(identityRaw);
-      const store = readStore();
+      const store = await readStore();
 
       if (activeUserCount(store) === 0) {
         json(res, 503, {
@@ -2422,7 +3129,7 @@ const server = http.createServer(async (req, res) => {
         details: `User ${user.username} signed in`
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 200, {
         data: {
           token,
@@ -2501,7 +3208,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStore();
       if (findFarmerByPhone(store.farmers, phone)) {
         json(res, 409, { error: 'A farmer with this phone number already exists.' });
         return;
@@ -2578,7 +3285,7 @@ const server = http.createServer(async (req, res) => {
         details: `Self-registered farmer profile ${farmer.name}`
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, {
         data: {
           token,
@@ -2601,7 +3308,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/auth/change-password' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -2679,7 +3386,7 @@ const server = http.createServer(async (req, res) => {
           : 'Password changed by signed-in user.'
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 200, { data: { success: true } });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -2712,7 +3419,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStore();
       const user = accountByRole(store, role);
       if (!user) {
         json(res, 404, { error: `No active ${role} account found.` });
@@ -2727,7 +3434,7 @@ const server = http.createServer(async (req, res) => {
         entityId: user.id,
         details: `Username recovery completed for ${role} account.`
       });
-      writeStore(store);
+      await writeStore(store);
 
       json(res, 200, {
         data: {
@@ -2784,7 +3491,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const store = readStore();
+      const store = await readStore();
       const user = accountByRole(store, role);
       if (!user) {
         json(res, 404, { error: `No active ${role} account found.` });
@@ -2803,7 +3510,7 @@ const server = http.createServer(async (req, res) => {
         entityId: user.id,
         details: `Password reset completed for ${role} account.`
       });
-      writeStore(store);
+      await writeStore(store);
 
       json(res, 200, {
         data: {
@@ -2819,7 +3526,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/auth/me' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -2842,7 +3549,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/auth/logout' && req.method === 'POST') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     const token = extractToken(req);
 
@@ -2855,7 +3562,7 @@ const server = http.createServer(async (req, res) => {
         entity: 'session',
         details: `User ${auth.session.username} signed out`
       });
-      writeStore(store);
+      await writeStore(store);
     }
 
     json(res, 200, { data: { success: true } });
@@ -2863,7 +3570,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/agents' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -2915,7 +3622,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/agents' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -2964,7 +3671,7 @@ const server = http.createServer(async (req, res) => {
         details: `Created agent account ${agent.username} (${agent.email})`
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, {
         data: {
           ...agentView(agent),
@@ -2978,7 +3685,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/farmers' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3003,7 +3710,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/farmers' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin', 'agent']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3053,7 +3760,7 @@ const server = http.createServer(async (req, res) => {
         entityId: record.id,
         details: `Created farmer ${record.name}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, { data: record });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -3063,7 +3770,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/farmers/import' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3252,7 +3959,7 @@ const server = http.createServer(async (req, res) => {
             details: `Sent onboarding SMS to ${importSmsLogs.length} imported farmer mobile numbers`
           });
         }
-        writeStore(store);
+        await writeStore(store);
       }
 
       json(res, 200, {
@@ -3277,7 +3984,7 @@ const server = http.createServer(async (req, res) => {
   const farmerPinMatch = pathname.match(/^\/api\/farmers\/([^/]+)\/reset-pin$/);
   if (farmerPinMatch && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3333,7 +4040,7 @@ const server = http.createServer(async (req, res) => {
         details: `${upsertResult.created ? 'Created' : 'Updated'} portal access for farmer ${farmer.name}`
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 200, {
         data: {
           farmerId: farmer.id,
@@ -3351,7 +4058,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/farmers/') && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3382,7 +4089,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname.startsWith('/api/farmers/') && req.method === 'PATCH') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin', 'agent']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3527,7 +4234,7 @@ const server = http.createServer(async (req, res) => {
         entityId: farmer.id,
         details: `Updated farmer ${farmer.name}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 200, { data: farmer });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -3536,7 +4243,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/farmers/') && req.method === 'DELETE') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3582,13 +4289,13 @@ const server = http.createServer(async (req, res) => {
         details: `Deleted linked farmer portal account for ${removed.name}`
       });
     }
-    writeStore(store);
+    await writeStore(store);
     json(res, 200, { data: { success: true } });
     return;
   }
 
   if (pathname === '/api/produce' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3618,7 +4325,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/produce' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin', 'agent']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3683,7 +4390,7 @@ const server = http.createServer(async (req, res) => {
         entityId: record.id,
         details: `Logged farm-gate QC ${record.variety} lot (${record.kgs}kg) for ${record.farmerName}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, { data: record });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -3692,7 +4399,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/produce/') && req.method === 'DELETE') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3715,13 +4422,13 @@ const server = http.createServer(async (req, res) => {
       entityId: removed.id,
       details: `Deleted produce record ${removed.id}`
     });
-    writeStore(store);
+    await writeStore(store);
     json(res, 200, { data: { success: true } });
     return;
   }
 
   if (pathname === '/api/produce-purchases' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3748,7 +4455,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/produce-purchases' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin', 'agent']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3835,7 +4542,7 @@ const server = http.createServer(async (req, res) => {
         entityId: record.id,
         details: `Logged purchase ${record.purchasedKgs}kg (${record.variety}) for ${record.farmerName}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, { data: record });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -3844,7 +4551,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname.startsWith('/api/produce-purchases/') && req.method === 'DELETE') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3867,13 +4574,13 @@ const server = http.createServer(async (req, res) => {
       entityId: removed.id,
       details: `Deleted produce purchase record ${removed.id}`
     });
-    writeStore(store);
+    await writeStore(store);
     json(res, 200, { data: { success: true } });
     return;
   }
 
   if (pathname === '/api/payments/owed' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -3901,7 +4608,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/payments/settle' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -3980,7 +4687,7 @@ const server = http.createServer(async (req, res) => {
         entity: 'payment',
         details: `Created ${created.length} settlement payments (KES ${totalAmount}) with status ${status}`
       });
-      writeStore(store);
+      await writeStore(store);
 
       const refreshed = buildOwedRows(store, {
         period: payload.period,
@@ -4005,7 +4712,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/payments' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4026,7 +4733,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/payments' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4069,7 +4776,7 @@ const server = http.createServer(async (req, res) => {
         entityId: record.id,
         details: `Logged payment ${record.ref} for ${record.farmerName}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, { data: record });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -4079,7 +4786,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname.startsWith('/api/payments/') && pathname.endsWith('/status') && req.method === 'PATCH') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4105,7 +4812,7 @@ const server = http.createServer(async (req, res) => {
         entityId: payment.id,
         details: `Changed payment ${payment.ref} to ${payment.status}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 200, { data: payment });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -4114,7 +4821,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/sms' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4133,7 +4840,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/sms/recipients' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin', 'agent']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4172,7 +4879,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/sms/send' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin', 'agent']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4226,7 +4933,7 @@ const server = http.createServer(async (req, res) => {
         entityId: log.id,
         details: `Sent SMS to ${phone}`
       });
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, { data: log });
     } catch (error) {
       json(res, 400, { error: error.message });
@@ -4236,7 +4943,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/sms/send-bulk' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4312,7 +5019,7 @@ const server = http.createServer(async (req, res) => {
         details: `Sent bulk SMS to ${logs.length} unique mobile numbers (${mode} mode)`
       });
 
-      writeStore(store);
+      await writeStore(store);
       json(res, 201, {
         data: {
           mode,
@@ -4327,8 +5034,332 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/ai/copilot' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 400_000);
+      const question = clean(payload.question);
+      if (!question) {
+        json(res, 422, { error: 'question is required' });
+        return;
+      }
+
+      const local = localCopilotAnswer(store, question);
+      let source = 'local-rules';
+      let model = 'local-rules';
+      let warning = '';
+      let answer = local.answer;
+      let insights = (local.insights || []).map((item) =>
+        typeof item === 'string'
+          ? item
+          : Object.entries(item || {})
+            .map(([key, value]) => `${key}: ${value}`)
+            .join(', ')
+      );
+      let actions = (local.actions || []).map((item) =>
+        typeof item === 'string' ? item : `${item.label}: ${item.description}`
+      );
+
+      if (OPENAI_API_KEY) {
+        const summary = makeSummary(store);
+        const openAi = await callOpenAiJson(
+          'You are an operations copilot for an avocado platform. Give concise, actionable, factual guidance. Do not claim to execute payments or system changes.',
+          `Question: ${question}
+
+Platform snapshot:
+- Farmers: ${summary.farmers || 0}
+- QC records: ${summary.qcRecords || 0}
+- Purchased records: ${summary.purchasedRecords || 0}
+- Owed farmers: ${summary.owedFarmers || 0}
+- Total owed KES: ${summary.totalOwedKes || 0}
+- Payments received KES: ${summary.paymentsReceived || 0}
+- Payment success %: ${summary.paymentSuccessRate || 0}
+- SMS spend 24h KES: ${summary.smsSpentLast24hKes || 0}
+
+Local baseline answer:
+${local.answer}`,
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['answer', 'insights', 'actions'],
+            properties: {
+              answer: { type: 'string' },
+              insights: {
+                type: 'array',
+                maxItems: 6,
+                items: { type: 'string' }
+              },
+              actions: {
+                type: 'array',
+                maxItems: 6,
+                items: { type: 'string' }
+              }
+            }
+          }
+        );
+
+        if (openAi.ok) {
+          source = 'openai';
+          model = OPENAI_MODEL;
+          answer = clean(openAi.data?.answer) || answer;
+          insights = Array.isArray(openAi.data?.insights) && openAi.data.insights.length
+            ? openAi.data.insights.map((item) => clean(item)).filter(Boolean)
+            : insights;
+          actions = Array.isArray(openAi.data?.actions) && openAi.data.actions.length
+            ? openAi.data.actions.map((item) => clean(item)).filter(Boolean)
+            : actions;
+        } else {
+          warning = openAi.error || 'OpenAI unavailable. Showing local copilot answer.';
+        }
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.copilot.ask',
+        entity: 'ai',
+        details: `Admin Copilot asked: "${question.slice(0, 140)}"`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          question,
+          intent: local.intent || 'operations_summary',
+          answer,
+          insights,
+          actions,
+          source,
+          model,
+          warning
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/import-qa' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 12_000_000);
+      const records = Array.isArray(payload.records) ? payload.records : [];
+      if (!records.length) {
+        json(res, 422, { error: 'records array is required' });
+        return;
+      }
+      if (records.length > 10000) {
+        json(res, 422, { error: 'For Smart Import QA, upload up to 10,000 rows per run.' });
+        return;
+      }
+
+      const existingByPhone = new Map(
+        store.farmers
+          .map((row) => [normalizePhone(row.phone) || clean(row.phone), row])
+          .filter(([phone]) => Boolean(phone))
+      );
+      const existingByNationalId = new Map(
+        store.farmers
+          .map((row) => [normalizedNationalId(row.nationalId), row])
+          .filter(([nationalId]) => Boolean(nationalId))
+      );
+
+      const rows = records.map((raw, idx) => {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          return {
+            row: idx + 1,
+            status: 'blocked',
+            confidence: 0.2,
+            mapped: {},
+            issues: [
+              {
+                code: 'invalid_row_shape',
+                severity: 'error',
+                message: 'Row is not a valid object.',
+                suggestion: 'Ensure the sheet has a header row and structured columns.'
+              }
+            ],
+            proposedFix: null,
+            duplicate: null
+          };
+        }
+        return summarizeSmartImportRow(raw, idx + 1, existingByPhone, existingByNationalId);
+      });
+
+      const statusCounts = rows.reduce(
+        (acc, row) => {
+          acc[row.status] = (acc[row.status] || 0) + 1;
+          return acc;
+        },
+        { ready: 0, review: 0, blocked: 0 }
+      );
+
+      const topIssues = {};
+      rows.forEach((row) => {
+        row.issues.forEach((issue) => {
+          topIssues[issue.code] = (topIssues[issue.code] || 0) + 1;
+        });
+      });
+      const issueSummary = Object.entries(topIssues)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([code, count]) => ({ code, count }));
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.import.qa',
+        entity: 'ai',
+        details: `Smart Import QA run on ${records.length} rows`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          totalRows: records.length,
+          readyRows: statusCounts.ready || 0,
+          reviewRows: statusCounts.review || 0,
+          blockedRows: statusCounts.blocked || 0,
+          autoFixableRows: rows.filter((row) => Boolean(row.proposedFix)).length,
+          issueSummary,
+          rows: rows.slice(0, 500)
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/sms-draft' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin', 'agent']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 300_000);
+      const purpose = clean(payload.purpose || payload.goal);
+      if (!purpose) {
+        json(res, 422, { error: 'purpose is required' });
+        return;
+      }
+
+      const audience = clean(payload.audience) || 'selected farmers';
+      const tone = clean(payload.tone).toLowerCase() || 'professional';
+      const language = clean(payload.language).toLowerCase() || 'bilingual';
+      const maxLengthRaw = Number(payload.maxLength);
+      const maxLength = Number.isFinite(maxLengthRaw) ? Math.max(30, Math.min(500, Math.floor(maxLengthRaw))) : null;
+
+      const localDraft = buildSmsDraftsLocal(
+        {
+          purpose,
+          audience,
+          tone,
+          language,
+          maxLength
+        },
+        store
+      );
+
+      let drafts = localDraft.drafts;
+      let source = 'local-rules';
+      let model = 'local-rules';
+      let warning = '';
+
+      if (OPENAI_API_KEY) {
+        const openAi = await callOpenAiJson(
+          'Draft concise operational SMS messages for Kenyan farmers. Keep wording simple. Respect requested language and max length. Return only final draft text.',
+          `Draft SMS for Agem Portal.
+Purpose: ${purpose}
+Audience: ${audience}
+Tone: ${tone}
+Language request: ${language}
+Max length: ${maxLength || 'none'}`,
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['drafts'],
+            properties: {
+              drafts: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 3,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['language', 'message'],
+                  properties: {
+                    language: { type: 'string' },
+                    message: { type: 'string' }
+                  }
+                }
+              }
+            }
+          }
+        );
+
+        if (openAi.ok && Array.isArray(openAi.data?.drafts) && openAi.data.drafts.length) {
+          drafts = openAi.data.drafts
+            .map((item) => ({
+              language: clean(item.language) || 'English',
+              message: clean(item.message)
+            }))
+            .filter((item) => item.message);
+          if (!drafts.length) drafts = localDraft.drafts;
+          source = 'openai';
+          model = OPENAI_MODEL;
+        } else if (!openAi.ok) {
+          warning = openAi.error || 'OpenAI unavailable. Showing local SMS drafts.';
+        }
+      }
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.sms.draft',
+        entity: 'ai',
+        details: `AI SMS draft generated for purpose "${purpose.slice(0, 120)}"`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          purpose,
+          audience,
+          tone,
+          language,
+          maxLength: maxLength || '',
+          drafts,
+          source,
+          model,
+          warning,
+          metadata: localDraft.metadata
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (pathname === '/api/reports/summary' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4340,7 +5371,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/reports/agents' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4353,7 +5384,7 @@ const server = http.createServer(async (req, res) => {
 
   if (pathname === '/api/integrations/mpesa/disburse' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4400,7 +5431,7 @@ const server = http.createServer(async (req, res) => {
         entityId: payment.id,
         details: `Disbursed KES ${payment.amount} to ${farmer.name}`
       });
-      writeStore(store);
+      await writeStore(store);
 
       json(res, 201, {
         data: payment,
@@ -4417,7 +5448,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/farmers.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin', 'agent']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4465,7 +5496,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/produce.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin', 'agent']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4503,7 +5534,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/produce-purchases.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin', 'agent']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4533,7 +5564,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/payments-owed.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4565,7 +5596,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/payments.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4592,7 +5623,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/sms.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin', 'agent']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4652,7 +5683,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/exports/activity.csv' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4674,7 +5705,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/admin/backup' && req.method === 'POST') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4690,7 +5721,7 @@ const server = http.createServer(async (req, res) => {
       entityId: snapshot.filename,
       details: `Created backup ${snapshot.filename}`
     });
-    writeStore(store);
+    await writeStore(store);
 
     json(res, 201, {
       data: {
@@ -4702,7 +5733,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/admin/backups' && req.method === 'GET') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4723,13 +5754,84 @@ const server = http.createServer(async (req, res) => {
       })
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 
-    json(res, 200, { data: files });
+    json(res, 200, {
+      data: files,
+      meta: {
+        storageBackend: STORAGE_BACKEND,
+        backupIntervalHours: BACKUP_INTERVAL_HOURS,
+        backupRetentionDays: BACKUP_RETENTION_DAYS
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/admin/restore' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      if (payload.confirm !== true) {
+        json(res, 422, { error: 'confirm must be true' });
+        return;
+      }
+
+      const filename = path.basename(clean(payload.filename || ''));
+      if (!filename || !filename.endsWith('.json')) {
+        json(res, 422, { error: 'filename is required and must end with .json' });
+        return;
+      }
+
+      const filepath = path.join(BACKUP_DIR, filename);
+      if (!fs.existsSync(filepath)) {
+        json(res, 404, { error: 'Backup file not found' });
+        return;
+      }
+
+      const raw = fs.readFileSync(filepath, 'utf-8');
+      const restored = normalizeStore(JSON.parse(raw));
+      const preRestore = createBackupSnapshot(store, 'pre-restore');
+
+      const currentToken = auth.session.token;
+      if (currentToken && store.sessions[currentToken]) {
+        restored.sessions[currentToken] = store.sessions[currentToken];
+      }
+
+      addActivity(restored, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'admin.restore',
+        entity: 'backup',
+        entityId: filename,
+        details: `Restored dataset from ${filename}. Pre-restore snapshot: ${preRestore.filename}`
+      });
+      await writeStore(restored);
+
+      json(res, 200, {
+        data: {
+          restored: true,
+          fromBackup: filename,
+          preRestoreBackup: preRestore.filename,
+          farmers: restored.farmers.length,
+          produce: restored.produce.length,
+          producePurchases: restored.producePurchases.length,
+          payments: restored.payments.length,
+          smsLogs: restored.smsLogs.length
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
     return;
   }
 
   if (pathname === '/api/admin/reset' && req.method === 'POST') {
     try {
-      const store = readStore();
+      const store = await readStore();
       const auth = requireSession(req, store, ['admin']);
       if (!auth.ok) {
         json(res, auth.status, { error: auth.error });
@@ -4762,7 +5864,7 @@ const server = http.createServer(async (req, res) => {
         entity: 'system',
         details: `Reset dataset. Backup: ${snapshot.filename}`
       });
-      writeStore(store);
+      await writeStore(store);
 
       json(res, 200, {
         data: {
@@ -4777,7 +5879,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/seed' && req.method === 'POST') {
-    const store = readStore();
+    const store = await readStore();
     const auth = requireSession(req, store, ['admin']);
     if (!auth.ok) {
       json(res, auth.status, { error: auth.error });
@@ -4883,7 +5985,7 @@ const server = http.createServer(async (req, res) => {
       entity: 'system',
       details: 'Loaded starter data'
     });
-    writeStore(store);
+    await writeStore(store);
 
     json(res, 201, {
       data: {
@@ -4905,7 +6007,52 @@ const server = http.createServer(async (req, res) => {
   sendFile(res, staticTarget);
 });
 
-server.listen(PORT, HOST, () => {
-  ensureStore();
-  console.log(`Agem MVP server running on http://${HOST}:${PORT}`);
+async function shutdownStorage() {
+  if (!sqlStoreAdapter) return;
+  try {
+    await sqlStoreAdapter.close();
+  } catch (error) {
+    console.error(`[storage] Failed to close ${sqlStoreAdapter.backend} adapter: ${error.message}`);
+  } finally {
+    sqlStoreAdapter = null;
+  }
+}
+
+let shuttingDown = false;
+async function handleShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[system] ${signal} received, shutting down gracefully...`);
+  try {
+    await shutdownStorage();
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => {
+  handleShutdown('SIGINT');
 });
+process.on('SIGTERM', () => {
+  handleShutdown('SIGTERM');
+});
+
+async function startServer() {
+  try {
+    await ensureStore();
+    pruneOldBackups();
+    scheduleAutomaticBackups();
+
+    server.listen(PORT, HOST, () => {
+      console.log(`Agem MVP server running on http://${HOST}:${PORT}`);
+      console.log(
+        `[storage] backend=${STORAGE_BACKEND}, backupIntervalHours=${BACKUP_INTERVAL_HOURS}, backupRetentionDays=${BACKUP_RETENTION_DAYS}`
+      );
+    });
+  } catch (error) {
+    console.error(`[startup] Failed to initialize storage: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+startServer();

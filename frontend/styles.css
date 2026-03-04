@@ -752,6 +752,17 @@ button.table-btn.danger {
   color: #8f2424;
 }
 
+button.mini-btn {
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 0.74rem;
+}
+
+.dim {
+  color: #7b7b7b;
+  font-size: 0.75rem;
+}
+
 .empty {
   padding: 12px;
   border: 1px dashed #cfcfcb;
@@ -780,6 +791,45 @@ button.table-btn.danger {
 
 .import-errors li {
   margin: 0 0 4px;
+}
+
+.ai-panel {
+  border: 1px dashed #d7d7d2;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fafaf8;
+  display: grid;
+  gap: 8px;
+}
+
+#smsDraftWrap,
+#farmerImportQaWrap,
+#copilotWrap {
+  border: 1px dashed #d7d7d2;
+  border-radius: 10px;
+  background: #fafaf8;
+  padding: 10px;
+  font-size: 0.83rem;
+  color: #393939;
+}
+
+#smsDraftWrap[hidden],
+#farmerImportQaWrap[hidden] {
+  display: none !important;
+}
+
+.ai-result-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.ai-result-list {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.ai-result-list li {
+  margin-bottom: 4px;
 }
 
 #farmerTableWrap,

@@ -263,10 +263,13 @@
                   <p class="meta compact">Leave blank to auto-send in each farmer's preferred language (English/Kiswahili).</p>
                   <p class="meta compact">Template placeholders: {{name}}, {{phone}}, {{nationalId}}, {{location}}, {{ussd}}, {{portal}}</p>
                   <div class="inline-actions">
+                    <button class="secondary" id="farmerImportQaBtn" type="button">Run Smart QA</button>
                     <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>
                   </div>
                   <div class="success" id="farmerImportMsg"></div>
                   <p class="meta compact" id="farmerImportSummary"></p>
+                  <div class="success" id="farmerImportQaMsg"></div>
+                  <div id="farmerImportQaWrap"></div>
                   <div id="farmerImportErrors"></div>
                 </form>
               </div>
@@ -573,6 +576,32 @@
                 </div>
 
                 <textarea id="smsMessage" rows="4" placeholder="Message"></textarea>
+
+                <div class="ai-panel">
+                  <p class="meta compact"><strong>AI SMS Drafting</strong></p>
+                  <div class="row">
+                    <input id="smsDraftPurpose" placeholder="Message goal (e.g. payment reminder)">
+                    <select id="smsDraftLanguage">
+                      <option value="bilingual">Draft language: Bilingual</option>
+                      <option value="en">Draft language: English</option>
+                      <option value="sw">Draft language: Kiswahili</option>
+                    </select>
+                  </div>
+                  <div class="row">
+                    <input id="smsDraftAudience" placeholder="Audience (e.g. owed farmers in Nakuru)">
+                    <select id="smsDraftTone">
+                      <option value="professional">Tone: Professional</option>
+                      <option value="friendly">Tone: Friendly</option>
+                    </select>
+                  </div>
+                  <div class="row">
+                    <input id="smsDraftMaxLength" type="number" min="30" max="500" step="1" placeholder="Max chars (optional)">
+                    <button class="secondary" id="smsDraftBtn" type="button">Draft with AI</button>
+                  </div>
+                  <div class="success" id="smsDraftMsg"></div>
+                  <div id="smsDraftWrap"></div>
+                </div>
+
                 <button class="primary" type="submit">Send SMS</button>
                 <div class="success" id="smsMsg"></div>
               </form>
@@ -590,6 +619,19 @@
 
         <section class="pane" id="reports">
           <h2>Operational Reports</h2>
+
+          <details class="dropdown-card" open>
+            <summary>Admin Copilot (AI)</summary>
+            <div class="dropdown-body">
+              <div class="row">
+                <input id="copilotPrompt" placeholder='Ask: "Show farmers owed this week in Nakuru"'>
+                <button class="primary" id="copilotAskBtn" type="button">Ask Copilot</button>
+              </div>
+              <div class="success" id="copilotMsg"></div>
+              <div id="copilotWrap" class="empty">Ask a question to get AI-guided operational insights.</div>
+            </div>
+          </details>
+
           <div class="kpis" id="reportMetrics"></div>
 
           <div class="grid">

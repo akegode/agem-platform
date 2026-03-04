@@ -24,6 +24,9 @@ const smsPicker = {
   rows: [],
   selectedIds: new Set()
 };
+const aiState = {
+  smsDrafts: []
+};
 const owedPicker = {
   rows: [],
   selectedFarmerIds: new Set(),
@@ -128,8 +131,11 @@ const elements = {
   farmerImportNotifyBySms: document.getElementById('farmerImportNotifyBySms'),
   farmerImportSmsTemplate: document.getElementById('farmerImportSmsTemplate'),
   farmerImportBtn: document.getElementById('farmerImportBtn'),
+  farmerImportQaBtn: document.getElementById('farmerImportQaBtn'),
   farmerImportMsg: document.getElementById('farmerImportMsg'),
   farmerImportSummary: document.getElementById('farmerImportSummary'),
+  farmerImportQaMsg: document.getElementById('farmerImportQaMsg'),
+  farmerImportQaWrap: document.getElementById('farmerImportQaWrap'),
   farmerImportErrors: document.getElementById('farmerImportErrors'),
   farmerPinCard: document.getElementById('farmerPinCard'),
   farmerPinForm: document.getElementById('farmerPinForm'),
@@ -219,12 +225,24 @@ const elements = {
   smsAllModeNotice: document.getElementById('smsAllModeNotice'),
   smsPhone: document.getElementById('smsPhone'),
   smsMessage: document.getElementById('smsMessage'),
+  smsDraftPurpose: document.getElementById('smsDraftPurpose'),
+  smsDraftLanguage: document.getElementById('smsDraftLanguage'),
+  smsDraftAudience: document.getElementById('smsDraftAudience'),
+  smsDraftTone: document.getElementById('smsDraftTone'),
+  smsDraftMaxLength: document.getElementById('smsDraftMaxLength'),
+  smsDraftBtn: document.getElementById('smsDraftBtn'),
+  smsDraftMsg: document.getElementById('smsDraftMsg'),
+  smsDraftWrap: document.getElementById('smsDraftWrap'),
   smsMsg: document.getElementById('smsMsg'),
   smsTableWrap: document.getElementById('smsTableWrap'),
 
   reportMetrics: document.getElementById('reportMetrics'),
   reportNarrative: document.getElementById('reportNarrative'),
   agentStatsWrap: document.getElementById('agentStatsWrap'),
+  copilotPrompt: document.getElementById('copilotPrompt'),
+  copilotAskBtn: document.getElementById('copilotAskBtn'),
+  copilotMsg: document.getElementById('copilotMsg'),
+  copilotWrap: document.getElementById('copilotWrap'),
 
   exportButtons: document.querySelectorAll('.export-btn'),
   smsExportRange: document.getElementById('smsExportRange'),
@@ -253,6 +271,7 @@ async function init() {
   bindPayments();
   bindSms();
   bindExports();
+  bindAiTools();
 
   hydrateFarmerSelectors();
   syncCurrentUserPhotoFromState();
@@ -1026,6 +1045,57 @@ function bindFarmers() {
       elements.farmerImportMsg.textContent = error.message || 'Import failed.';
     }
   });
+
+  if (elements.farmerImportQaBtn) {
+    elements.farmerImportQaBtn.addEventListener('click', async () => {
+      clearMessages();
+      clearFarmerImportResult();
+      if (elements.farmerImportQaWrap) {
+        elements.farmerImportQaWrap.hidden = true;
+        elements.farmerImportQaWrap.innerHTML = '';
+      }
+
+      const role = currentRole();
+      if (role !== 'admin') {
+        elements.farmerImportQaMsg.textContent = 'Only administrators can run Smart Import QA.';
+        return;
+      }
+
+      const [file] = elements.farmerImportFile.files || [];
+      if (!file) {
+        elements.farmerImportQaMsg.textContent = 'Choose a CSV or Excel file first.';
+        return;
+      }
+
+      try {
+        elements.farmerImportQaMsg.textContent = 'Running Smart QA...';
+        const records = await parseFarmerImportFile(file);
+        if (!records.length) {
+          elements.farmerImportQaMsg.textContent = 'No data rows found in this file.';
+          return;
+        }
+
+        let result;
+        if (API.enabled) {
+          if (!isAuthenticated()) {
+            elements.farmerImportQaMsg.textContent = 'Sign in first to run Smart Import QA.';
+            return;
+          }
+          const response = await apiRequest('/api/ai/import-qa', {
+            method: 'POST',
+            body: { records }
+          });
+          result = response.data || {};
+        } else {
+          result = runLocalSmartImportQa(records);
+        }
+
+        renderSmartImportQaResult(result);
+      } catch (error) {
+        elements.farmerImportQaMsg.textContent = error.message || 'Smart QA failed.';
+      }
+    });
+  }
 
   const setFarmerPinControls = (disabled) => {
     if (!elements.farmerPinForm) return;
@@ -2493,6 +2563,179 @@ function bindSms() {
   void loadSmsRecipients(true);
 }
 
+function bindAiTools() {
+  if (elements.smsDraftWrap) {
+    elements.smsDraftWrap.hidden = true;
+  }
+  if (elements.farmerImportQaWrap) {
+    elements.farmerImportQaWrap.hidden = true;
+  }
+
+  if (elements.smsDraftBtn) {
+    elements.smsDraftBtn.addEventListener('click', async () => {
+      clearMessages();
+
+      if (!API.enabled) {
+        elements.smsDraftMsg.textContent = 'AI drafting requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.smsDraftMsg.textContent = 'Sign in first to use AI drafting.';
+        return;
+      }
+      if (!['admin', 'agent'].includes(currentRole())) {
+        elements.smsDraftMsg.textContent = 'Only admin or agent can draft SMS.';
+        return;
+      }
+
+      const purpose = String(elements.smsDraftPurpose?.value || '').trim();
+      if (!purpose) {
+        elements.smsDraftMsg.textContent = 'Enter a message goal first.';
+        return;
+      }
+
+      const payload = {
+        purpose,
+        audience: String(elements.smsDraftAudience?.value || '').trim(),
+        tone: String(elements.smsDraftTone?.value || '').trim() || 'professional',
+        language: String(elements.smsDraftLanguage?.value || '').trim() || 'bilingual',
+        maxLength: String(elements.smsDraftMaxLength?.value || '').trim()
+      };
+
+      try {
+        const response = await apiRequest('/api/ai/sms-draft', {
+          method: 'POST',
+          body: payload
+        });
+        renderSmsDraftResult(response.data || {});
+      } catch (error) {
+        elements.smsDraftMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.smsDraftWrap) {
+    elements.smsDraftWrap.addEventListener('click', (event) => {
+      const applyBtn = event.target.closest('[data-apply-sms-draft]');
+      if (!applyBtn) return;
+      const index = Number(applyBtn.getAttribute('data-apply-sms-draft'));
+      const message = String(aiState.smsDrafts[index]?.message || '').trim();
+      if (!message) return;
+      elements.smsMessage.value = message;
+      elements.smsDraftMsg.textContent = 'Draft applied to message box.';
+    });
+  }
+
+  if (elements.copilotAskBtn) {
+    elements.copilotAskBtn.addEventListener('click', async () => {
+      clearMessages();
+      if (!API.enabled) {
+        elements.copilotMsg.textContent = 'Admin Copilot requires backend mode.';
+        return;
+      }
+      if (!isAuthenticated()) {
+        elements.copilotMsg.textContent = 'Sign in first to use Admin Copilot.';
+        return;
+      }
+      if (currentRole() !== 'admin') {
+        elements.copilotMsg.textContent = 'Admin Copilot is admin-only.';
+        return;
+      }
+
+      const question = String(elements.copilotPrompt?.value || '').trim();
+      if (!question) {
+        elements.copilotMsg.textContent = 'Ask a question first.';
+        return;
+      }
+
+      try {
+        const response = await apiRequest('/api/ai/copilot', {
+          method: 'POST',
+          body: { question }
+        });
+        renderCopilotResult(response.data || {});
+      } catch (error) {
+        elements.copilotMsg.textContent = error.message;
+      }
+    });
+  }
+
+  if (elements.copilotPrompt) {
+    elements.copilotPrompt.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      elements.copilotAskBtn?.click();
+    });
+  }
+}
+
+function renderSmsDraftResult(data) {
+  const drafts = Array.isArray(data?.drafts) ? data.drafts : [];
+  const source = String(data?.source || 'local-rules');
+  const warning = String(data?.warning || '').trim();
+  const sourceText = source === 'openai' ? `OpenAI (${escapeHtml(data.model || '')})` : 'Local fallback';
+  aiState.smsDrafts = drafts.map((item) => ({
+    language: String(item?.language || 'Message'),
+    message: String(item?.message || '')
+  }));
+
+  if (!drafts.length) {
+    elements.smsDraftMsg.textContent = warning || 'No drafts returned.';
+    if (elements.smsDraftWrap) {
+      elements.smsDraftWrap.hidden = true;
+      elements.smsDraftWrap.innerHTML = '';
+    }
+    return;
+  }
+
+  const list = drafts
+    .map((draft, index) => {
+      const language = escapeHtml(String(draft.language || 'Message'));
+      const message = escapeHtml(String(draft.message || ''));
+      return `
+        <li>
+          <strong>${language}</strong>: ${message}
+          <button class="table-btn" type="button" data-apply-sms-draft="${index}">Use This Draft</button>
+        </li>
+      `;
+    })
+    .join('');
+
+  elements.smsDraftMsg.textContent = warning || `Drafts generated via ${sourceText}.`;
+  if (!elements.smsDraftWrap) return;
+  elements.smsDraftWrap.hidden = false;
+  elements.smsDraftWrap.innerHTML = `
+    <div class="ai-result-title">SMS Draft Suggestions</div>
+    <ul class="ai-result-list">${list}</ul>
+  `;
+}
+
+function renderCopilotResult(data) {
+  const answer = String(data?.answer || '').trim();
+  const insights = Array.isArray(data?.insights) ? data.insights.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  const actions = Array.isArray(data?.actions) ? data.actions.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  const source = String(data?.source || 'local-rules');
+  const warning = String(data?.warning || '').trim();
+  const sourceText = source === 'openai' ? `OpenAI (${escapeHtml(data.model || '')})` : 'Local fallback';
+
+  const insightsHtml = insights.length
+    ? `<div class="ai-result-title">Insights</div><ul class="ai-result-list">${insights.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '';
+  const actionsHtml = actions.length
+    ? `<div class="ai-result-title">Suggested Actions</div><ul class="ai-result-list">${actions.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '';
+
+  elements.copilotMsg.textContent = warning || `Copilot response generated via ${sourceText}.`;
+  if (!elements.copilotWrap) return;
+  elements.copilotWrap.classList.remove('empty');
+  elements.copilotWrap.innerHTML = `
+    <div class="ai-result-title">Answer</div>
+    <p class="meta compact">${escapeHtml(answer || 'No answer returned.')}</p>
+    ${insightsHtml}
+    ${actionsHtml}
+  `;
+}
+
 function currentSmsMode() {
   return String(elements.smsTargetMode.value || 'selected').trim().toLowerCase();
 }
@@ -2753,6 +2996,39 @@ function bindExports() {
   elements.listBackupsBtn.addEventListener('click', async () => {
     clearMessages();
     await listBackups();
+  });
+
+  elements.backupListWrap.addEventListener('click', async (event) => {
+    const restoreBtn = event.target.closest('[data-restore-backup]');
+    if (!restoreBtn) return;
+    if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+      elements.exportsMsg.textContent = 'Sign in as admin to restore backups.';
+      return;
+    }
+
+    const encoded = restoreBtn.getAttribute('data-restore-backup') || '';
+    const filename = decodeURIComponent(encoded);
+    if (!filename) return;
+
+    const allow = confirm(
+      `Restore backup ${filename}? This replaces current farmers, QC, purchases, payments, and SMS logs.`
+    );
+    if (!allow) return;
+
+    restoreBtn.disabled = true;
+    try {
+      const response = await apiRequest('/api/admin/restore', {
+        method: 'POST',
+        body: { filename, confirm: true }
+      });
+      elements.exportsMsg.textContent = `Restore completed: ${response.data.fromBackup}`;
+      await fetchAllData();
+      await listBackups();
+    } catch (error) {
+      elements.exportsMsg.textContent = error.message;
+    } finally {
+      restoreBtn.disabled = false;
+    }
   });
 
   elements.resetBtn.addEventListener('click', async () => {
@@ -3067,6 +3343,9 @@ function updatePermissionUi() {
   const owedAllowed = backendAuthReady && role === 'admin';
   const paymentAllowed = backendAuthReady && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
+  const aiSmsAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
+  const copilotAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const smartQaAllowed = role === 'admin';
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
   const farmerPinManageAllowed = API.enabled && isAuthenticated() && role === 'admin';
@@ -3075,6 +3354,7 @@ function updatePermissionUi() {
   elements.farmerSubmitBtn.disabled = !farmersAllowed;
   elements.farmerCancelEditBtn.disabled = !farmersAllowed;
   elements.farmerImportBtn.disabled = !importAllowed;
+  if (elements.farmerImportQaBtn) elements.farmerImportQaBtn.disabled = !smartQaAllowed;
   elements.farmerImportFile.disabled = !importAllowed;
   elements.farmerImportNotifyBySms.disabled = !importAllowed;
   if (elements.farmerPinSearch) elements.farmerPinSearch.disabled = !farmerPinManageAllowed;
@@ -3122,6 +3402,15 @@ function updatePermissionUi() {
   elements.mpesaDisburseBtn.disabled = !paymentAllowed;
 
   elements.smsForm.querySelector('button[type="submit"]').disabled = !smsAllowed;
+  if (elements.smsDraftPurpose) elements.smsDraftPurpose.disabled = !aiSmsAllowed;
+  if (elements.smsDraftLanguage) elements.smsDraftLanguage.disabled = !aiSmsAllowed;
+  if (elements.smsDraftAudience) elements.smsDraftAudience.disabled = !aiSmsAllowed;
+  if (elements.smsDraftTone) elements.smsDraftTone.disabled = !aiSmsAllowed;
+  if (elements.smsDraftMaxLength) elements.smsDraftMaxLength.disabled = !aiSmsAllowed;
+  if (elements.smsDraftBtn) elements.smsDraftBtn.disabled = !aiSmsAllowed;
+
+  if (elements.copilotPrompt) elements.copilotPrompt.disabled = !copilotAllowed;
+  if (elements.copilotAskBtn) elements.copilotAskBtn.disabled = !copilotAllowed;
 
   elements.seedBtn.disabled = !(adminAllowed || !API.enabled);
   elements.backupBtn.disabled = !adminAllowed;
@@ -3628,6 +3917,7 @@ function renderBackups() {
     return;
   }
 
+  const canRestore = API.enabled && isAuthenticated() && currentRole() === 'admin';
   const rows = state.backups
     .slice(0, 50)
     .map(
@@ -3636,6 +3926,11 @@ function renderBackups() {
           <td>${escapeHtml(item.filename)}</td>
           <td>${escapeHtml(String(item.sizeBytes))}</td>
           <td>${escapeHtml(dateShort(item.createdAt))}</td>
+          <td>
+            ${canRestore
+              ? `<button type="button" class="secondary mini-btn" data-restore-backup="${encodeURIComponent(item.filename)}">Restore</button>`
+              : '<span class="dim">Admin only</span>'}
+          </td>
         </tr>
       `
     )
@@ -3648,6 +3943,7 @@ function renderBackups() {
           <th>Filename</th>
           <th>Size (bytes)</th>
           <th>Created</th>
+          <th>Action</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -3714,6 +4010,238 @@ function renderFarmerImportResult(result) {
 
   elements.farmerImportErrors.classList.add('import-errors');
   elements.farmerImportErrors.innerHTML = `<ul>${listItems}${more}</ul>`;
+}
+
+function toAreaBundleClient(hectaresValue) {
+  const metrics = areaMetricsFromHectares(hectaresValue);
+  if (!Number.isFinite(metrics.hectares)) {
+    return { hectares: '', acres: '', squareFeet: '' };
+  }
+  return {
+    hectares: Number(metrics.hectares.toFixed(3)),
+    acres: Number(metrics.acres.toFixed(3)),
+    squareFeet: Number(metrics.squareFeet.toFixed(1))
+  };
+}
+
+function smartImportAutoFixClient(mapped, invalid) {
+  const patch = {};
+  let reason = '';
+  if (invalid === 'area under avocado cannot be greater than total farm size') {
+    if (Number.isFinite(mapped.hectares) && mapped.hectares > 0) {
+      patch.avocadoHectares = Number(mapped.hectares.toFixed(3));
+      reason = 'Set avocado area equal to total farm size.';
+    }
+  } else if (invalid === 'avocadoHectares/avocadoAcres/avocadoSquareFeet is required') {
+    if (Number.isFinite(mapped.hectares) && mapped.hectares > 0) {
+      patch.avocadoHectares = Number(mapped.hectares.toFixed(3));
+      reason = 'Missing avocado area. Suggested temporary value equals total farm size.';
+    }
+  } else if (invalid === 'hectares/acres/square feet is required') {
+    if (Number.isFinite(mapped.avocadoHectares) && mapped.avocadoHectares > 0) {
+      patch.hectares = Number(mapped.avocadoHectares.toFixed(3));
+      reason = 'Missing total area. Suggested temporary value equals avocado area.';
+    }
+  } else if (invalid === 'trees must be a number') {
+    patch.trees = 0;
+    reason = 'Tree count converted to 0 (requires review).';
+  }
+
+  if (!Object.keys(patch).length) {
+    return null;
+  }
+
+  const corrected = { ...mapped, ...patch };
+  return {
+    reason,
+    corrected: {
+      ...corrected,
+      totalArea: toAreaBundleClient(corrected.hectares),
+      avocadoArea: toAreaBundleClient(corrected.avocadoHectares)
+    }
+  };
+}
+
+function runLocalSmartImportQa(records) {
+  const existingByPhone = new Map(
+    state.farmers
+      .map((row) => [cleanPhone(row.phone), row])
+      .filter(([phone]) => Boolean(phone))
+  );
+  const existingByNationalId = new Map(
+    state.farmers
+      .map((row) => [normalizeNationalIdClient(row.nationalId), row])
+      .filter(([nationalId]) => Boolean(nationalId))
+  );
+
+  const rows = records.map((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return {
+        row: index + 1,
+        status: 'blocked',
+        confidence: 0.2,
+        mapped: {},
+        issues: [
+          {
+            code: 'invalid_row_shape',
+            severity: 'error',
+            message: 'Row is not a valid object.',
+            suggestion: 'Check spreadsheet headers and row structure.'
+          }
+        ],
+        proposedFix: null,
+        duplicate: null
+      };
+    }
+
+    const mapped = mapFarmerImportRecordClient(raw);
+    const invalid = validateImportedFarmer(mapped);
+    const issues = [];
+    let confidence = 0.9;
+    let proposedFix = null;
+    let duplicate = null;
+
+    const phoneKey = cleanPhone(mapped.phone);
+    const nationalIdKey = normalizeNationalIdClient(mapped.nationalId);
+    const existingPhone = phoneKey ? existingByPhone.get(phoneKey) : null;
+    const existingNational = nationalIdKey ? existingByNationalId.get(nationalIdKey) : null;
+
+    if (existingPhone || existingNational) {
+      const found = existingNational || existingPhone;
+      duplicate = {
+        farmerId: found.id,
+        farmerName: found.name || '-',
+        phone: found.phone || '',
+        nationalId: found.nationalId || '',
+        match: existingPhone && existingNational ? 'phone+nationalId' : existingPhone ? 'phone' : 'nationalId'
+      };
+      issues.push({
+        code: 'duplicate_farmer',
+        severity: 'warning',
+        message: 'Row matches an existing farmer.',
+        suggestion: 'Choose overwrite mode to replace existing farmer details.'
+      });
+      confidence = Math.min(confidence, 0.72);
+    }
+
+    if (invalid) {
+      const issue = buildFarmerImportIssueClient(mapped, invalid);
+      issues.unshift({
+        code: issue.code || 'invalid_import_row',
+        severity: 'error',
+        message: issue.error || invalid,
+        suggestion: issue.suggestion || 'Fix the row and retry.'
+      });
+
+      const autoFix = smartImportAutoFixClient(mapped, invalid);
+      if (autoFix) {
+        proposedFix = autoFix.corrected;
+        issues.push({
+          code: 'auto_fix_proposed',
+          severity: 'info',
+          message: autoFix.reason,
+          suggestion: 'Review this suggested correction before import.'
+        });
+        confidence = 0.6;
+      } else {
+        confidence = 0.4;
+      }
+    }
+
+    const status = issues.some((item) => item.severity === 'error')
+      ? 'blocked'
+      : issues.length
+        ? 'review'
+        : 'ready';
+
+    return {
+      row: index + 1,
+      status,
+      confidence: Number(confidence.toFixed(2)),
+      mapped: {
+        ...mapped,
+        totalArea: toAreaBundleClient(mapped.hectares),
+        avocadoArea: toAreaBundleClient(mapped.avocadoHectares)
+      },
+      issues,
+      proposedFix,
+      duplicate
+    };
+  });
+
+  const counts = rows.reduce(
+    (acc, row) => {
+      acc[row.status] = (acc[row.status] || 0) + 1;
+      return acc;
+    },
+    { ready: 0, review: 0, blocked: 0 }
+  );
+  const issueSummaryMap = {};
+  rows.forEach((row) => {
+    row.issues.forEach((issue) => {
+      issueSummaryMap[issue.code] = (issueSummaryMap[issue.code] || 0) + 1;
+    });
+  });
+
+  return {
+    totalRows: records.length,
+    readyRows: counts.ready || 0,
+    reviewRows: counts.review || 0,
+    blockedRows: counts.blocked || 0,
+    autoFixableRows: rows.filter((row) => Boolean(row.proposedFix)).length,
+    issueSummary: Object.entries(issueSummaryMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([code, count]) => ({ code, count })),
+    rows: rows.slice(0, 500)
+  };
+}
+
+function renderSmartImportQaResult(result) {
+  const totalRows = Number(result?.totalRows || 0);
+  const readyRows = Number(result?.readyRows || 0);
+  const reviewRows = Number(result?.reviewRows || 0);
+  const blockedRows = Number(result?.blockedRows || 0);
+  const autoFixableRows = Number(result?.autoFixableRows || 0);
+  const rows = Array.isArray(result?.rows) ? result.rows : [];
+
+  elements.farmerImportQaMsg.textContent =
+    `Smart QA complete. Ready: ${readyRows}, Review: ${reviewRows}, Blocked: ${blockedRows}, Auto-fixable: ${autoFixableRows}.`;
+
+  if (!elements.farmerImportQaWrap) return;
+  if (!rows.length) {
+    elements.farmerImportQaWrap.hidden = false;
+    elements.farmerImportQaWrap.innerHTML = '<div class="empty">No row diagnostics returned.</div>';
+    return;
+  }
+
+  const issueSummary = Array.isArray(result?.issueSummary) ? result.issueSummary : [];
+  const summaryHtml = issueSummary.length
+    ? `<p class="meta compact"><strong>Top issue codes:</strong> ${issueSummary
+      .map((item) => `${escapeHtml(item.code)} (${escapeHtml(String(item.count))})`)
+      .join(', ')}</p>`
+    : '';
+
+  const rowsHtml = rows
+    .slice(0, 30)
+    .map((row) => {
+      const issues = (row.issues || [])
+        .map((issue) => `${issue.code}: ${issue.message}`)
+        .join(' | ');
+      const fix = row.proposedFix
+        ? `Proposed fix -> total ha: ${row.proposedFix.totalArea?.hectares || '-'}, avocado ha: ${row.proposedFix.avocadoArea?.hectares || '-'}`
+        : 'No auto-fix';
+      return `<li>Row ${escapeHtml(String(row.row))} [${escapeHtml(row.status)}] - ${escapeHtml(issues || 'No issues')} (${escapeHtml(fix)})</li>`;
+    })
+    .join('');
+  const overflow = rows.length > 30 ? `<li>...and ${escapeHtml(String(rows.length - 30))} more rows.</li>` : '';
+
+  elements.farmerImportQaWrap.hidden = false;
+  elements.farmerImportQaWrap.innerHTML = `
+    <div class="ai-result-title">Smart Import QA Preview (${escapeHtml(String(totalRows))} rows)</div>
+    ${summaryHtml}
+    <ul class="ai-result-list">${rowsHtml}${overflow}</ul>
+  `;
 }
 
 function normalizeImportHeaderClient(value) {
@@ -4823,6 +5351,11 @@ function clearMessages() {
   elements.farmerMsg.textContent = '';
   elements.farmerImportMsg.textContent = '';
   elements.farmerImportSummary.textContent = '';
+  if (elements.farmerImportQaMsg) elements.farmerImportQaMsg.textContent = '';
+  if (elements.farmerImportQaWrap) {
+    elements.farmerImportQaWrap.hidden = true;
+    elements.farmerImportQaWrap.innerHTML = '';
+  }
   elements.farmerImportErrors.innerHTML = '';
   elements.farmerImportErrors.classList.remove('import-errors');
   elements.farmerPinMsg.textContent = '';
@@ -4836,6 +5369,17 @@ function clearMessages() {
   elements.owedMsg.textContent = '';
   elements.paymentMsg.textContent = '';
   elements.smsMsg.textContent = '';
+  if (elements.smsDraftMsg) elements.smsDraftMsg.textContent = '';
+  if (elements.smsDraftWrap) {
+    elements.smsDraftWrap.hidden = true;
+    elements.smsDraftWrap.innerHTML = '';
+  }
+  aiState.smsDrafts = [];
+  if (elements.copilotMsg) elements.copilotMsg.textContent = '';
+  if (elements.copilotWrap) {
+    elements.copilotWrap.classList.add('empty');
+    elements.copilotWrap.textContent = 'Ask a question to get AI-guided operational insights.';
+  }
   elements.exportsMsg.textContent = '';
 }
 
