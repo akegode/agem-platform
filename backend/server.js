@@ -1327,6 +1327,30 @@ function findMsaidiziModules(store, query, pane, role, limit = 4) {
   return modules.slice(0, Math.max(1, Math.min(limit, 8)));
 }
 
+function findMsaidiziContextModules(store, pane, role, limit = 4) {
+  const modules = msaidiziAccessibleModules(store, role);
+  const paneKey = clean(pane).toLowerCase();
+  const cap = Math.max(1, Math.min(limit, 8));
+
+  if (!paneKey) return [];
+
+  const paneMatches = modules.filter((module) =>
+    Array.isArray(module?.panes)
+      ? module.panes.map((row) => clean(row).toLowerCase()).includes(paneKey)
+      : false
+  );
+
+  if (paneMatches.length) return paneMatches.slice(0, cap);
+
+  const globalMatches = modules.filter((module) =>
+    Array.isArray(module?.panes)
+      ? module.panes.map((row) => clean(row).toLowerCase()).includes('all')
+      : false
+  );
+
+  return globalMatches.slice(0, cap);
+}
+
 function buildMsaidiziLocalAnswer(modules, mode = 'normal') {
   const normalizedMode = normalizeMsaidiziMode(mode);
   const primary = modules[0];
@@ -7019,7 +7043,7 @@ const server = http.createServer(async (req, res) => {
       await writeStore(store);
     }
 
-    const modules = findMsaidiziModules(store, '', pane, role, limit).map((module) => ({
+    const modules = findMsaidiziContextModules(store, pane, role, limit).map((module) => ({
       id: module.id,
       title: module.title,
       short: module.short,
@@ -7064,7 +7088,7 @@ const server = http.createServer(async (req, res) => {
         force: false
       });
 
-      const contextModules = findMsaidiziModules(store, '', pane, role, 4);
+      const contextModules = findMsaidiziContextModules(store, pane, role, 4);
       const questionModules = findMsaidiziModules(store, question, '', role, 4);
       const answerModules = questionModules.length ? questionModules : contextModules;
       let local = buildMsaidiziLocalAnswer(answerModules, mode);
