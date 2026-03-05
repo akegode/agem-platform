@@ -629,7 +629,7 @@ function renderMsaidiziAnswer(answer = {}) {
 
 async function refreshMsaidiziStatus() {
   if (!API.enabled || !elements.msaidiziSource) {
-    if (elements.msaidiziSource) elements.msaidiziSource.textContent = 'Msaidizi needs backend API connectivity.';
+    if (elements.msaidiziSource) elements.msaidiziSource.textContent = 'Msaidizi requires backend API connectivity.';
     return;
   }
   try {
@@ -653,7 +653,7 @@ async function refreshMsaidiziContext() {
   if (!API.enabled) {
     renderMsaidiziContext([]);
     if (elements.msaidiziSource) {
-      elements.msaidiziSource.textContent = 'Msaidizi needs backend API connectivity.';
+      elements.msaidiziSource.textContent = 'Msaidizi requires backend API connectivity.';
     }
     return;
   }
@@ -680,7 +680,7 @@ async function refreshMsaidiziContext() {
 
 async function askMsaidizi() {
   if (!API.enabled) {
-    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Msaidizi needs backend API connectivity.';
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Msaidizi requires backend API connectivity.';
     return;
   }
   const question = String(elements.msaidiziQuestion?.value || '').trim();
@@ -713,7 +713,7 @@ async function askMsaidizi() {
       elements.msaidiziSource.textContent = `${sourceLabel} | Context page: ${pane} | Last sync: ${syncLabel}${moduleLabel}`;
     }
     if (elements.msaidiziMsg) {
-      elements.msaidiziMsg.textContent = data.warning || 'Msaidizi answer ready.';
+      elements.msaidiziMsg.textContent = data.warning || "Msaidizi's answer is ready.";
     }
   } catch (error) {
     if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = error.message;
@@ -741,7 +741,7 @@ async function syncMsaidiziDocs(force = true) {
     const data = response.data || {};
     if (elements.msaidiziMsg) {
       elements.msaidiziMsg.textContent = data.updated
-        ? `Msaidizi synced (${data.moduleCount || 0} modules).`
+        ? `Msaidizi's documentation was synced (${data.moduleCount || 0} modules).`
         : 'No documentation changes detected.';
     }
     await refreshMsaidiziStatus();
@@ -5928,7 +5928,7 @@ function updatePermissionUi() {
     elements.msaidiziFab.disabled = !msaidiziAvailable;
     elements.msaidiziFab.title = msaidiziAvailable
       ? 'Ask Msaidizi'
-      : 'Msaidizi needs backend API connectivity.';
+      : 'Msaidizi requires backend API connectivity.';
   }
   if (elements.msaidiziAskBtn) {
     elements.msaidiziAskBtn.disabled = !msaidiziAvailable;
