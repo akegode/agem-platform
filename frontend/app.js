@@ -700,12 +700,17 @@ async function askMsaidizi() {
       }
     });
     const data = response.data || {};
+    const answerModules = Array.isArray(data.modules) ? data.modules : [];
+    const contextModules = Array.isArray(data.contextModules) ? data.contextModules : msaidiziState.contextModules;
     renderMsaidiziAnswer(data.answer || {});
-    renderMsaidiziContext(data.modules || msaidiziState.contextModules || []);
+    renderMsaidiziContext(contextModules || []);
     const sourceLabel = data.source === 'openai' ? `OpenAI (${data.model || 'model'})` : 'Local rules';
     const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    const moduleLabel = answerModules.length
+      ? ` | Answer modules: ${answerModules.map((module) => module.title).slice(0, 2).join(', ')}`
+      : '';
     if (elements.msaidiziSource) {
-      elements.msaidiziSource.textContent = `${sourceLabel} | Context: ${pane} | Last sync: ${syncLabel}`;
+      elements.msaidiziSource.textContent = `${sourceLabel} | Context page: ${pane} | Last sync: ${syncLabel}${moduleLabel}`;
     }
     if (elements.msaidiziMsg) {
       elements.msaidiziMsg.textContent = data.warning || 'Msaidizi answer ready.';

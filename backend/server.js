@@ -1267,6 +1267,9 @@ function syncMsaidiziInStore(store, options = {}) {
 function msaidiziAccessibleModules(store, role = 'guest') {
   const modules = Array.isArray(store?.aiMsaidizi?.modules) ? store.aiMsaidizi.modules : [];
   const normalizedRole = clean(role).toLowerCase() || 'guest';
+  if (normalizedRole === 'guest') {
+    return modules;
+  }
   return modules.filter((module) => {
     const allowedRoles = Array.isArray(module?.roles) ? module.roles.map((row) => clean(row).toLowerCase()) : [];
     if (!allowedRoles.length) return true;
@@ -7061,14 +7064,16 @@ const server = http.createServer(async (req, res) => {
         force: false
       });
 
-      const modules = findMsaidiziModules(store, question, pane, role, 4);
-      let local = buildMsaidiziLocalAnswer(modules, mode);
+      const contextModules = findMsaidiziModules(store, '', pane, role, 4);
+      const questionModules = findMsaidiziModules(store, question, '', role, 4);
+      const answerModules = questionModules.length ? questionModules : contextModules;
+      let local = buildMsaidiziLocalAnswer(answerModules, mode);
       let source = 'local-rules';
       let model = 'local-rules';
       let warning = '';
 
       if (OPENAI_API_KEY) {
-        const moduleContext = modules
+        const moduleContext = answerModules
           .map((module, index) => {
             return `[MODULE-${index + 1}] ${module.title}
 Short: ${module.short}
@@ -7165,7 +7170,13 @@ ${moduleContext || 'No modules matched.'}`,
           model,
           warning,
           answer: local,
-          modules: modules.map((module) => ({
+          modules: answerModules.map((module) => ({
+            id: module.id,
+            title: module.title,
+            short: module.short,
+            panes: module.panes || []
+          })),
+          contextModules: contextModules.map((module) => ({
             id: module.id,
             title: module.title,
             short: module.short,
