@@ -34,6 +34,7 @@ body {
     radial-gradient(880px 400px at 100% 3%, rgba(195, 140, 47, 0.2) 0%, transparent 55%),
     linear-gradient(160deg, #f4f7f2 0%, #f8faf4 44%, #fcfdf8 100%);
   padding: 20px;
+  overflow-x: hidden;
 }
 
 body.dashboard-open {
@@ -45,11 +46,12 @@ body.dashboard-open {
   margin: 0 auto;
   animation: fadeIn 420ms ease;
   height: calc(100vh - 40px);
+  height: calc(100dvh - 40px);
 }
 
 .auth-layout {
   display: grid;
-  grid-template-columns: 1fr 440px;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 440px);
   gap: 18px;
   align-items: start;
   height: 100%;
@@ -206,13 +208,14 @@ body.dashboard-open {
   max-width: 1240px;
   margin: 0 auto;
   height: calc(100vh - 40px);
+  height: calc(100dvh - 40px);
 }
 
 .app {
   max-width: 1240px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 300px minmax(0, 1fr);
   gap: 18px;
   animation: fadeIn 450ms ease;
   height: 100%;
@@ -1287,9 +1290,49 @@ button.mini-btn {
   background: linear-gradient(120deg, rgba(236, 245, 233, 0.8), rgba(255, 255, 255, 0.8));
 }
 
+@media (max-width: 1180px) {
+  body {
+    padding: 16px;
+  }
+
+  .auth-shell,
+  .dashboard-shell {
+    height: calc(100vh - 32px);
+    height: calc(100dvh - 32px);
+  }
+
+  .auth-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(350px, 400px);
+    gap: 14px;
+  }
+
+  .auth-main-card {
+    padding: 14px;
+  }
+
+  .hero-logo-link-company {
+    height: 76px;
+    width: 360px;
+    max-width: calc(100% - 88px);
+  }
+
+  .app {
+    grid-template-columns: 270px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .sidebar {
+    padding: 16px;
+  }
+
+  .pane {
+    padding: 16px;
+  }
+}
+
 @media (max-width: 980px) {
   body {
-    padding: 14px;
+    padding: 12px;
   }
 
   body.dashboard-open {
@@ -1303,6 +1346,7 @@ button.mini-btn {
   .auth-layout {
     grid-template-columns: 1fr;
     height: auto;
+    gap: 12px;
   }
 
   .auth-shell {
@@ -1316,20 +1360,57 @@ button.mini-btn {
     overflow: visible;
   }
 
+  .auth-hero {
+    padding: 16px;
+    gap: 8px;
+  }
+
+  .hero-logo-link-company {
+    height: 70px;
+    width: 320px;
+    max-width: calc(100% - 86px);
+  }
+
+  .hero-logo-link-hass {
+    width: 64px;
+    height: 64px;
+    flex-basis: 64px;
+  }
+
+  .hero-chips {
+    margin-top: 0;
+    gap: 6px;
+  }
+
+  .hero-chips span {
+    padding: 5px 9px;
+    font-size: 0.7rem;
+  }
+
+  .auth-main-card {
+    padding: 12px;
+  }
+
   .app {
     grid-template-columns: 1fr;
     height: auto;
+    gap: 12px;
   }
 
   .sidebar {
     position: static;
     height: auto;
     overflow: visible;
+    padding: 14px;
   }
 
   .app main {
     overflow: visible;
     padding-right: 0;
+  }
+
+  .pane {
+    padding: 14px;
   }
 
   .grid,
@@ -1338,8 +1419,38 @@ button.mini-btn {
     grid-template-columns: 1fr;
   }
 
+  .kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  input,
+  select,
+  textarea {
+    min-height: 44px;
+  }
+
+  button.primary,
+  button.secondary,
+  button.danger-btn,
+  .upload-label {
+    min-height: 44px;
+  }
+
   .top-actions {
     justify-items: start;
+  }
+
+  #farmerTableWrap,
+  #agentTableWrap,
+  #produceTableWrap,
+  #purchaseTableWrap,
+  #owedTableWrap,
+  #paymentRecommendationTableWrap,
+  #paymentTableWrap,
+  #smsTableWrap,
+  #agentStatsWrap,
+  #backupListWrap {
+    max-height: 300px;
   }
 
   .scroll-top {
@@ -1354,14 +1465,72 @@ button.mini-btn {
   }
 
   .msaidizi-panel {
+    left: 14px;
     right: 14px;
     bottom: 56px;
-    width: calc(100vw - 28px);
-    max-height: calc(100vh - 86px);
+    width: auto;
+    max-height: calc(100dvh - 86px);
   }
 
   .msaidizi-flags {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 10px;
+  }
+
+  .auth-hero,
+  .auth-main-card,
+  .sidebar,
+  .pane {
+    padding: 12px;
+  }
+
+  .hero-logo-row {
+    align-items: flex-start;
+  }
+
+  .hero-logo-link-company {
+    height: 62px;
+    width: 280px;
+    max-width: calc(100% - 72px);
+  }
+
+  .hero-logo-link-hass {
+    width: 52px;
+    height: 52px;
+    flex-basis: 52px;
+  }
+
+  .hero-brand {
+    font-size: clamp(1.8rem, 9vw, 2.3rem);
+  }
+
+  .kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-actions > button {
+    width: 100%;
+  }
+
+  .msaidizi-panel {
+    left: 10px;
+    right: 10px;
+    bottom: 56px;
+    max-height: calc(100dvh - 82px);
+  }
+
+  .msaidizi-head {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .msaidizi-head .table-btn {
+    width: 100%;
   }
 }
 
