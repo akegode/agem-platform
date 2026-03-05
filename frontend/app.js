@@ -2376,6 +2376,27 @@ function escapeExportHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function csvCellEscaped(value) {
+  const text = String(value == null ? '' : value);
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function buildBrandedCsv(csvText, type, rangeLabel) {
+  const lines = [
+    [ 'Agem Portal Export', type ],
+    [ 'Brand', 'Agem Handshake' ],
+    [ 'Range', rangeLabel ],
+    [ 'Generated', new Date().toISOString() ],
+    []
+  ].map((row) => row.map((cell) => csvCellEscaped(cell)).join(','));
+
+  const base = String(csvText || '');
+  return `${lines.join('\n')}\n${base}`;
+}
+
 async function exportAsExcelHtml(type, csvText, rangeLabel) {
   const parsed = parseCsvTextRows(csvText);
   const logoDataUrl = await getExportLogoDataUrl();
@@ -2490,7 +2511,8 @@ async function exportDatasetFile({ type, csvText, format, rangeLabel, fileSuffix
     return 'PDF';
   }
 
-  const csvBlob = new Blob([csvText], { type: 'text/csv;charset=utf-8' });
+  const brandedCsv = buildBrandedCsv(csvText, type, rangeLabel);
+  const csvBlob = new Blob([brandedCsv], { type: 'text/csv;charset=utf-8' });
   downloadBlob(csvBlob, `${safeType}${suffix}-${dateStamp}.csv`);
   return 'CSV';
 }
