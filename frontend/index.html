@@ -949,6 +949,64 @@
       </main>
     </div>
   </div>
+  <button id="msaidiziFab" class="msaidizi-fab" type="button" aria-controls="msaidiziPanel" aria-expanded="false">
+    Ask Msaidizi
+  </button>
+  <aside id="msaidiziPanel" class="msaidizi-panel" hidden>
+    <div class="msaidizi-head">
+      <h3>Ask Msaidizi</h3>
+      <button id="msaidiziCloseBtn" class="table-btn" type="button">Close</button>
+    </div>
+    <p class="meta compact">Live AGEM instruction manual (AI). Ask in plain language, or choose step-by-step mode.</p>
+    <div class="row">
+      <select id="msaidiziMode">
+        <option value="normal">Mode: Normal</option>
+        <option value="simple">Mode: Simple (dumb it down)</option>
+        <option value="step_by_step">Mode: Step by step</option>
+      </select>
+      <button id="msaidiziSyncBtn" class="secondary" type="button">Sync Docs</button>
+    </div>
+    <div class="row">
+      <input id="msaidiziQuestion" placeholder="How do I register a farmer?">
+      <button id="msaidiziAskBtn" class="primary" type="button">Ask</button>
+    </div>
+    <div class="success" id="msaidiziMsg"></div>
+    <p class="meta compact" id="msaidiziSource">Context-aware help is loading...</p>
+    <details class="dropdown-card msaidizi-context-card" open>
+      <summary>Context Help</summary>
+      <div class="dropdown-body">
+        <div id="msaidiziContextWrap" class="empty">Open a page section to see instructions for that area.</div>
+      </div>
+    </details>
+    <details class="dropdown-card msaidizi-answer-card" open>
+      <summary>Answer</summary>
+      <div class="dropdown-body msaidizi-body">
+        <p id="msaidiziAnswerShort" class="meta">Ask a question to get guided instructions.</p>
+        <div>
+          <strong>Step by step</strong>
+          <ol id="msaidiziSteps" class="msaidizi-list ordered"></ol>
+        </div>
+        <div>
+          <strong>Troubleshooting</strong>
+          <ul id="msaidiziTroubleshoot" class="msaidizi-list"></ul>
+        </div>
+        <div class="msaidizi-flags">
+          <article class="msaidizi-flag do-now">
+            <strong>DO NOW</strong>
+            <ul id="msaidiziDoNow" class="msaidizi-list"></ul>
+          </article>
+          <article class="msaidizi-flag avoid">
+            <strong>DO NOT DO</strong>
+            <ul id="msaidiziAvoid" class="msaidizi-list"></ul>
+          </article>
+          <article class="msaidizi-flag wait">
+            <strong>WAIT ON</strong>
+            <ul id="msaidiziWaitFor" class="msaidizi-list"></ul>
+          </article>
+        </div>
+      </div>
+    </details>
+  </aside>
   <button id="scrollTopBtn" class="scroll-top" type="button" hidden>Top</button>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js" defer></script>

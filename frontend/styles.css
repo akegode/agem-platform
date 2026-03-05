@@ -1062,7 +1062,7 @@ button.mini-btn {
 .scroll-top {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  bottom: 78px;
   z-index: 20;
   border: none;
   border-radius: 999px;
@@ -1072,6 +1072,104 @@ button.mini-btn {
   font-weight: 700;
   cursor: pointer;
   box-shadow: var(--shadow);
+}
+
+.msaidizi-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 30;
+  border: none;
+  border-radius: 999px;
+  padding: 11px 16px;
+  background: linear-gradient(135deg, var(--brand-gold-dark) 0%, var(--brand-gold) 100%);
+  color: #132d1d;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.msaidizi-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 68px;
+  width: min(540px, calc(100vw - 40px));
+  max-height: calc(100vh - 110px);
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 28px 60px -30px rgba(11, 33, 18, 0.46);
+  padding: 12px;
+  z-index: 32;
+}
+
+.msaidizi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.msaidizi-head h3 {
+  margin: 0;
+}
+
+.msaidizi-context-card,
+.msaidizi-answer-card {
+  margin-top: 8px;
+}
+
+.msaidizi-body {
+  display: grid;
+  gap: 10px;
+}
+
+.msaidizi-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.msaidizi-list.ordered {
+  padding-left: 20px;
+}
+
+.msaidizi-flags {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.msaidizi-flag {
+  border: 1px solid #d6e3d1;
+  border-radius: 10px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.msaidizi-flag strong {
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+}
+
+.msaidizi-flag.do-now {
+  border-color: #9cc89e;
+  background: #eff8ef;
+  color: #1f6f2f;
+}
+
+.msaidizi-flag.avoid {
+  border-color: #ebb8b8;
+  background: #fff1f1;
+  color: #9e2727;
+}
+
+.msaidizi-flag.wait {
+  border-color: #eed39d;
+  background: #fff8ea;
+  color: #8e5f0e;
 }
 
 .timeline {
@@ -1112,6 +1210,10 @@ button.mini-btn {
 }
 
 .sidebar .success {
+  color: var(--ink);
+}
+
+.account-card .success {
   color: var(--ink);
 }
 
@@ -1242,7 +1344,24 @@ button.mini-btn {
 
   .scroll-top {
     right: 14px;
+    bottom: 70px;
+  }
+
+  .msaidizi-fab {
+    right: 14px;
     bottom: 14px;
+    padding: 9px 13px;
+  }
+
+  .msaidizi-panel {
+    right: 14px;
+    bottom: 56px;
+    width: calc(100vw - 28px);
+    max-height: calc(100vh - 86px);
+  }
+
+  .msaidizi-flags {
+    grid-template-columns: 1fr;
   }
 }
 

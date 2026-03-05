@@ -46,6 +46,16 @@ const aiState = {
     'executive-brief': ''
   }
 };
+const msaidiziState = {
+  pane: 'auth',
+  role: 'guest',
+  contextModules: [],
+  status: {
+    lastSyncAt: '',
+    sourceSignature: '',
+    moduleCount: 0
+  }
+};
 const owedPicker = {
   rows: [],
   selectedFarmerIds: new Set(),
@@ -68,6 +78,7 @@ const paymentRecommendationPicker = {
     }
   }
 };
+let activePaneId = 'overview';
 
 const elements = {
   authShell: document.getElementById('authShell'),
@@ -350,7 +361,24 @@ const elements = {
   listBackupsBtn: document.getElementById('listBackupsBtn'),
   resetBtn: document.getElementById('resetBtn'),
   exportsMsg: document.getElementById('exportsMsg'),
-  backupListWrap: document.getElementById('backupListWrap')
+  backupListWrap: document.getElementById('backupListWrap'),
+
+  msaidiziFab: document.getElementById('msaidiziFab'),
+  msaidiziPanel: document.getElementById('msaidiziPanel'),
+  msaidiziCloseBtn: document.getElementById('msaidiziCloseBtn'),
+  msaidiziMode: document.getElementById('msaidiziMode'),
+  msaidiziSyncBtn: document.getElementById('msaidiziSyncBtn'),
+  msaidiziQuestion: document.getElementById('msaidiziQuestion'),
+  msaidiziAskBtn: document.getElementById('msaidiziAskBtn'),
+  msaidiziMsg: document.getElementById('msaidiziMsg'),
+  msaidiziSource: document.getElementById('msaidiziSource'),
+  msaidiziContextWrap: document.getElementById('msaidiziContextWrap'),
+  msaidiziAnswerShort: document.getElementById('msaidiziAnswerShort'),
+  msaidiziSteps: document.getElementById('msaidiziSteps'),
+  msaidiziTroubleshoot: document.getElementById('msaidiziTroubleshoot'),
+  msaidiziDoNow: document.getElementById('msaidiziDoNow'),
+  msaidiziAvoid: document.getElementById('msaidiziAvoid'),
+  msaidiziWaitFor: document.getElementById('msaidiziWaitFor')
 };
 
 void init();
@@ -370,6 +398,7 @@ async function init() {
   bindSms();
   bindExports();
   bindAiTools();
+  bindMsaidizi();
 
   hydrateFarmerSelectors();
   syncCurrentUserPhotoFromState();
@@ -395,6 +424,7 @@ async function init() {
 
   await refreshOwedRows(false);
   await loadPaymentRecommendations();
+  await refreshMsaidiziContext();
   updatePermissionUi();
 }
 
@@ -529,6 +559,238 @@ function bindScrollTools() {
   });
 }
 
+function msaidiziRole() {
+  return isAuthenticated() ? currentRole() : 'guest';
+}
+
+function msaidiziPane() {
+  return isAuthenticated() ? activePaneId || 'overview' : 'auth';
+}
+
+function setMsaidiziOpen(nextOpen) {
+  if (!elements.msaidiziPanel || !elements.msaidiziFab) return;
+  elements.msaidiziPanel.hidden = !nextOpen;
+  elements.msaidiziFab.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+}
+
+function renderMsaidiziList(target, rows = [], ordered = false) {
+  if (!target) return;
+  target.innerHTML = '';
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!list.length) {
+    const node = document.createElement('li');
+    node.textContent = ordered ? 'No steps yet.' : 'No items.';
+    target.appendChild(node);
+    return;
+  }
+  list.forEach((row) => {
+    const li = document.createElement('li');
+    li.textContent = row;
+    target.appendChild(li);
+  });
+}
+
+function renderMsaidiziContext(modules = []) {
+  if (!elements.msaidiziContextWrap) return;
+  const rows = Array.isArray(modules) ? modules : [];
+  if (!rows.length) {
+    elements.msaidiziContextWrap.classList.add('empty');
+    elements.msaidiziContextWrap.textContent = 'No context tips found for this page yet.';
+    return;
+  }
+  elements.msaidiziContextWrap.classList.remove('empty');
+  elements.msaidiziContextWrap.innerHTML = rows
+    .map((module) => {
+      const steps = Array.isArray(module.steps) ? module.steps.slice(0, 3) : [];
+      const stepsHtml = steps.length
+        ? `<ol class="msaidizi-list ordered">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+        : '';
+      return `
+        <article class="knowledge-card">
+          <div class="ai-result-title">${escapeHtml(module.title || 'Instruction module')}</div>
+          <p class="meta compact">${escapeHtml(module.short || '')}</p>
+          ${stepsHtml}
+        </article>
+      `;
+    })
+    .join('');
+}
+
+function renderMsaidiziAnswer(answer = {}) {
+  if (elements.msaidiziAnswerShort) {
+    elements.msaidiziAnswerShort.textContent = String(answer.answerShort || '').trim() || 'No answer generated yet.';
+  }
+  renderMsaidiziList(elements.msaidiziSteps, answer.steps || [], true);
+  renderMsaidiziList(elements.msaidiziTroubleshoot, answer.troubleshoot || []);
+  renderMsaidiziList(elements.msaidiziDoNow, answer.doNow || []);
+  renderMsaidiziList(elements.msaidiziAvoid, answer.avoid || []);
+  renderMsaidiziList(elements.msaidiziWaitFor, answer.waitFor || []);
+}
+
+async function refreshMsaidiziStatus() {
+  if (!API.enabled || !elements.msaidiziSource) {
+    if (elements.msaidiziSource) elements.msaidiziSource.textContent = 'Msaidizi needs backend API connectivity.';
+    return;
+  }
+  try {
+    const response = await apiRequest('/api/ai/msaidizi/status', { auth: false });
+    const data = response.data || {};
+    msaidiziState.status = {
+      lastSyncAt: data.lastSyncAt || '',
+      sourceSignature: data.sourceSignature || '',
+      moduleCount: Number(data.moduleCount) || 0
+    };
+    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    elements.msaidiziSource.textContent = `Modules: ${msaidiziState.status.moduleCount} | Last sync: ${syncLabel}`;
+  } catch (error) {
+    elements.msaidiziSource.textContent = error.message;
+  }
+}
+
+async function refreshMsaidiziContext() {
+  msaidiziState.role = msaidiziRole();
+  msaidiziState.pane = msaidiziPane();
+  if (!API.enabled) {
+    renderMsaidiziContext([]);
+    if (elements.msaidiziSource) {
+      elements.msaidiziSource.textContent = 'Msaidizi needs backend API connectivity.';
+    }
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      pane: msaidiziState.pane,
+      role: msaidiziState.role,
+      limit: '4'
+    });
+    const response = await apiRequest(`/api/ai/msaidizi/context?${params.toString()}`, { auth: false });
+    const data = response.data || {};
+    msaidiziState.contextModules = Array.isArray(data.modules) ? data.modules : [];
+    renderMsaidiziContext(msaidiziState.contextModules);
+    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    if (elements.msaidiziSource) {
+      elements.msaidiziSource.textContent = `Context: ${msaidiziState.pane} | Last sync: ${syncLabel}`;
+    }
+  } catch (error) {
+    renderMsaidiziContext([]);
+    if (elements.msaidiziSource) elements.msaidiziSource.textContent = error.message;
+  }
+}
+
+async function askMsaidizi() {
+  if (!API.enabled) {
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Msaidizi needs backend API connectivity.';
+    return;
+  }
+  const question = String(elements.msaidiziQuestion?.value || '').trim();
+  const mode = String(elements.msaidiziMode?.value || 'normal').trim() || 'normal';
+  const pane = msaidiziPane();
+  if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Generating answer...';
+
+  try {
+    const response = await apiRequest('/api/ai/msaidizi/ask', {
+      method: 'POST',
+      auth: false,
+      body: {
+        question,
+        mode,
+        pane,
+        role: msaidiziRole()
+      }
+    });
+    const data = response.data || {};
+    renderMsaidiziAnswer(data.answer || {});
+    renderMsaidiziContext(data.modules || msaidiziState.contextModules || []);
+    const sourceLabel = data.source === 'openai' ? `OpenAI (${data.model || 'model'})` : 'Local rules';
+    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    if (elements.msaidiziSource) {
+      elements.msaidiziSource.textContent = `${sourceLabel} | Context: ${pane} | Last sync: ${syncLabel}`;
+    }
+    if (elements.msaidiziMsg) {
+      elements.msaidiziMsg.textContent = data.warning || 'Msaidizi answer ready.';
+    }
+  } catch (error) {
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = error.message;
+  }
+}
+
+async function syncMsaidiziDocs(force = true) {
+  if (!API.enabled) {
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Backend API is required for sync.';
+    return;
+  }
+  if (!isAuthenticated() || currentRole() !== 'admin') {
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Only admin can sync documentation modules.';
+    return;
+  }
+  if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Syncing documentation...';
+  try {
+    const response = await apiRequest('/api/ai/msaidizi/sync', {
+      method: 'POST',
+      body: {
+        force,
+        reason: 'manual_ui_sync'
+      }
+    });
+    const data = response.data || {};
+    if (elements.msaidiziMsg) {
+      elements.msaidiziMsg.textContent = data.updated
+        ? `Msaidizi synced (${data.moduleCount || 0} modules).`
+        : 'No documentation changes detected.';
+    }
+    await refreshMsaidiziStatus();
+    await refreshMsaidiziContext();
+  } catch (error) {
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = error.message;
+  }
+}
+
+function bindMsaidizi() {
+  if (!elements.msaidiziFab || !elements.msaidiziPanel) return;
+
+  elements.msaidiziFab.addEventListener('click', async () => {
+    const willOpen = elements.msaidiziPanel.hidden;
+    setMsaidiziOpen(willOpen);
+    if (!willOpen) return;
+    await refreshMsaidiziStatus();
+    await refreshMsaidiziContext();
+  });
+
+  if (elements.msaidiziCloseBtn) {
+    elements.msaidiziCloseBtn.addEventListener('click', () => {
+      setMsaidiziOpen(false);
+    });
+  }
+
+  if (elements.msaidiziAskBtn) {
+    elements.msaidiziAskBtn.addEventListener('click', async () => {
+      await askMsaidizi();
+    });
+  }
+
+  if (elements.msaidiziQuestion) {
+    elements.msaidiziQuestion.addEventListener('keydown', async (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      await askMsaidizi();
+    });
+  }
+
+  if (elements.msaidiziMode) {
+    elements.msaidiziMode.addEventListener('change', async () => {
+      if (!elements.msaidiziQuestion?.value.trim()) return;
+      await askMsaidizi();
+    });
+  }
+
+  if (elements.msaidiziSyncBtn) {
+    elements.msaidiziSyncBtn.addEventListener('click', async () => {
+      await syncMsaidiziDocs(true);
+    });
+  }
+}
+
 function bindTabs() {
   elements.tabs.forEach((button) => {
     button.addEventListener('click', () => {
@@ -565,6 +827,7 @@ function setActivePane(paneId, resetScroll = false) {
   });
 
   if (!activeFound) return;
+  activePaneId = paneId;
 
   if (elements.paneSelect) {
     elements.paneSelect.value = paneId;
@@ -577,6 +840,8 @@ function setActivePane(paneId, resetScroll = false) {
   if (resetScroll && elements.dashboardMain) {
     elements.dashboardMain.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  void refreshMsaidiziContext();
 }
 
 function bindRoleSelect() {
@@ -5555,6 +5820,11 @@ function updateAuthUi() {
   updateCredentialUiForRole();
   renderDashboardAccount();
   updateRoleHint();
+  msaidiziState.role = isAuthenticated() ? currentRole() : 'guest';
+  if (!isAuthenticated()) {
+    activePaneId = 'auth';
+  }
+  void refreshMsaidiziContext();
 }
 
 function updatePermissionUi() {
@@ -5585,6 +5855,8 @@ function updatePermissionUi() {
   const feedbackAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
   const feedbackSummaryAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const evalAllowed = API.enabled && isAuthenticated() && role === 'admin';
+  const msaidiziAvailable = API.enabled;
+  const msaidiziSyncAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const smartQaAllowed = role === 'admin';
   const adminAllowed = backendAuthReady && role === 'admin';
   const importAllowed = backendAuthReady && role === 'admin';
@@ -5645,6 +5917,20 @@ function updatePermissionUi() {
   }
   if (!agentManageAllowed) {
     clearAgentCredentialDisplay();
+  }
+
+  if (elements.msaidiziFab) {
+    elements.msaidiziFab.disabled = !msaidiziAvailable;
+    elements.msaidiziFab.title = msaidiziAvailable
+      ? 'Ask Msaidizi'
+      : 'Msaidizi needs backend API connectivity.';
+  }
+  if (elements.msaidiziAskBtn) {
+    elements.msaidiziAskBtn.disabled = !msaidiziAvailable;
+  }
+  if (elements.msaidiziSyncBtn) {
+    elements.msaidiziSyncBtn.hidden = !msaidiziSyncAllowed;
+    elements.msaidiziSyncBtn.disabled = !msaidiziSyncAllowed;
   }
 
   elements.produceForm.querySelector('button[type="submit"]').disabled = !produceAllowed;
@@ -7731,6 +8017,7 @@ function notifySync(message) {
 }
 
 function clearMessages() {
+  if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = '';
   elements.authMsg.textContent = '';
   elements.registerMsg.textContent = '';
   elements.changePasswordMsg.textContent = '';

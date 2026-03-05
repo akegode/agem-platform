@@ -96,10 +96,14 @@ const AI_EVAL_CAP = parseEnvInt('AI_EVAL_CAP', 500, 20, 5000);
 const AI_KNOWLEDGE_CAP = parseEnvInt('AI_KNOWLEDGE_CAP', 500, 10, 5000);
 const OPS_TASK_CAP = parseEnvInt('OPS_TASK_CAP', 5000, 100, 50000);
 const PAYMENT_RECOMMENDATION_CAP = parseEnvInt('PAYMENT_RECOMMENDATION_CAP', 5000, 100, 50000);
+const AI_MSAIDIZI_SYNC_ENABLED = envValue('AI_MSAIDIZI_SYNC_ENABLED') !== 'false';
+const AI_MSAIDIZI_SYNC_INTERVAL_HOURS = parseEnvInt('AI_MSAIDIZI_SYNC_INTERVAL_HOURS', 6, 1, 24 * 30);
+const AI_MSAIDIZI_MODULE_CAP = parseEnvInt('AI_MSAIDIZI_MODULE_CAP', 80, 10, 500);
 
 let sqlStoreAdapter = null;
 let backupScheduleHandle = null;
 let executiveBriefScheduleHandle = null;
+let msaidiziScheduleHandle = null;
 
 const INSECURE_DEMO_ACCOUNTS = [
   { username: 'admin', password: 'admin123', role: 'admin', name: 'Platform Administrator' },
@@ -364,6 +368,13 @@ function freshStore() {
     aiFeedback: [],
     aiEvalRuns: [],
     aiKnowledgeDocs: [],
+    aiMsaidizi: {
+      lastSyncAt: '',
+      sourceSignature: '',
+      status: 'never',
+      modules: [],
+      syncHistory: []
+    },
     aiPromptConfig: {},
     opsTasks: []
   };
@@ -387,6 +398,7 @@ function normalizeStore(raw) {
     aiFeedback: Array.isArray(raw.aiFeedback) ? raw.aiFeedback : [],
     aiEvalRuns: Array.isArray(raw.aiEvalRuns) ? raw.aiEvalRuns : [],
     aiKnowledgeDocs: Array.isArray(raw.aiKnowledgeDocs) ? raw.aiKnowledgeDocs : [],
+    aiMsaidizi: raw.aiMsaidizi && typeof raw.aiMsaidizi === 'object' ? raw.aiMsaidizi : {},
     aiPromptConfig: raw.aiPromptConfig && typeof raw.aiPromptConfig === 'object' ? raw.aiPromptConfig : {},
     opsTasks: Array.isArray(raw.opsTasks) ? raw.opsTasks : []
   };
@@ -444,6 +456,42 @@ function normalizeStore(raw) {
   store.aiFeedback = store.aiFeedback.slice(0, AI_FEEDBACK_CAP);
   store.aiEvalRuns = store.aiEvalRuns.slice(0, AI_EVAL_CAP);
   store.aiKnowledgeDocs = store.aiKnowledgeDocs.slice(0, AI_KNOWLEDGE_CAP);
+  const rawMsaidizi = store.aiMsaidizi && typeof store.aiMsaidizi === 'object' ? store.aiMsaidizi : {};
+  const rawModules = Array.isArray(rawMsaidizi.modules) ? rawMsaidizi.modules : [];
+  const rawHistory = Array.isArray(rawMsaidizi.syncHistory) ? rawMsaidizi.syncHistory : [];
+  store.aiMsaidizi = {
+    lastSyncAt: clean(rawMsaidizi.lastSyncAt),
+    sourceSignature: clean(rawMsaidizi.sourceSignature),
+    status: clean(rawMsaidizi.status) || 'never',
+    modules: rawModules
+      .slice(0, AI_MSAIDIZI_MODULE_CAP)
+      .map((module) => ({
+        id: clean(module?.id) || id('MSMOD'),
+        title: clean(module?.title) || 'Untitled module',
+        short: clean(module?.short),
+        panes: Array.isArray(module?.panes) ? module.panes.map((row) => clean(row)).filter(Boolean).slice(0, 12) : [],
+        roles: Array.isArray(module?.roles) ? module.roles.map((row) => clean(row)).filter(Boolean).slice(0, 8) : [],
+        keywords: Array.isArray(module?.keywords)
+          ? module.keywords.map((row) => clean(row).toLowerCase()).filter(Boolean).slice(0, 24)
+          : [],
+        steps: Array.isArray(module?.steps) ? module.steps.map((row) => clean(row)).filter(Boolean).slice(0, 20) : [],
+        troubleshooting: Array.isArray(module?.troubleshooting)
+          ? module.troubleshooting.map((row) => clean(row)).filter(Boolean).slice(0, 20)
+          : [],
+        doNow: Array.isArray(module?.doNow) ? module.doNow.map((row) => clean(row)).filter(Boolean).slice(0, 12) : [],
+        avoid: Array.isArray(module?.avoid) ? module.avoid.map((row) => clean(row)).filter(Boolean).slice(0, 12) : [],
+        waitFor: Array.isArray(module?.waitFor) ? module.waitFor.map((row) => clean(row)).filter(Boolean).slice(0, 12) : [],
+        updatedAt: clean(module?.updatedAt) || nowIso(),
+        sourceSignature: clean(module?.sourceSignature)
+      })),
+    syncHistory: rawHistory.slice(0, 120).map((row) => ({
+      at: clean(row?.at) || nowIso(),
+      reason: clean(row?.reason) || 'unknown',
+      actor: clean(row?.actor) || 'system',
+      updated: Boolean(row?.updated),
+      sourceSignature: clean(row?.sourceSignature)
+    }))
+  };
   store.paymentRecommendations = store.paymentRecommendations
     .slice(0, PAYMENT_RECOMMENDATION_CAP)
     .map((row) => ({
@@ -882,6 +930,477 @@ function findKnowledgeMatches(store, query, limit = 4) {
   }
 
   return scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(limit, 8)));
+}
+
+function normalizeMsaidiziMode(value) {
+  const normalized = clean(value).toLowerCase();
+  if (['simple', 'dumb', 'dumb-down'].includes(normalized)) return 'simple';
+  if (['steps', 'step', 'step_by_step', 'step-by-step'].includes(normalized)) return 'step_by_step';
+  return 'normal';
+}
+
+function msaidiziSourceFiles() {
+  return [
+    path.join(FRONTEND_ROOT, 'index.html'),
+    path.join(FRONTEND_ROOT, 'app.js'),
+    path.join(FRONTEND_ROOT, 'styles.css'),
+    path.join(__dirname, 'server.js')
+  ];
+}
+
+function buildMsaidiziSourceSignature() {
+  const hash = crypto.createHash('sha256');
+  for (const filePath of msaidiziSourceFiles()) {
+    try {
+      const content = fs.readFileSync(filePath);
+      hash.update(content);
+    } catch {
+      hash.update(`missing:${filePath}`);
+    }
+  }
+  return hash.digest('hex').slice(0, 24);
+}
+
+function msaidiziModuleDefinitions(store) {
+  const summary = makeSummary(store);
+  const farmersCount = Number(summary?.farmers) || 0;
+  const purchasedCount = Number(summary?.purchasedRecords) || 0;
+  const owedCount = Number(summary?.owedFarmers) || 0;
+  const sms24h = Number(summary?.smsSentLast24h) || 0;
+
+  return [
+    {
+      id: 'account-setup',
+      title: 'Account Setup & Sign In',
+      panes: ['auth', 'overview'],
+      roles: ['guest', 'farmer', 'agent', 'admin'],
+      keywords: ['sign in', 'login', 'username', 'pin', 'register', 'password', 'account settings'],
+      short:
+        'Use username/password for staff accounts and phone + 4-digit PIN for farmers. Account Settings lets users update photo and password.',
+      steps: [
+        'Open the sign-in page and enter username or phone number.',
+        'Enter password (staff) or 4-digit PIN (farmer) then click Sign In.',
+        'For new farmers, open "New farmer? Register here" and complete all required fields.',
+        'After sign-in, open Account Settings to change password and upload/remove profile photo.'
+      ],
+      troubleshooting: [
+        'If sign-in fails, verify phone format is 2547xxxxxxxx.',
+        'If password reset is needed, use recovery only for Administrator and Agent accounts.',
+        'If farmer cannot sign in, admin can set/reset farmer PIN in Farmers > Portal Access.'
+      ],
+      doNow: ['Keep phone numbers and National ID accurate before first login.'],
+      avoid: ['Do not share passwords, PINs, or recovery codes over unsecured channels.'],
+      waitFor: ['If backend is offline, sign-in and password updates will not complete until API reconnects.']
+    },
+    {
+      id: 'farmer-management',
+      title: 'Farmer Registration & Data Management',
+      panes: ['farmers'],
+      roles: ['agent', 'admin'],
+      keywords: ['farmer', 'register farmer', 'edit farmer', 'bulk import', 'csv', 'excel', 'pin', 'national id', 'area'],
+      short:
+        `Manage farmer records with mandatory identity and area fields. Current live count: ${farmersCount} farmer(s). Admin handles bulk imports and PIN reset tools.`,
+      steps: [
+        'Open Farmers > Register / Edit Farmer.',
+        'Enter full name, phone, location, National ID, language, tree count, total farm area, and avocado area.',
+        'Save to create or update a farmer profile.',
+        'Admin only: use Bulk Import for CSV/Excel and resolve anomalies before final import.',
+        'Admin only: use Portal Access (Set/Reset Farmer PIN) for imported farmers.'
+      ],
+      troubleshooting: [
+        'If avocado area is greater than total farm area, correct area fields before saving.',
+        'If duplicate phone or National ID is detected, decide whether to keep existing data or overwrite.',
+        'If import QA flags errors, fix blocked rows first and re-run Smart QA.'
+      ],
+      doNow: ['Capture National ID and phone consistently because payments and notifications depend on them.'],
+      avoid: ['Do not leave mandatory identity fields blank.'],
+      waitFor: ['SMS onboarding notices send only when SMS service is available and notification option is enabled.']
+    },
+    {
+      id: 'agent-management',
+      title: 'Agent Management (Admin Only)',
+      panes: ['agents'],
+      roles: ['admin'],
+      keywords: ['agent', 'create agent', 'agent phone', 'agent email', 'temporary credentials'],
+      short:
+        'Only administrators can create and manage agent accounts. The system generates temporary username/password for each new agent.',
+      steps: [
+        'Open Agents > Create Agent Account.',
+        'Enter agent full name, email, and phone number.',
+        'Click Create Agent and record the generated temporary credentials securely.',
+        'Ask the new agent to sign in and change password immediately.'
+      ],
+      troubleshooting: [
+        'If account creation fails, verify email and phone formats.',
+        'If credentials are lost, admin should reset the agent password and re-share securely.',
+        'If non-admin role cannot view Agents pane, this is expected role restriction.'
+      ],
+      doNow: ['Collect valid agent phone numbers during registration for communication and approvals.'],
+      avoid: ['Do not create duplicate agent accounts for the same person.'],
+      waitFor: ['Wait for admin approval before giving production-sensitive permissions to new agents.']
+    },
+    {
+      id: 'produce-qc',
+      title: 'Produce QC & Purchase Workflow',
+      panes: ['produce'],
+      roles: ['agent', 'admin'],
+      keywords: ['produce', 'qc', 'dry matter', 'firmness', 'size', 'purchase', 'hass', 'fuerte'],
+      short:
+        `Capture farm-gate avocado QC first, then record purchased produce. Purchased records currently: ${purchasedCount}.`,
+      steps: [
+        'Open Produce > Record Farm-Gate QC and capture variety, weight, sample size, visual grade, dry matter, firmness, average fruit weight, and size code.',
+        'Save QC entry and confirm decision (Accept / Hold / Reject).',
+        'Open Record Purchased Produce for quantities actually bought.',
+        'Link purchase to QC lot when available and enter agreed/contract price per kg.',
+        'Review Purchased Produce Log for audit history.'
+      ],
+      troubleshooting: [
+        'If quality metrics look inconsistent, run AI QC Intelligence to review risk signals.',
+        'If purchase totals do not match expected amount, verify kg and price-per-kg fields.',
+        'If farmer is missing in dropdown, confirm the farmer was registered first.'
+      ],
+      doNow: ['Collect QC values at farm gate before creating payout obligations.'],
+      avoid: ['Do not pay based on unverified or rejected QC lots.'],
+      waitFor: ['Hold payment recommendation until QC decision and purchase records are complete.']
+    },
+    {
+      id: 'payments-settlement',
+      title: 'Payments, Recommendations, and Settlement',
+      panes: ['payments'],
+      roles: ['agent', 'admin'],
+      keywords: ['payment', 'owed', 'mpesa', 'recommend', 'approve', 'reject', 'disbursement'],
+      short:
+        `Agents recommend payments; admins approve/reject and execute payment. Current farmers owed: ${owedCount}.`,
+      steps: [
+        'Agent: open Payments and submit Recommend For Payment with amount and reason.',
+        'Admin: open Agent Payment Recommendations and review pending requests.',
+        'Admin: Approve to proceed with payment logging/disbursement, or Reject with reason.',
+        'Admin: use Farmers Owed filters, select beneficiaries, then process payment batch.',
+        'Monitor Payment Transactions for status, references, and reconciliation.'
+      ],
+      troubleshooting: [
+        'If owed list is blank for agent, this is expected: owed balances are admin-visible only.',
+        'If recommendation cannot be approved, verify farmer exists and amount is valid.',
+        'If payment status is pending/failed, reconcile M-PESA reference and retry policy.'
+      ],
+      doNow: ['Require clear recommendation reasons before admin approval.'],
+      avoid: ['Agents must not execute direct payments.'],
+      waitFor: ['Payment completion depends on successful disbursement and transaction logging.']
+    },
+    {
+      id: 'sms-comms',
+      title: 'SMS Communication & Engagement',
+      panes: ['sms'],
+      roles: ['agent', 'admin'],
+      keywords: ['sms', 'bulk sms', 'select all', 'recipient search', 'kiswahili', 'english', 'sms spend'],
+      short:
+        `Send individual or bulk farmer SMS with recipient search and language support. Last 24h SMS count: ${sms24h}.`,
+      steps: [
+        'Open SMS > Send SMS.',
+        'Choose target mode: Selected Farmers, All Farmers, or Single Number.',
+        'Use recipient search for large lists and select visible rows efficiently.',
+        'Enter message (or generate draft with AI) and send.',
+        'Review SMS log and spend metrics in Reports/Overview.'
+      ],
+      troubleshooting: [
+        'If no recipients appear, refresh farmers data and confirm phone numbers are valid.',
+        'If message is too long, shorten text or generate concise AI draft.',
+        'If SMS delivery log is empty, confirm SMS gateway credentials and service availability.'
+      ],
+      doNow: ['Prefer farmer preferred-language messaging (English/Kiswahili).'],
+      avoid: ['Do not send bulk messages without reviewing recipient filters.'],
+      waitFor: ['Production SMS requires active provider configuration and sufficient balance.']
+    },
+    {
+      id: 'reports-analytics',
+      title: 'Reports, AI Insights, and Monitoring',
+      panes: ['reports'],
+      roles: ['agent', 'admin'],
+      keywords: ['reports', 'kpi', 'copilot', 'risk', 'brief', 'alerts', 'ops tasks', 'knowledge'],
+      short:
+        'Use operational KPIs plus AI cards (Copilot, QC Intelligence, Payment Risk, Briefs) for decision support with approval controls.',
+      steps: [
+        'Open Reports to review KPI cards, readiness narrative, and agent performance.',
+        'Admin: ask Admin Copilot natural language questions.',
+        'Run QC Intelligence and Payment Risk checks for actionable flags.',
+        'Convert high-risk findings into Ops Tasks and track status.',
+        'Maintain AI knowledge docs and feedback to improve response quality.'
+      ],
+      troubleshooting: [
+        'If AI responses fall back to local rules, verify OPENAI_API_KEY and connectivity.',
+        'If insights look outdated, refresh data and rerun report analyses.',
+        'If proposals/tasks are missing, verify role permissions and filters.'
+      ],
+      doNow: ['Use AI outputs as recommendations, then require human approval for sensitive actions.'],
+      avoid: ['Do not treat AI suggestions as auto-executed transactions.'],
+      waitFor: ['Scheduled executive briefs run on configured interval when AI scheduling is enabled.']
+    },
+    {
+      id: 'exports-admin',
+      title: 'Exports, Date Ranges, and Admin Tools',
+      panes: ['exports'],
+      roles: ['admin', 'agent'],
+      keywords: ['export', 'csv', 'excel', 'pdf', 'date range', 'backup', 'reset'],
+      short:
+        'Export operational data by range and format (CSV/Excel/PDF). Admin tools include backups and controlled reset operations.',
+      steps: [
+        'Open Exports and select date range (today, 7 days, month, all, or custom).',
+        'Choose format: CSV, Excel, or PDF.',
+        'Click the dataset button to download farmers, QC, purchases, payments, SMS, or activity logs.',
+        'Admin: use backup snapshot and backup list before any major changes.',
+        'Admin: reset platform data only with confirmed backup and authorization.'
+      ],
+      troubleshooting: [
+        'If export is empty, verify selected range contains records.',
+        'If PDF download is blocked, allow browser downloads/popups for this site.',
+        'If backup list fails, verify backend storage health.'
+      ],
+      doNow: ['Use custom date range for weekly/monthly reconciliation packs.'],
+      avoid: ['Do not run reset without verified backup recovery path.'],
+      waitFor: ['Large exports may take longer on slower connections.']
+    },
+    {
+      id: 'ussd-integration',
+      title: 'USSD & Farmer Phone Access',
+      panes: ['overview', 'sms', 'reports'],
+      roles: ['admin', 'agent', 'farmer'],
+      keywords: ['ussd', '384', '483', 'registration via phone', 'kiswahili', 'english'],
+      short:
+        'USSD supports low-data farmer access via phone menu, with bilingual English/Kiswahili pathways aligned to portal records.',
+      steps: [
+        'Configure provider callback URL and shared code/channel in the SMS/USSD gateway.',
+        'Keep farmer phone and PIN mapping synchronized with portal records.',
+        'Use onboarding SMS to notify farmers how to access USSD.',
+        'Track usage and troubleshoot via provider portal plus AGEM logs.'
+      ],
+      troubleshooting: [
+        'If USSD sessions fail, validate callback URL reachability and shared secret.',
+        'If farmer records do not appear via USSD, verify phone normalization and PIN setup.',
+        'If bilingual prompts mismatch, review preferred-language mappings.'
+      ],
+      doNow: ['Test full USSD registration and payment-status journey in sandbox before production launch.'],
+      avoid: ['Do not expose admin-only actions through USSD menus.'],
+      waitFor: ['Production USSD activation depends on provider approval and billing setup.']
+    },
+    {
+      id: 'security-governance',
+      title: 'Security, Compliance, and Access Control',
+      panes: ['overview', 'reports', 'exports'],
+      roles: ['admin', 'agent'],
+      keywords: ['security', 'audit', 'roles', 'compliance', 'backup', 'approval'],
+      short:
+        'Platform uses role-based permissions, audit logs, approvals, and backups to protect operations and payment integrity.',
+      steps: [
+        'Assign roles by responsibility: farmer, agent, admin.',
+        'Review activity logs and recommendation decisions regularly.',
+        'Rotate credentials and enforce strong passwords for staff.',
+        'Keep backups current and run restore tests on schedule.'
+      ],
+      troubleshooting: [
+        'If unauthorized actions appear, check role assignments and session validity.',
+        'If account recovery is required, use recovery flow only for admin/agent accounts.',
+        'If restore fails, validate backup file integrity and storage backend settings.'
+      ],
+      doNow: ['Keep approval trail complete for payment-related decisions.'],
+      avoid: ['Do not grant admin rights for convenience.'],
+      waitFor: ['Production compliance controls should be verified before hard launch.']
+    }
+  ];
+}
+
+function buildMsaidiziModules(store, sourceSignature) {
+  const now = nowIso();
+  return msaidiziModuleDefinitions(store).map((module) => ({
+    ...module,
+    updatedAt: now,
+    sourceSignature
+  }));
+}
+
+function syncMsaidiziInStore(store, options = {}) {
+  if (!store.aiMsaidizi || typeof store.aiMsaidizi !== 'object') {
+    store.aiMsaidizi = {
+      lastSyncAt: '',
+      sourceSignature: '',
+      status: 'never',
+      modules: [],
+      syncHistory: []
+    };
+  }
+
+  const reason = clean(options.reason) || 'manual';
+  const actor = clean(options.actor) || 'system';
+  const force = Boolean(options.force);
+  const sourceSignature = buildMsaidiziSourceSignature();
+  const existingSignature = clean(store.aiMsaidizi.sourceSignature);
+  const hasModules = Array.isArray(store.aiMsaidizi.modules) && store.aiMsaidizi.modules.length > 0;
+
+  let updated = false;
+  if (force || !hasModules || sourceSignature !== existingSignature) {
+    store.aiMsaidizi.modules = buildMsaidiziModules(store, sourceSignature).slice(0, AI_MSAIDIZI_MODULE_CAP);
+    store.aiMsaidizi.sourceSignature = sourceSignature;
+    store.aiMsaidizi.lastSyncAt = nowIso();
+    store.aiMsaidizi.status = 'ready';
+    updated = true;
+  } else if (!clean(store.aiMsaidizi.lastSyncAt)) {
+    store.aiMsaidizi.lastSyncAt = nowIso();
+  }
+
+  const historyEntry = {
+    at: nowIso(),
+    reason,
+    actor,
+    updated,
+    sourceSignature
+  };
+  store.aiMsaidizi.syncHistory = [historyEntry, ...(store.aiMsaidizi.syncHistory || [])].slice(0, 120);
+
+  return {
+    updated,
+    sourceSignature,
+    modules: Array.isArray(store.aiMsaidizi.modules) ? store.aiMsaidizi.modules : [],
+    status: clean(store.aiMsaidizi.status) || 'ready',
+    lastSyncAt: clean(store.aiMsaidizi.lastSyncAt)
+  };
+}
+
+function msaidiziAccessibleModules(store, role = 'guest') {
+  const modules = Array.isArray(store?.aiMsaidizi?.modules) ? store.aiMsaidizi.modules : [];
+  const normalizedRole = clean(role).toLowerCase() || 'guest';
+  return modules.filter((module) => {
+    const allowedRoles = Array.isArray(module?.roles) ? module.roles.map((row) => clean(row).toLowerCase()) : [];
+    if (!allowedRoles.length) return true;
+    return allowedRoles.includes(normalizedRole) || allowedRoles.includes('all');
+  });
+}
+
+function msaidiziScoreModule(module, queryTokens, pane = '') {
+  const paneKey = clean(pane).toLowerCase();
+  const title = clean(module?.title).toLowerCase();
+  const short = clean(module?.short).toLowerCase();
+  const keywords = Array.isArray(module?.keywords) ? module.keywords.map((row) => clean(row).toLowerCase()) : [];
+  const panes = Array.isArray(module?.panes) ? module.panes.map((row) => clean(row).toLowerCase()) : [];
+
+  let score = 0;
+  if (paneKey && panes.includes(paneKey)) score += 3;
+  if (paneKey && panes.includes('all')) score += 1;
+  for (const token of queryTokens) {
+    if (!token) continue;
+    if (title.includes(token)) score += 4;
+    if (short.includes(token)) score += 2;
+    if (keywords.some((keyword) => keyword.includes(token))) score += 3;
+  }
+  return score;
+}
+
+function findMsaidiziModules(store, query, pane, role, limit = 4) {
+  const modules = msaidiziAccessibleModules(store, role);
+  const queryTokens = tokenizeSearchText(query);
+  const paneKey = clean(pane).toLowerCase();
+
+  const scored = modules
+    .map((module) => ({
+      module,
+      score: msaidiziScoreModule(module, queryTokens, paneKey)
+    }))
+    .filter((row) => row.score > 0 || (!queryTokens.length && paneKey));
+
+  if (scored.length) {
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, Math.min(limit, 8)))
+      .map((row) => row.module);
+  }
+
+  if (paneKey) {
+    const paneMatches = modules.filter((module) =>
+      Array.isArray(module?.panes)
+        ? module.panes.map((row) => clean(row).toLowerCase()).includes(paneKey)
+        : false
+    );
+    if (paneMatches.length) return paneMatches.slice(0, Math.max(1, Math.min(limit, 8)));
+  }
+
+  return modules.slice(0, Math.max(1, Math.min(limit, 8)));
+}
+
+function buildMsaidiziLocalAnswer(modules, mode = 'normal') {
+  const normalizedMode = normalizeMsaidiziMode(mode);
+  const primary = modules[0];
+  if (!primary) {
+    return {
+      answerShort: 'No instruction module matched this request yet. Try asking with page name or action.',
+      steps: [],
+      troubleshoot: ['Open the relevant section first, then ask again with exact action.'],
+      doNow: ['Use plain language, for example: "How do I register a farmer?"'],
+      avoid: [],
+      waitFor: [],
+      relatedModules: []
+    };
+  }
+
+  const answerShort =
+    normalizedMode === 'simple'
+      ? `Simple guide: ${primary.short}`
+      : normalizedMode === 'step_by_step'
+        ? `Step-by-step guide for ${primary.title}.`
+        : primary.short;
+
+  const steps =
+    normalizedMode === 'normal'
+      ? (primary.steps || []).slice(0, 5)
+      : normalizedMode === 'simple'
+        ? (primary.steps || []).slice(0, 4).map((step) => step.replace(/\b(verify|synchronize|reconcile)\b/gi, 'check'))
+        : primary.steps || [];
+
+  const relatedModules = modules.slice(0, 4).map((module) => module.title);
+  return {
+    answerShort,
+    steps,
+    troubleshoot: (primary.troubleshooting || []).slice(0, 6),
+    doNow: (primary.doNow || []).slice(0, 6),
+    avoid: (primary.avoid || []).slice(0, 6),
+    waitFor: (primary.waitFor || []).slice(0, 6),
+    relatedModules
+  };
+}
+
+async function runScheduledMsaidiziSync() {
+  const store = await readStore();
+  const result = syncMsaidiziInStore(store, {
+    reason: 'scheduled',
+    actor: 'system',
+    force: false
+  });
+  if (!result.updated) return result;
+
+  addActivity(store, {
+    actor: 'system',
+    role: 'system',
+    action: 'ai.msaidizi.sync',
+    entity: 'ai',
+    details: `Msaidizi docs auto-synced (signature ${result.sourceSignature}).`
+  });
+  await writeStore(store);
+  return result;
+}
+
+function scheduleMsaidiziSync() {
+  if (msaidiziScheduleHandle) {
+    clearInterval(msaidiziScheduleHandle);
+    msaidiziScheduleHandle = null;
+  }
+  if (!AI_MSAIDIZI_SYNC_ENABLED) return;
+
+  const intervalMs = AI_MSAIDIZI_SYNC_INTERVAL_HOURS * 60 * 60 * 1000;
+  msaidiziScheduleHandle = setInterval(() => {
+    runScheduledMsaidiziSync().catch((error) => {
+      console.error(`[ai] Scheduled Msaidizi sync failed: ${error.message}`);
+    });
+  }, intervalMs);
+  if (typeof msaidiziScheduleHandle.unref === 'function') {
+    msaidiziScheduleHandle.unref();
+  }
 }
 
 function createOpsTask(store, payload = {}) {
@@ -6414,6 +6933,255 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === '/api/ai/msaidizi/status' && req.method === 'GET') {
+    const store = await readStore();
+    const session = currentSession(req, store);
+    const role = clean(session?.role).toLowerCase() || 'guest';
+    const syncResult = syncMsaidiziInStore(store, {
+      reason: 'status',
+      actor: session?.username || 'guest',
+      force: false
+    });
+    if (syncResult.updated) {
+      await writeStore(store);
+    }
+
+    json(res, 200, {
+      data: {
+        enabled: AI_MSAIDIZI_SYNC_ENABLED,
+        intervalHours: AI_MSAIDIZI_SYNC_INTERVAL_HOURS,
+        status: clean(store.aiMsaidizi?.status) || 'ready',
+        lastSyncAt: clean(store.aiMsaidizi?.lastSyncAt),
+        sourceSignature: clean(store.aiMsaidizi?.sourceSignature),
+        moduleCount: msaidiziAccessibleModules(store, role).length
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/ai/msaidizi/sync' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+      const payload = await readBody(req, 80_000);
+      const force = Boolean(payload?.force);
+      const syncResult = syncMsaidiziInStore(store, {
+        reason: clean(payload?.reason) || 'manual',
+        actor: auth.session.username,
+        force
+      });
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'ai.msaidizi.sync',
+        entity: 'ai',
+        details: syncResult.updated
+          ? `Msaidizi synced and regenerated (${syncResult.modules.length} modules).`
+          : 'Msaidizi sync checked. No changes detected.'
+      });
+      await writeStore(store);
+      json(res, 200, {
+        data: {
+          updated: syncResult.updated,
+          status: clean(store.aiMsaidizi?.status) || 'ready',
+          lastSyncAt: clean(store.aiMsaidizi?.lastSyncAt),
+          sourceSignature: clean(store.aiMsaidizi?.sourceSignature),
+          moduleCount: (store.aiMsaidizi?.modules || []).length
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/ai/msaidizi/context' && req.method === 'GET') {
+    const store = await readStore();
+    const session = currentSession(req, store);
+    const role = clean(session?.role).toLowerCase() || clean(reqUrl.searchParams.get('role')).toLowerCase() || 'guest';
+    const pane = clean(reqUrl.searchParams.get('pane')).toLowerCase() || 'auth';
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 4, 10);
+
+    const syncResult = syncMsaidiziInStore(store, {
+      reason: 'context',
+      actor: session?.username || role || 'guest',
+      force: false
+    });
+    if (syncResult.updated) {
+      await writeStore(store);
+    }
+
+    const modules = findMsaidiziModules(store, '', pane, role, limit).map((module) => ({
+      id: module.id,
+      title: module.title,
+      short: module.short,
+      panes: module.panes || [],
+      roles: module.roles || [],
+      steps: Array.isArray(module.steps) ? module.steps.slice(0, 5) : [],
+      doNow: Array.isArray(module.doNow) ? module.doNow.slice(0, 4) : [],
+      avoid: Array.isArray(module.avoid) ? module.avoid.slice(0, 4) : [],
+      waitFor: Array.isArray(module.waitFor) ? module.waitFor.slice(0, 4) : []
+    }));
+
+    json(res, 200, {
+      data: {
+        pane,
+        role,
+        modules,
+        status: clean(store.aiMsaidizi?.status) || 'ready',
+        lastSyncAt: clean(store.aiMsaidizi?.lastSyncAt),
+        sourceSignature: clean(store.aiMsaidizi?.sourceSignature)
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/ai/msaidizi/ask' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const session = currentSession(req, store);
+      const role =
+        clean(session?.role).toLowerCase() ||
+        clean(req.headers['x-role']).toLowerCase() ||
+        clean(reqUrl.searchParams.get('role')).toLowerCase() ||
+        'guest';
+      const payload = await readBody(req, 500_000);
+      const question = clean(payload.question);
+      const pane = clean(payload.pane).toLowerCase() || 'auth';
+      const mode = normalizeMsaidiziMode(payload.mode);
+      const responseId = id('MSA');
+      const syncResult = syncMsaidiziInStore(store, {
+        reason: 'ask',
+        actor: session?.username || role || 'guest',
+        force: false
+      });
+
+      const modules = findMsaidiziModules(store, question, pane, role, 4);
+      let local = buildMsaidiziLocalAnswer(modules, mode);
+      let source = 'local-rules';
+      let model = 'local-rules';
+      let warning = '';
+
+      if (OPENAI_API_KEY) {
+        const moduleContext = modules
+          .map((module, index) => {
+            return `[MODULE-${index + 1}] ${module.title}
+Short: ${module.short}
+Steps: ${(module.steps || []).join(' | ')}
+Troubleshooting: ${(module.troubleshooting || []).join(' | ')}
+Do now: ${(module.doNow || []).join(' | ')}
+Avoid: ${(module.avoid || []).join(' | ')}
+Wait for: ${(module.waitFor || []).join(' | ')}`;
+          })
+          .join('\n\n');
+
+        const openAi = await callOpenAiJson(
+          'You are Msaidizi, the AGEM portal instruction assistant. Explain only from provided module context. Be concise, practical, and step-oriented. If mode is simple, use very plain wording. If mode is step_by_step, provide full ordered steps.',
+          `Mode: ${mode}
+Role: ${role}
+Current page: ${pane}
+Question: ${question || '(no question provided - return the best quick guide for current page)'}
+
+Instruction modules:
+${moduleContext || 'No modules matched.'}`,
+          {
+            type: 'object',
+            additionalProperties: false,
+            required: ['answerShort', 'steps', 'troubleshoot', 'doNow', 'avoid', 'waitFor', 'relatedModules'],
+            properties: {
+              answerShort: { type: 'string' },
+              steps: { type: 'array', maxItems: 10, items: { type: 'string' } },
+              troubleshoot: { type: 'array', maxItems: 8, items: { type: 'string' } },
+              doNow: { type: 'array', maxItems: 8, items: { type: 'string' } },
+              avoid: { type: 'array', maxItems: 8, items: { type: 'string' } },
+              waitFor: { type: 'array', maxItems: 8, items: { type: 'string' } },
+              relatedModules: { type: 'array', maxItems: 6, items: { type: 'string' } }
+            }
+          }
+        );
+
+        if (openAi.ok) {
+          source = 'openai';
+          model = OPENAI_MODEL;
+          local = {
+            answerShort: clean(openAi.data?.answerShort) || local.answerShort,
+            steps: Array.isArray(openAi.data?.steps)
+              ? openAi.data.steps.map((row) => clean(row)).filter(Boolean).slice(0, 10)
+              : local.steps,
+            troubleshoot: Array.isArray(openAi.data?.troubleshoot)
+              ? openAi.data.troubleshoot.map((row) => clean(row)).filter(Boolean).slice(0, 8)
+              : local.troubleshoot,
+            doNow: Array.isArray(openAi.data?.doNow)
+              ? openAi.data.doNow.map((row) => clean(row)).filter(Boolean).slice(0, 8)
+              : local.doNow,
+            avoid: Array.isArray(openAi.data?.avoid)
+              ? openAi.data.avoid.map((row) => clean(row)).filter(Boolean).slice(0, 8)
+              : local.avoid,
+            waitFor: Array.isArray(openAi.data?.waitFor)
+              ? openAi.data.waitFor.map((row) => clean(row)).filter(Boolean).slice(0, 8)
+              : local.waitFor,
+            relatedModules: Array.isArray(openAi.data?.relatedModules)
+              ? openAi.data.relatedModules.map((row) => clean(row)).filter(Boolean).slice(0, 6)
+              : local.relatedModules
+          };
+        } else {
+          warning = openAi.error || 'OpenAI unavailable. Showing local instructions.';
+        }
+      }
+
+      addActivity(store, {
+        actor: session?.username || role || 'guest',
+        role: session?.role || role || 'guest',
+        action: 'ai.msaidizi.ask',
+        entity: 'ai',
+        entityId: responseId,
+        details: `Msaidizi asked from pane "${pane}" (${mode} mode): "${question.slice(0, 120)}"`
+      });
+
+      if (syncResult.updated) {
+        addActivity(store, {
+          actor: session?.username || role || 'guest',
+          role: session?.role || role || 'guest',
+          action: 'ai.msaidizi.sync',
+          entity: 'ai',
+          details: `Msaidizi docs auto-updated before response (signature ${syncResult.sourceSignature}).`
+        });
+      }
+
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          responseId,
+          mode,
+          pane,
+          role,
+          source,
+          model,
+          warning,
+          answer: local,
+          modules: modules.map((module) => ({
+            id: module.id,
+            title: module.title,
+            short: module.short,
+            panes: module.panes || []
+          })),
+          status: clean(store.aiMsaidizi?.status) || 'ready',
+          lastSyncAt: clean(store.aiMsaidizi?.lastSyncAt),
+          sourceSignature: clean(store.aiMsaidizi?.sourceSignature)
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
   if (pathname === '/api/ai/copilot' && req.method === 'POST') {
     try {
       const store = await readStore();
@@ -8483,6 +9251,10 @@ async function handleShutdown(signal) {
       clearInterval(executiveBriefScheduleHandle);
       executiveBriefScheduleHandle = null;
     }
+    if (msaidiziScheduleHandle) {
+      clearInterval(msaidiziScheduleHandle);
+      msaidiziScheduleHandle = null;
+    }
     await shutdownStorage();
   } finally {
     process.exit(0);
@@ -8502,11 +9274,13 @@ async function startServer() {
     pruneOldBackups();
     scheduleAutomaticBackups();
     scheduleExecutiveBriefs();
+    scheduleMsaidiziSync();
+    await runScheduledMsaidiziSync();
 
     server.listen(PORT, HOST, () => {
       console.log(`Agem MVP server running on http://${HOST}:${PORT}`);
       console.log(
-        `[storage] backend=${STORAGE_BACKEND}, backupIntervalHours=${BACKUP_INTERVAL_HOURS}, backupRetentionDays=${BACKUP_RETENTION_DAYS}, aiExecBriefEnabled=${AI_EXEC_BRIEF_ENABLED}, aiExecBriefIntervalHours=${AI_EXEC_BRIEF_INTERVAL_HOURS}`
+        `[storage] backend=${STORAGE_BACKEND}, backupIntervalHours=${BACKUP_INTERVAL_HOURS}, backupRetentionDays=${BACKUP_RETENTION_DAYS}, aiExecBriefEnabled=${AI_EXEC_BRIEF_ENABLED}, aiExecBriefIntervalHours=${AI_EXEC_BRIEF_INTERVAL_HOURS}, msaidiziAutoSync=${AI_MSAIDIZI_SYNC_ENABLED}, msaidiziSyncHours=${AI_MSAIDIZI_SYNC_INTERVAL_HOURS}`
       );
     });
   } catch (error) {
