@@ -75,7 +75,7 @@ async function run() {
   const agentPassword = 'FieldAgent#2026!';
   const agentPasswordUpdated = 'FieldAgent#2026!X2';
   const additionalAgentEmail = 'mary.wanjiku@agemlimited.com';
-  const additionalAgentPhone = '254711223344';
+  const additionalAgentPhone = '254711223355';
   const agentRecoveryCode = 'AgentRecovery#2026';
   const farmerSelfPhone = '254700111222';
   const farmerSelfPin = '1728';
@@ -495,7 +495,7 @@ async function run() {
     await request(baseUrl, '/api/auth/login', {
       method: 'POST',
       body: { phone: peter.phone, pin: '3728' },
-      expectStatus: 401
+      expectStatus: 403
     });
 
     await request(baseUrl, `/api/farmers/${encodeURIComponent(peter.id)}/reset-pin`, {
@@ -1243,6 +1243,17 @@ async function run() {
     assert.ok(Number(summary.data.totalPurchasedKg) > 120, 'Expected purchased produce kg in summary');
     assert.ok(Number(summary.data.totalOwedKes || 0) >= 0, 'Expected owed balance metric to be non-negative');
 
+    await request(baseUrl, '/api/auth/activate-farmer-access', {
+      method: 'POST',
+      body: {
+        phone: '254711223344',
+        nationalId: '87654321',
+        pin: '2468',
+        confirmPin: '2468'
+      },
+      expectStatus: 200
+    });
+
     const ussdUnauthorized = await request(baseUrl, '/api/ussd/callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1293,7 +1304,25 @@ async function run() {
       expectStatus: 200
     });
     assert.ok(ussdEnglishMenu.startsWith('CON '), 'USSD English menu should keep session open');
-    assert.ok(ussdEnglishMenu.includes('1. Payment Status'), 'USSD English menu missing payment option');
+    assert.ok(ussdEnglishMenu.includes('Enter your 4-digit PIN'), 'USSD English flow should prompt for PIN');
+
+    const ussdMainMenu = await request(baseUrl, '/api/ussd/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'x-ussd-secret': ussdSecret
+      },
+      bodyRaw: new URLSearchParams({
+        sessionId: 'sess-main-menu',
+        serviceCode: ussdCode,
+        phoneNumber: '254711223344',
+        text: '1*2468'
+      }).toString(),
+      responseType: 'text',
+      expectStatus: 200
+    });
+    assert.ok(ussdMainMenu.startsWith('CON '), 'USSD menu should stay open after PIN');
+    assert.ok(ussdMainMenu.includes('1. Payment Status'), 'USSD English menu missing payment option');
 
     await request(baseUrl, `/api/ussd/events?secret=${encodeURIComponent(ussdSecret)}`, {
       method: 'POST',
@@ -1317,7 +1346,7 @@ async function run() {
         sessionId: 'sess-pay',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '1*1'
+        text: '1*2468*1'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
@@ -1335,7 +1364,7 @@ async function run() {
         sessionId: 'sess-qc',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '1*2'
+        text: '1*2468*2'
       }).toString(),
       responseType: 'text',
       expectStatus: 200
@@ -1353,7 +1382,7 @@ async function run() {
         sessionId: 'sess-profile',
         serviceCode: ussdCode,
         phoneNumber: '254711223344',
-        text: '1*3'
+        text: '1*2468*3'
       }).toString(),
       responseType: 'text',
       expectStatus: 200

@@ -121,6 +121,13 @@ const elements = {
   registerPin: document.getElementById('registerPin'),
   registerConfirmPin: document.getElementById('registerConfirmPin'),
   registerMsg: document.getElementById('registerMsg'),
+  activationPanel: document.getElementById('activationPanel'),
+  activateFarmerForm: document.getElementById('activateFarmerForm'),
+  activatePhone: document.getElementById('activatePhone'),
+  activateNationalId: document.getElementById('activateNationalId'),
+  activatePin: document.getElementById('activatePin'),
+  activateConfirmPin: document.getElementById('activateConfirmPin'),
+  activateFarmerMsg: document.getElementById('activateFarmerMsg'),
   changePasswordForm: document.getElementById('changePasswordForm'),
   currentPassword: document.getElementById('currentPassword'),
   newPassword: document.getElementById('newPassword'),
@@ -903,6 +910,15 @@ function bindAuth() {
       await fetchAllData();
       updatePermissionUi();
     } catch (error) {
+      if (error.code === 'activation_required') {
+        if (elements.activationPanel) {
+          elements.activationPanel.hidden = false;
+          elements.activationPanel.open = true;
+        }
+        if (elements.activatePhone && !elements.activatePhone.value.trim()) {
+          elements.activatePhone.value = identity;
+        }
+      }
       elements.authMsg.textContent = error.message;
     }
   });
@@ -1010,6 +1026,66 @@ function bindAuth() {
       elements.authMsg.textContent = `Welcome ${response.data.user.name}. Your account is active.`;
     } catch (error) {
       elements.registerMsg.textContent = error.message;
+    }
+  });
+
+  elements.activateFarmerForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    clearMessages();
+
+    if (!API.enabled) {
+      elements.activateFarmerMsg.textContent = 'Activation requires backend mode.';
+      return;
+    }
+    if (isAuthenticated()) {
+      elements.activateFarmerMsg.textContent = 'Sign out first if you want to activate imported farmer access.';
+      return;
+    }
+
+    const phone = cleanPhone(elements.activatePhone?.value || '');
+    const nationalId = String(elements.activateNationalId?.value || '').trim();
+    const pin = String(elements.activatePin?.value || '').trim();
+    const confirmPin = String(elements.activateConfirmPin?.value || '').trim();
+
+    if (!phone || !nationalId || !pin || !confirmPin) {
+      elements.activateFarmerMsg.textContent = 'Phone, National ID, PIN, and PIN confirmation are required.';
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      elements.activateFarmerMsg.textContent = 'PIN must be exactly 4 digits.';
+      return;
+    }
+    if (pin !== confirmPin) {
+      elements.activateFarmerMsg.textContent = 'PIN confirmation does not match.';
+      return;
+    }
+
+    try {
+      const response = await apiRequest('/api/auth/activate-farmer-access', {
+        method: 'POST',
+        auth: false,
+        body: { phone, nationalId, pin, confirmPin }
+      });
+
+      state.auth = {
+        token: response.data.token,
+        user: response.data.user,
+        expiresAt: response.data.expiresAt
+      };
+      state.role = response.data.user.role;
+      syncCurrentUserPhotoFromState();
+      persist();
+
+      elements.activateFarmerForm.reset();
+      if (elements.activationPanel) elements.activationPanel.open = false;
+      updateAuthUi();
+      setActivePane('overview', true);
+      await fetchAllData();
+      updatePermissionUi();
+
+      elements.authMsg.textContent = `Access activated for ${response.data.user.name}.`;
+    } catch (error) {
+      elements.activateFarmerMsg.textContent = error.message;
     }
   });
 
@@ -1159,6 +1235,7 @@ function bindAuth() {
     state.agents = [];
     clearAgentCredentialDisplay();
     elements.registrationPanel.open = false;
+    if (elements.activationPanel) elements.activationPanel.open = false;
     elements.recoveryPanel.open = false;
 
     updateAuthUi();
@@ -5760,7 +5837,10 @@ async function apiRequest(path, options = {}) {
         updateAuthUi();
         updatePermissionUi();
       }
-      throw new Error(payload.error || `Request failed (${response.status})`);
+      const requestError = new Error(payload.error || `Request failed (${response.status})`);
+      requestError.status = response.status;
+      if (payload && payload.code) requestError.code = payload.code;
+      throw requestError;
     }
 
     return payload;
@@ -5786,6 +5866,10 @@ function updateAuthUi() {
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
     elements.registrationPanel.hidden = false;
+    if (elements.activationPanel) {
+      elements.activationPanel.hidden = true;
+      elements.activationPanel.open = false;
+    }
     elements.changePasswordForm.hidden = false;
     elements.changePasswordForm.style.display = 'grid';
     elements.logoutBtn.hidden = false;
@@ -5795,6 +5879,7 @@ function updateAuthUi() {
     elements.roleSelect.value = state.auth.user.role;
     state.role = state.auth.user.role;
     elements.registrationPanel.open = false;
+    if (elements.activationPanel) elements.activationPanel.open = false;
     elements.recoveryPanel.open = false;
   } else {
     elements.authShell.hidden = false;
@@ -5813,6 +5898,9 @@ function updateAuthUi() {
     elements.loginForm.hidden = false;
     elements.loginForm.style.display = 'grid';
     elements.registrationPanel.hidden = false;
+    if (elements.activationPanel) {
+      elements.activationPanel.hidden = false;
+    }
     elements.changePasswordForm.hidden = true;
     elements.changePasswordForm.style.display = 'none';
     elements.logoutBtn.hidden = true;
@@ -8025,6 +8113,7 @@ function clearMessages() {
   if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = '';
   elements.authMsg.textContent = '';
   elements.registerMsg.textContent = '';
+  if (elements.activateFarmerMsg) elements.activateFarmerMsg.textContent = '';
   elements.changePasswordMsg.textContent = '';
   elements.recoveryMsg.textContent = '';
   elements.farmerMsg.textContent = '';
