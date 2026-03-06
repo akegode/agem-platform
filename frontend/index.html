@@ -73,6 +73,19 @@
           <div class="success" id="registerMsg"></div>
         </details>
 
+        <details class="recovery" id="activationPanel">
+          <summary>Imported farmer? Activate access</summary>
+          <form id="activateFarmerForm" class="auth-form recovery-form">
+            <input id="activatePhone" placeholder="Phone (e.g. 2547xxxxxxx)">
+            <input id="activateNationalId" placeholder="National ID number">
+            <input id="activatePin" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="Choose 4-digit PIN">
+            <input id="activateConfirmPin" type="password" inputmode="numeric" minlength="4" maxlength="4" pattern="[0-9]{4}" placeholder="Confirm 4-digit PIN">
+            <p class="meta compact">After activation, use your phone + PIN on USSD, web, smartphone, tablet, or computer.</p>
+            <button class="primary" type="submit">Activate Access</button>
+          </form>
+          <div class="success" id="activateFarmerMsg"></div>
+        </details>
+
         <details class="recovery" id="recoveryPanel">
           <summary>Forgot username or password?</summary>
           <form id="recoveryForm" class="auth-form recovery-form">
@@ -272,7 +285,7 @@
                     disabled
                   ></textarea>
                   <p class="meta compact">Leave blank to auto-send in each farmer's preferred language (English/Kiswahili).</p>
-                  <p class="meta compact">Template placeholders: {{name}}, {{phone}}, {{nationalId}}, {{location}}, {{ussd}}, {{portal}}</p>
+                  <p class="meta compact">Template placeholders: {{name}}, {{phone}}, {{nationalId}}, {{location}}, {{ussd}}, {{portal}}, {{portalUrl}}</p>
                   <div class="inline-actions">
                     <button class="secondary" id="farmerImportQaBtn" type="button">Run Smart QA</button>
                     <button class="secondary" id="farmerImportBtn" type="submit">Import Farmers</button>
