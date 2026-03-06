@@ -20,9 +20,9 @@ const MIN_PASSWORD_LENGTH = 10;
 const FARMER_PIN_PATTERN = /^\d{4}$/;
 const DEFAULT_LANGUAGE = 'en';
 const IMPORT_ONBOARDING_SMS_DEFAULT_EN =
-  'Agem Portal: Hello {{name}}. You are now registered in the AGEM farmer system. Use USSD {{ussd}} (once active) for farmer services.';
+  'Agem Portal: Hello {{name}}. Your farmer profile is ready. Activate full access now: open {{portalUrl}} (or dial {{ussd}} when live), choose "Imported farmer? Activate access", enter phone {{phone}} + National ID {{nationalId}}, then set and confirm a 4-digit PIN. After activation, use phone + PIN on USSD, web, smartphone, tablet, and computer.';
 const IMPORT_ONBOARDING_SMS_DEFAULT_SW =
-  'Agem Portal: Habari {{name}}. Umesajiliwa kwenye mfumo wa wakulima wa AGEM. Tumia USSD {{ussd}} (ukishawashwa) kupata huduma.';
+  'Agem Portal: Habari {{name}}. Wasifu wako wa mkulima uko tayari. Washa huduma kamili sasa: fungua {{portalUrl}} (au piga {{ussd}} ikiwashwa), chagua "Imported farmer? Activate access", weka simu {{phone}} + Kitambulisho {{nationalId}}, kisha tengeneza na thibitisha PIN ya tarakimu 4. Baada ya hapo tumia simu + PIN kwa USSD, web, smartphone, tablet, au computer.';
 const IMPORT_ONBOARDING_SMS_MAX_LENGTH = 500;
 
 function envValue(key) {
@@ -76,6 +76,7 @@ const SYNC_PASSWORDS_FROM_ENV = envValue('SYNC_PASSWORDS_FROM_ENV') === 'true';
 const USSD_ENABLED = envValue('USSD_ENABLED') !== 'false';
 const USSD_CODE = envValue('USSD_CODE') || '*483#';
 const USSD_HELP_PHONE = envValue('USSD_HELP_PHONE') || '+254700000000';
+const PORTAL_URL = envValue('PORTAL_URL') || 'https://portal.agemlimited.com';
 const USSD_SHARED_SECRET = process.env.USSD_SHARED_SECRET || '';
 const SMS_OWNER_COST_PER_MESSAGE_KES = (() => {
   const raw = envValue('SMS_OWNER_COST_PER_MESSAGE_KES');
@@ -2036,7 +2037,8 @@ function renderImportOnboardingSms(template, farmer) {
     nationalId: clean(farmer?.nationalId),
     location: clean(farmer?.location),
     ussd: USSD_CODE,
-    portal: 'Agem Portal'
+    portal: 'Agem Portal',
+    portalUrl: PORTAL_URL
   };
 
   const rendered = rawTemplate.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] || '');
@@ -2958,6 +2960,50 @@ function ussdRegistrationPrompt(lang, stepNumber) {
   if (stepNumber === 5) return 'Registration (Step 5/7)\nEnter area under avocado in acres:';
   if (stepNumber === 6) return 'Registration (Step 6/7)\nSet a 4-digit PIN:';
   return 'Registration (Step 7/7)\nConfirm your 4-digit PIN:';
+}
+
+function ussdPortalActivationMenu(lang = DEFAULT_LANGUAGE) {
+  if (languageOrDefault(lang) === 'sw') {
+    return [
+      'Agem Portal',
+      'Akaunti ya portal haijawashwa bado.',
+      '1. Washa akaunti (Kitambulisho + PIN)',
+      '2. Msaada'
+    ].join('\n');
+  }
+  return [
+    'Agem Portal',
+    'Portal access is not active yet.',
+    '1. Activate account (National ID + PIN)',
+    '2. Help'
+  ].join('\n');
+}
+
+function ussdPortalActivationPrompt(lang, stepNumber) {
+  if (languageOrDefault(lang) === 'sw') {
+    if (stepNumber === 1) return 'Kuwasha Akaunti (Hatua 1/3)\nWeka nambari ya kitambulisho:';
+    if (stepNumber === 2) return 'Kuwasha Akaunti (Hatua 2/3)\nWeka PIN ya namba 4:';
+    return 'Kuwasha Akaunti (Hatua 3/3)\nRudia PIN ya namba 4 kuthibitisha:';
+  }
+  if (stepNumber === 1) return 'Activate Access (Step 1/3)\nEnter your National ID number:';
+  if (stepNumber === 2) return 'Activate Access (Step 2/3)\nSet a 4-digit PIN:';
+  return 'Activate Access (Step 3/3)\nConfirm your 4-digit PIN:';
+}
+
+function ussdPinPrompt(lang = DEFAULT_LANGUAGE) {
+  return inLanguage(
+    lang,
+    'Agem Portal\nEnter your 4-digit PIN to continue:',
+    'Agem Portal\nWeka PIN yako ya namba 4 kuendelea:'
+  );
+}
+
+function ussdActivationCompleteMessage(lang = DEFAULT_LANGUAGE) {
+  return inLanguage(
+    lang,
+    `Access activated.\nUse your phone number + PIN on USSD, web, smartphone, tablet, or computer.\nDial ${USSD_CODE} again to continue.`,
+    `Akaunti imewashwa.\nTumia nambari yako ya simu + PIN kwa USSD, web, smartphone, tablet, au computer.\nPiga ${USSD_CODE} tena kuendelea.`
+  );
 }
 
 function ussdRegistrationSmsMessage(farmer, lang = DEFAULT_LANGUAGE) {
@@ -4574,12 +4620,137 @@ const server = http.createServer(async (req, res) => {
         await writeStore(store);
       }
 
+      const farmerPortalUser = resolveFarmerPortalUser(store, farmer);
+      if (!farmerPortalUser || farmerPortalUser.status !== 'active') {
+        if (!menuParts.length) {
+          ussdReply(res, ussdPortalActivationMenu(lang), false);
+          return;
+        }
+
+        const option = menuParts[0] || '';
+        if (option === '2') {
+          ussdReply(res, ussdHelpMessage(lang), true);
+          return;
+        }
+        if (option !== '1') {
+          ussdReply(
+            res,
+            `${inLanguage(lang, 'Invalid option.', 'Chaguo si sahihi.')}\n${ussdPortalActivationMenu(lang)}`,
+            false
+          );
+          return;
+        }
+
+        const activationValues = menuParts.slice(1);
+        if (!activationValues.length) {
+          ussdReply(res, ussdPortalActivationPrompt(lang, 1), false);
+          return;
+        }
+
+        const nationalId = cleanNationalId(activationValues[0]);
+        if (!secureEquals(normalizedNationalId(nationalId), normalizedNationalId(farmer.nationalId))) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `National ID does not match this phone number.\nSupport: ${USSD_HELP_PHONE}`,
+              `Kitambulisho hakilingani na nambari hii ya simu.\nMsaada: ${USSD_HELP_PHONE}`
+            ),
+            true
+          );
+          return;
+        }
+        if (activationValues.length === 1) {
+          ussdReply(res, ussdPortalActivationPrompt(lang, 2), false);
+          return;
+        }
+
+        const pin = String(activationValues[1] || '').trim();
+        const invalidPin = validateFarmerPin(pin);
+        if (invalidPin) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `${invalidPin} Please dial again and restart activation.`,
+              'PIN lazima iwe namba 4. Tafadhali piga tena kuanza upya kuwasha akaunti.'
+            ),
+            true
+          );
+          return;
+        }
+        if (activationValues.length === 2) {
+          ussdReply(res, ussdPortalActivationPrompt(lang, 3), false);
+          return;
+        }
+
+        const confirmPin = String(activationValues[2] || '').trim();
+        if (!secureEquals(pin, confirmPin)) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              'PIN confirmation does not match. Please dial again and restart activation.',
+              'Uthibitisho wa PIN haulingani. Tafadhali piga tena kuanza upya kuwasha akaunti.'
+            ),
+            true
+          );
+          return;
+        }
+
+        const upsertResult = ensureFarmerPortalUser(store, farmer, pin);
+        if (upsertResult.error) {
+          ussdReply(
+            res,
+            inLanguage(
+              lang,
+              `Activation failed: ${upsertResult.error}`,
+              `Kuwasha akaunti hakukufaulu: ${upsertResult.error}`
+            ),
+            true
+          );
+          return;
+        }
+
+        addActivity(store, {
+          actor: farmer.phone || 'ussd',
+          role: 'farmer',
+          action: 'auth.activate_ussd',
+          entity: 'user',
+          entityId: upsertResult.user.id,
+          details: `USSD portal activation ${upsertResult.created ? 'created' : 'updated'} farmer access for ${farmer.name}`
+        });
+        await writeStore(store);
+        ussdReply(res, ussdActivationCompleteMessage(lang), true);
+        return;
+      }
+
       if (!menuParts.length) {
+        ussdReply(res, ussdPinPrompt(lang), false);
+        return;
+      }
+
+      const enteredPin = String(menuParts[0] || '').trim();
+      const invalidEnteredPin = validateFarmerPin(enteredPin);
+      if (invalidEnteredPin || !verifyPassword(enteredPin, farmerPortalUser.password)) {
+        ussdReply(
+          res,
+          inLanguage(
+            lang,
+            'Invalid PIN. Please dial again and enter your correct 4-digit PIN.',
+            'PIN si sahihi. Tafadhali piga tena na uweke PIN yako sahihi ya namba 4.'
+          ),
+          true
+        );
+        return;
+      }
+
+      if (menuParts.length === 1) {
         ussdReply(res, ussdMainMenu(lang), false);
         return;
       }
 
-      const option = menuParts[0] || '';
+      const option = menuParts[1] || '';
       if (option === '1') {
         ussdReply(res, ussdPaymentMessage(store, farmer, lang), true);
         return;
@@ -4671,6 +4842,21 @@ const server = http.createServer(async (req, res) => {
 
       const user = findUserByUsername(store, username) || findUserByPhone(store, phone);
       if (!user || user.status !== 'active' || !verifyPassword(secret, user.password)) {
+        if ((!user || user.role === 'farmer') && phone) {
+          const farmerByPhone = findFarmerByPhoneNormalized(store.farmers, phone);
+          if (farmerByPhone) {
+            const farmerPortalUser = resolveFarmerPortalUser(store, farmerByPhone);
+            if (!farmerPortalUser || farmerPortalUser.status !== 'active') {
+              json(res, 403, {
+                error:
+                  `This farmer profile has not activated portal access yet. ` +
+                  `Open ${PORTAL_URL}, choose "Imported farmer? Activate access", then confirm National ID and set your 4-digit PIN.`,
+                code: 'activation_required'
+              });
+              return;
+            }
+          }
+        }
         json(res, 401, { error: 'Invalid username/phone or password/PIN' });
         return;
       }
@@ -4702,6 +4888,93 @@ const server = http.createServer(async (req, res) => {
         data: {
           token,
           expiresAt,
+          user: {
+            id: user.id,
+            username: user.username,
+            phone: user.phone || '',
+            role: user.role,
+            name: user.name
+          }
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/auth/activate-farmer-access' && req.method === 'POST') {
+    try {
+      const payload = await readBody(req);
+      const phone = normalizePhone(payload.phone || payload.username);
+      const nationalId = cleanNationalId(payload.nationalId);
+      const pin = String(payload.pin || '').trim();
+      const confirmPin = payload.confirmPin === undefined ? pin : String(payload.confirmPin || '').trim();
+
+      if (!phone || !nationalId || !pin || !confirmPin) {
+        json(res, 422, { error: 'phone, nationalId, pin, and confirmPin are required.' });
+        return;
+      }
+
+      const invalidPin = validateFarmerPin(pin);
+      if (invalidPin) {
+        json(res, 422, { error: invalidPin });
+        return;
+      }
+      if (!secureEquals(pin, confirmPin)) {
+        json(res, 422, { error: 'PIN confirmation does not match.' });
+        return;
+      }
+
+      const store = await readStore();
+      const farmer = findFarmerByPhoneNormalized(store.farmers, phone);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer profile not found for this phone number.' });
+        return;
+      }
+      if (!secureEquals(normalizedNationalId(nationalId), normalizedNationalId(farmer.nationalId))) {
+        json(res, 401, { error: 'National ID does not match this phone number.' });
+        return;
+      }
+
+      const upsertResult = ensureFarmerPortalUser(store, farmer, pin);
+      if (upsertResult.error) {
+        json(res, 409, { error: upsertResult.error });
+        return;
+      }
+
+      const user = upsertResult.user;
+      const token = randomToken();
+      const createdAt = nowIso();
+      const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+
+      store.sessions[token] = {
+        userId: user.id,
+        username: user.username,
+        phone: user.phone || '',
+        role: user.role,
+        name: user.name,
+        createdAt,
+        expiresAt
+      };
+
+      addActivity(store, {
+        actor: user.username,
+        role: user.role,
+        action: 'auth.activate_farmer_access',
+        entity: 'user',
+        entityId: user.id,
+        details:
+          `Farmer portal access ${upsertResult.created ? 'created' : 'updated'} for ${farmer.name} via phone/National ID activation`
+      });
+
+      await writeStore(store);
+      json(res, 200, {
+        data: {
+          token,
+          expiresAt,
+          accountCreated: upsertResult.created,
+          farmerId: farmer.id,
           user: {
             id: user.id,
             username: user.username,
