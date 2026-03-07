@@ -626,6 +626,298 @@ async function run() {
     });
     assert.ok(purchaseResponse.data.id, 'Produce purchase ID missing');
 
+    await request(baseUrl, '/api/payments/lipa-mkulima/pricing-rules', {
+      token: agentToken,
+      expectStatus: 403
+    });
+
+    const gracePayeeVerified = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/farmers/${encodeURIComponent(farmerId)}/verify-payee`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: { verified: true },
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(gracePayeeVerified.data.verifiedPayee, true, 'Grace should be marked as verified payee');
+    assert.ok(gracePayeeVerified.data.verificationDate, 'Grace verification date should be recorded');
+
+    const phoneChangeRequest = await request(baseUrl, '/api/payments/lipa-mkulima/phone-change-requests', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        farmerId: alice.id,
+        newPhone: '254700222333',
+        reason: 'Customer requested migration to dedicated payout line.'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(phoneChangeRequest.data.status, 'pending', 'Phone change request should start pending');
+
+    const approvePhoneChange = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/phone-change-requests/${encodeURIComponent(phoneChangeRequest.data.id)}/approve`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {},
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(
+      approvePhoneChange.data.farmer.phone,
+      '254700222333',
+      'Approved phone change should update farmer phone'
+    );
+    assert.strictEqual(
+      approvePhoneChange.data.farmer.verifiedPayee,
+      false,
+      'Phone changes should force payee re-verification'
+    );
+    assert.ok(
+      Array.isArray(approvePhoneChange.data.farmer.phoneHistory) &&
+        approvePhoneChange.data.farmer.phoneHistory.length >= 1,
+      'Approved phone changes should create phone history'
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const lipaProducePeter = await request(baseUrl, '/api/produce', {
+      method: 'POST',
+      token: agentToken,
+      body: {
+        farmerId: updatedPeter.id,
+        kgs: 64.2,
+        lotWeightKgs: 64.2,
+        deliveryDate: today,
+        crop: 'Hass',
+        receivingSite: 'Muranga Central',
+        variety: 'Hass',
+        sampleSize: 12,
+        visualGrade: 'Borderline',
+        dryMatterPct: 22.1,
+        firmnessValue: 66.5,
+        firmnessUnit: 'N',
+        avgFruitWeightG: 228.4,
+        sizeCode: 'C22',
+        qcDecision: 'Accept',
+        inspector: 'Agent Jane',
+        notes: 'Lipa Mkulima payout test lot'
+      },
+      expectStatus: 201
+    });
+    assert.ok(lipaProducePeter.data.id, 'Expected payout delivery for Peter');
+
+    const pricingRuleA = await request(baseUrl, '/api/payments/lipa-mkulima/pricing-rules', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Muranga Hass Grade A March',
+        crop: 'Hass',
+        grade: 'A',
+        pricePerKg: 175.5,
+        currency: 'KES',
+        effectiveFrom: today,
+        effectiveTo: today,
+        location: 'Muranga Central'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(pricingRuleA.data.grade, 'A');
+
+    const pricingRuleB = await request(baseUrl, '/api/payments/lipa-mkulima/pricing-rules', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Muranga Hass Grade B March',
+        crop: 'Hass',
+        grade: 'B',
+        pricePerKg: 120,
+        currency: 'KES',
+        effectiveFrom: today,
+        effectiveTo: today,
+        location: 'Muranga Central'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(pricingRuleB.data.grade, 'B');
+
+    const bankProfile = await request(baseUrl, '/api/payments/lipa-mkulima/bank-profiles', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        name: 'Absa Bank to M-PESA Upload',
+        bankName: 'Absa',
+        delimiter: ';',
+        encoding: 'utf8',
+        templateFileName: 'absa-template.csv',
+        columns: [
+          { header: 'Beneficiary Name', source: 'beneficiary_name' },
+          { header: 'Beneficiary Phone', source: 'beneficiary_phone' },
+          { header: 'Net Amount', source: 'net_amount' },
+          { header: 'Reference', source: 'reference' },
+          { header: 'Narration', source: 'narration' },
+          { header: 'National ID', source: 'national_id' },
+          { header: 'Channel', constant: 'M-PESA' }
+        ]
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(bankProfile.data.bankName, 'Absa');
+    assert.strictEqual(bankProfile.data.delimiter, ';');
+
+    const lipaPreview = await request(baseUrl, '/api/payments/lipa-mkulima/calculate', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        periodStart: today,
+        periodEnd: today,
+        crop: 'Hass',
+        receivingSite: 'Muranga Central',
+        pricingMode: 'contract_grade',
+        bankProfileId: bankProfile.data.id,
+        defaultNarration: 'Muranga payout batch'
+      },
+      expectStatus: 200
+    });
+    assert.ok(Array.isArray(lipaPreview.data.lines), 'Expected payout preview lines');
+    assert.ok(lipaPreview.data.lines.length >= 1, 'Expected at least one payout preview line');
+    assert.ok(
+      (lipaPreview.data.lines || []).some((line) => line.farmerId === updatedPeter.id),
+      'Expected Peter in payout preview'
+    );
+
+    const lipaBatch = await request(baseUrl, '/api/payments/lipa-mkulima/batches', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        periodStart: today,
+        periodEnd: today,
+        crop: 'Hass',
+        receivingSite: 'Muranga Central',
+        pricingMode: 'contract_grade',
+        bankProfileId: bankProfile.data.id,
+        defaultNarration: 'Muranga payout batch'
+      },
+      expectStatus: 201
+    });
+    assert.strictEqual(lipaBatch.data.status, 'Draft');
+    assert.ok(lipaBatch.data.lines.length >= 1, 'Expected payout batch lines');
+
+    const reviewedBatch = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/review`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {},
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(reviewedBatch.data.status, 'Reviewed');
+    assert.ok(reviewedBatch.data.reviewedAt, 'Reviewed batch should include reviewedAt');
+
+    const approvedBatch = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/approve`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {},
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(approvedBatch.data.status, 'Approved');
+
+    await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/export-preview`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {
+          bankProfileId: bankProfile.data.id
+        },
+        expectStatus: 422
+      }
+    );
+
+    const exportPreview = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/export-preview`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {
+          bankProfileId: bankProfile.data.id,
+          allowUnverifiedOverride: true,
+          overrideReason: 'Admin override after off-platform payee confirmation.'
+        },
+        expectStatus: 200
+      }
+    );
+    assert.ok(Array.isArray(exportPreview.data.rows), 'Expected export preview rows');
+    assert.ok(exportPreview.data.rows.length >= 1, 'Expected at least one export preview row');
+
+    const exportedBatch = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/export`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {
+          bankProfileId: bankProfile.data.id,
+          allowUnverifiedOverride: true,
+          overrideReason: 'Admin override after off-platform payee confirmation.'
+        },
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(exportedBatch.data.encoding, 'utf8');
+    assert.ok(exportedBatch.data.csvText.includes(';'), 'Expected semicolon-delimited CSV export');
+    assert.ok(exportedBatch.data.csvText.includes('Beneficiary Name'), 'Expected export headers');
+    assert.strictEqual(exportedBatch.data.alreadyExported, false, 'First export should not be idempotent warning');
+
+    const exportedBatchAgain = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}/export`,
+      {
+        method: 'POST',
+        token: adminToken,
+        body: {
+          bankProfileId: bankProfile.data.id,
+          allowUnverifiedOverride: true,
+          overrideReason: 'Admin override after off-platform payee confirmation.'
+        },
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(exportedBatchAgain.data.alreadyExported, true, 'Second export should warn as repeat export');
+    assert.strictEqual(
+      exportedBatchAgain.data.fileHash,
+      exportedBatch.data.fileHash,
+      'Repeat exports should generate the same file hash'
+    );
+    assert.strictEqual(
+      exportedBatchAgain.data.csvText,
+      exportedBatch.data.csvText,
+      'Repeat exports should keep the same deterministic references and file content'
+    );
+
+    const storedBatch = await request(
+      baseUrl,
+      `/api/payments/lipa-mkulima/batches/${encodeURIComponent(lipaBatch.data.id)}`,
+      {
+        token: adminToken,
+        expectStatus: 200
+      }
+    );
+    assert.strictEqual(storedBatch.data.status, 'Exported');
+    assert.strictEqual(storedBatch.data.exportCount, 2, 'Repeat export should increment export count');
+    assert.ok(Array.isArray(storedBatch.data.exportHistory) && storedBatch.data.exportHistory.length >= 2);
+
     const owedBefore = await request(baseUrl, '/api/payments/owed?period=all', {
       token: adminToken,
       expectStatus: 200
@@ -1226,7 +1518,7 @@ async function run() {
       expectStatus: 200
     });
     assert.strictEqual(summary.data.farmers, 4);
-    assert.strictEqual(summary.data.produceRecords, 1);
+    assert.ok(Number(summary.data.produceRecords || 0) >= 2, 'Expected at least two produce records');
     assert.ok(Number(summary.data.purchasedRecords || 0) >= 2, 'Expected at least two purchase records');
     assert.ok(Number(summary.data.paymentRecords || 0) >= 4, 'Expected recommendation approval to add payment record');
     assert.ok(Number(summary.data.smsSent || 0) >= 10, 'Expected recommendation SMS notifications in summary totals');

@@ -500,6 +500,137 @@
         <section class="pane" id="payments">
           <h2>Payments & M-PESA</h2>
           <div class="grid">
+            <details class="dropdown-card" id="lipaMkulimaCard" open>
+              <summary>Lipa Mkulima (Admin Only)</summary>
+              <div class="dropdown-body">
+                <p class="meta compact">Generate bank-to-M-PESA bulk upload files from delivery records, pricing rules, and verified farmer payee controls.</p>
+
+                <section class="lipa-section">
+                  <div class="section-head">
+                    <h3>Payee Controls</h3>
+                    <p class="meta compact">Verify payees and manage approved phone changes before export.</p>
+                  </div>
+                  <div class="row">
+                    <select id="lipaPayeeFarmer"></select>
+                    <button class="secondary" id="lipaVerifyPayeeBtn" type="button">Verify Payee</button>
+                    <button class="secondary" id="lipaUnverifyPayeeBtn" type="button">Clear Verification</button>
+                  </div>
+                  <div class="row">
+                    <select id="lipaPhoneChangeFarmer"></select>
+                    <input id="lipaPhoneChangePhone" placeholder="New phone (2547XXXXXXXX)">
+                  </div>
+                  <div class="row">
+                    <input id="lipaPhoneChangeReason" placeholder="Reason for phone change approval workflow">
+                    <button class="secondary" id="lipaPhoneChangeBtn" type="button">Request Phone Change</button>
+                  </div>
+                  <div class="success" id="lipaPayeeMsg"></div>
+                  <div id="lipaPhoneChangeWrap" class="empty">No phone change requests loaded yet.</div>
+                </section>
+
+                <section class="lipa-section">
+                  <div class="section-head">
+                    <h3>Pricing Rules</h3>
+                    <p class="meta compact">Store per-grade payout rates with date and site filters.</p>
+                  </div>
+                  <form id="lipaPricingRuleForm">
+                    <div class="row">
+                      <input required id="lipaRuleName" placeholder="Rule name">
+                      <input required id="lipaRuleCrop" value="Hass" placeholder="Crop">
+                      <select id="lipaRuleGrade">
+                        <option value="A">Grade A</option>
+                        <option value="B">Grade B</option>
+                        <option value="REJECT">Reject</option>
+                        <option value="ANY">Any Grade</option>
+                      </select>
+                    </div>
+                    <div class="row">
+                      <input required id="lipaRulePricePerKg" type="number" min="0" step="0.01" placeholder="Price per kg">
+                      <input id="lipaRuleLocation" placeholder="Receiving site (optional)">
+                      <input id="lipaRuleBuyer" placeholder="Buyer (optional)">
+                    </div>
+                    <div class="row">
+                      <input id="lipaRuleEffectiveFrom" type="date">
+                      <input id="lipaRuleEffectiveTo" type="date">
+                      <button class="secondary" id="lipaRuleSaveBtn" type="submit">Save Pricing Rule</button>
+                    </div>
+                  </form>
+                  <div class="success" id="lipaRuleMsg"></div>
+                  <div id="lipaRuleWrap" class="empty">No payout pricing rules loaded yet.</div>
+                </section>
+
+                <section class="lipa-section">
+                  <div class="section-head">
+                    <h3>Bank Profiles</h3>
+                    <p class="meta compact">Upload a bank template CSV/XLSX, map columns, and save a reusable export profile.</p>
+                  </div>
+                  <form id="lipaBankProfileForm">
+                    <div class="row">
+                      <input required id="lipaBankProfileName" placeholder="Profile name">
+                      <input required id="lipaBankName" placeholder="Bank name">
+                    </div>
+                    <div class="row">
+                      <select id="lipaBankDelimiter">
+                        <option value=",">Comma</option>
+                        <option value=";">Semicolon</option>
+                        <option value="	">Tab</option>
+                      </select>
+                      <select id="lipaBankEncoding">
+                        <option value="utf8">UTF-8</option>
+                        <option value="latin1">ANSI / Latin-1</option>
+                      </select>
+                      <input id="lipaBankTemplateFile" type="file" accept=".csv,.xlsx,.xls">
+                    </div>
+                    <div class="inline-actions wrap">
+                      <button class="secondary" id="lipaBankTemplateBtn" type="button">Load Template Columns</button>
+                      <button class="secondary" id="lipaBankProfileSaveBtn" type="submit">Save Bank Profile</button>
+                    </div>
+                  </form>
+                  <div class="success" id="lipaBankProfileMsg"></div>
+                  <div id="lipaBankColumnsWrap" class="empty">Upload a template file to map output columns.</div>
+                  <div id="lipaBankProfileWrap" class="empty">No bank profiles loaded yet.</div>
+                </section>
+
+                <section class="lipa-section">
+                  <div class="section-head">
+                    <h3>Batch Generator</h3>
+                    <p class="meta compact">Preview payout lines, then move the batch through review, approval, and idempotent export.</p>
+                  </div>
+                  <form id="lipaBatchForm">
+                    <div class="row">
+                      <input required id="lipaBatchStart" type="date">
+                      <input required id="lipaBatchEnd" type="date">
+                      <input id="lipaBatchCrop" value="Hass" placeholder="Crop">
+                    </div>
+                    <div class="row">
+                      <input id="lipaBatchSite" placeholder="Receiving site (optional)">
+                      <select id="lipaBatchPricingMode">
+                        <option value="kg_only">By delivered kilograms only</option>
+                        <option value="grade">By grade</option>
+                        <option value="contract_grade" selected>By contract price per grade</option>
+                        <option value="mixed">Mixed rules</option>
+                      </select>
+                      <select id="lipaBatchBankProfile"></select>
+                    </div>
+                    <div class="row">
+                      <input id="lipaBatchNarration" placeholder="Default narration">
+                      <label class="checkbox-inline">
+                        <input id="lipaBatchSecondApproval" type="checkbox">
+                        Two-person approval
+                      </label>
+                    </div>
+                    <div class="inline-actions wrap">
+                      <button class="secondary" id="lipaBatchPreviewBtn" type="button">Calculate Preview</button>
+                      <button class="primary" id="lipaBatchCreateBtn" type="submit">Create Draft Batch</button>
+                    </div>
+                  </form>
+                  <p class="meta compact" id="lipaBatchSummary">No payout preview loaded yet.</p>
+                  <div class="success" id="lipaBatchMsg"></div>
+                  <div id="lipaBatchPreviewWrap" class="empty">Run a preview to inspect farmer payout lines and anomalies.</div>
+                  <div id="lipaBatchWrap" class="empty">No Lipa Mkulima batches loaded yet.</div>
+                </section>
+              </div>
+            </details>
+
             <details class="dropdown-card" open>
               <summary>Farmers Owed (From Produce Purchases)</summary>
               <div class="dropdown-body">

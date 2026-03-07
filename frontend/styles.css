@@ -958,7 +958,13 @@ button.mini-btn {
 #briefWrap,
 #opsTaskWrap,
 #knowledgeWrap,
-#aiFeedbackWrap {
+#aiFeedbackWrap,
+#lipaPhoneChangeWrap,
+#lipaRuleWrap,
+#lipaBankColumnsWrap,
+#lipaBankProfileWrap,
+#lipaBatchPreviewWrap,
+#lipaBatchWrap {
   border: 1px dashed #c8d8c8;
   border-radius: 10px;
   background: #f8fcf6;
@@ -975,8 +981,51 @@ button.mini-btn {
 #briefWrap[hidden],
 #opsTaskWrap[hidden],
 #knowledgeWrap[hidden],
-#aiFeedbackWrap[hidden] {
+#aiFeedbackWrap[hidden],
+#lipaPhoneChangeWrap[hidden],
+#lipaRuleWrap[hidden],
+#lipaBankColumnsWrap[hidden],
+#lipaBankProfileWrap[hidden],
+#lipaBatchPreviewWrap[hidden],
+#lipaBatchWrap[hidden] {
   display: none !important;
+}
+
+.lipa-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8e6d8;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(248, 252, 246, 0.95) 0%, rgba(238, 247, 236, 0.85) 100%);
+  margin-bottom: 14px;
+}
+
+.section-head h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  color: #173f29;
+}
+
+.section-head .meta {
+  margin: 4px 0 0;
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: #234934;
+  padding: 10px 12px;
+  border: 1px solid #d1e0d1;
+  border-radius: 10px;
+  background: #f7fbf6;
+}
+
+.mapping-grid {
+  display: grid;
+  gap: 8px;
 }
 
 .proposal-actions,

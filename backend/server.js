@@ -349,7 +349,7 @@ function invalidateUserSessions(store, userId, exceptToken = '') {
 function freshStore() {
   return {
     meta: {
-      version: 4,
+      version: 5,
       createdAt: nowIso(),
       lastWriteAt: nowIso(),
       authMode: ALLOW_DEMO_USERS ? 'demo' : 'private'
@@ -377,7 +377,11 @@ function freshStore() {
       syncHistory: []
     },
     aiPromptConfig: {},
-    opsTasks: []
+    opsTasks: [],
+    payoutPricingRules: [],
+    payoutBankProfiles: [],
+    payoutBatches: [],
+    farmerPhoneChangeRequests: []
   };
 }
 
@@ -401,11 +405,15 @@ function normalizeStore(raw) {
     aiKnowledgeDocs: Array.isArray(raw.aiKnowledgeDocs) ? raw.aiKnowledgeDocs : [],
     aiMsaidizi: raw.aiMsaidizi && typeof raw.aiMsaidizi === 'object' ? raw.aiMsaidizi : {},
     aiPromptConfig: raw.aiPromptConfig && typeof raw.aiPromptConfig === 'object' ? raw.aiPromptConfig : {},
-    opsTasks: Array.isArray(raw.opsTasks) ? raw.opsTasks : []
+    opsTasks: Array.isArray(raw.opsTasks) ? raw.opsTasks : [],
+    payoutPricingRules: Array.isArray(raw.payoutPricingRules) ? raw.payoutPricingRules : [],
+    payoutBankProfiles: Array.isArray(raw.payoutBankProfiles) ? raw.payoutBankProfiles : [],
+    payoutBatches: Array.isArray(raw.payoutBatches) ? raw.payoutBatches : [],
+    farmerPhoneChangeRequests: Array.isArray(raw.farmerPhoneChangeRequests) ? raw.farmerPhoneChangeRequests : []
   };
 
   if (!store.meta.createdAt) store.meta.createdAt = nowIso();
-  store.meta.version = 4;
+  store.meta.version = 5;
   store.meta.authMode = ALLOW_DEMO_USERS ? 'demo' : 'private';
 
   const usersValid = store.users.some((u) => u && u.username && u.password && u.password.hash);
@@ -415,9 +423,27 @@ function normalizeStore(raw) {
 
   for (const farmer of store.farmers) {
     if (!farmer || typeof farmer !== 'object') continue;
-    farmer.phone = clean(farmer.phone);
+    farmer.phone = normalizePhone(farmer.phone) || clean(farmer.phone);
     farmer.nationalId = cleanNationalId(farmer.nationalId);
     farmer.preferredLanguage = languageOrDefault(farmer.preferredLanguage);
+    farmer.status = clean(farmer.status).toLowerCase() === 'inactive' ? 'inactive' : 'active';
+    farmer.verifiedPayee = Boolean(farmer.verifiedPayee);
+    farmer.verificationDate = clean(farmer.verificationDate);
+    farmer.phoneHistory = Array.isArray(farmer.phoneHistory)
+      ? farmer.phoneHistory
+        .map((row) => ({
+          id: clean(row?.id) || id('FPH'),
+          oldPhone: normalizePhone(row?.oldPhone) || clean(row?.oldPhone),
+          newPhone: normalizePhone(row?.newPhone) || clean(row?.newPhone),
+          reason: clean(row?.reason),
+          requestedBy: clean(row?.requestedBy),
+          requestedAt: clean(row?.requestedAt) || nowIso(),
+          approvedBy: clean(row?.approvedBy),
+          approvedAt: clean(row?.approvedAt),
+          status: clean(row?.status).toLowerCase() === 'rejected' ? 'rejected' : 'approved'
+        }))
+        .filter((row) => row.newPhone)
+      : [];
     const totalHectares = Number(farmer.hectares);
     if (!Number.isFinite(totalHectares) || totalHectares <= 0) continue;
 
@@ -428,6 +454,135 @@ function normalizeStore(raw) {
       farmer.avocadoHectares = Number(avocadoHectares.toFixed(3));
     }
   }
+
+  for (const delivery of store.produce) {
+    if (!delivery || typeof delivery !== 'object') continue;
+    delivery.crop = clean(delivery.crop) || clean(delivery.variety) || 'Avocado';
+    delivery.deliveryDate = clean(delivery.deliveryDate) || clean(delivery.createdAt);
+    delivery.receivingSite = clean(delivery.receivingSite);
+    delivery.deliveryStatus = clean(delivery.deliveryStatus).toLowerCase() === 'reversed' ? 'reversed' : 'approved';
+    delivery.payoutBatchId = clean(delivery.payoutBatchId);
+    delivery.payoutLockedAt = clean(delivery.payoutLockedAt);
+    const deliveredKg = parseNumber(delivery.deliveredKg ?? delivery.lotWeightKgs ?? delivery.kgs);
+    delivery.deliveredKg = deliveredKg > 0 ? money(deliveredKg) : 0;
+  }
+
+  store.payoutPricingRules = store.payoutPricingRules.map((rule) => ({
+    id: clean(rule?.id) || id('PCR'),
+    familyId: clean(rule?.familyId) || clean(rule?.id) || id('PCF'),
+    version: Number.isFinite(Number(rule?.version)) && Number(rule.version) > 0 ? Math.floor(Number(rule.version)) : 1,
+    name: clean(rule?.name) || 'Pricing Rule',
+    status: clean(rule?.status).toLowerCase() === 'retired' ? 'retired' : 'active',
+    crop: clean(rule?.crop) || 'Avocado',
+    grade: clean(rule?.grade).toUpperCase() || 'ANY',
+    pricePerKg: money(rule?.pricePerKg),
+    currency: clean(rule?.currency) || 'KES',
+    effectiveFrom: clean(rule?.effectiveFrom),
+    effectiveTo: clean(rule?.effectiveTo),
+    buyer: clean(rule?.buyer),
+    location: clean(rule?.location),
+    bonusPerKg: money(rule?.bonusPerKg),
+    bonusFixed: money(rule?.bonusFixed),
+    deductionPerKg: money(rule?.deductionPerKg),
+    deductionFixed: money(rule?.deductionFixed),
+    notes: clean(rule?.notes),
+    createdBy: clean(rule?.createdBy) || 'system',
+    createdAt: clean(rule?.createdAt) || nowIso(),
+    updatedAt: clean(rule?.updatedAt) || clean(rule?.createdAt) || nowIso()
+  }));
+
+  store.payoutBankProfiles = store.payoutBankProfiles.map((profile) => ({
+    id: clean(profile?.id) || id('BPF'),
+    familyId: clean(profile?.familyId) || clean(profile?.id) || id('BPFAM'),
+    version: Number.isFinite(Number(profile?.version)) && Number(profile.version) > 0 ? Math.floor(Number(profile.version)) : 1,
+    name: clean(profile?.name) || 'Bank Template',
+    bankName: clean(profile?.bankName) || clean(profile?.name) || 'Bank',
+    status: clean(profile?.status).toLowerCase() === 'retired' ? 'retired' : 'active',
+    delimiter: clean(profile?.delimiter) === ';' ? ';' : clean(profile?.delimiter) === '\t' ? '\t' : ',',
+    encoding: clean(profile?.encoding).toLowerCase() === 'latin1' ? 'latin1' : 'utf8',
+    templateFileName: clean(profile?.templateFileName),
+    templateHash: clean(profile?.templateHash),
+    columns: Array.isArray(profile?.columns)
+      ? profile.columns
+        .map((column) => ({
+          header: clean(column?.header),
+          source: clean(column?.source),
+          constant: clean(column?.constant)
+        }))
+        .filter((column) => column.header && (column.source || column.constant))
+      : [],
+    createdBy: clean(profile?.createdBy) || 'system',
+    createdAt: clean(profile?.createdAt) || nowIso(),
+    updatedAt: clean(profile?.updatedAt) || clean(profile?.createdAt) || nowIso()
+  }));
+
+  store.payoutBatches = store.payoutBatches.map((batch) => ({
+    ...batch,
+    id: clean(batch?.id) || id('PB'),
+    status: clean(batch?.status) || 'Draft',
+    pricingMode: clean(batch?.pricingMode) || 'contract_grade',
+    crop: clean(batch?.crop) || 'Avocado',
+    receivingSite: clean(batch?.receivingSite),
+    bankProfileId: clean(batch?.bankProfileId),
+    bankProfileVersion: Number.isFinite(Number(batch?.bankProfileVersion)) ? Math.floor(Number(batch.bankProfileVersion)) : 0,
+    periodStart: clean(batch?.periodStart),
+    periodEnd: clean(batch?.periodEnd),
+    currency: clean(batch?.currency) || 'KES',
+    defaultNarration: clean(batch?.defaultNarration),
+    createdBy: clean(batch?.createdBy) || 'system',
+    createdAt: clean(batch?.createdAt) || nowIso(),
+    updatedAt: clean(batch?.updatedAt) || clean(batch?.createdAt) || nowIso(),
+    reviewedBy: clean(batch?.reviewedBy),
+    reviewedAt: clean(batch?.reviewedAt),
+    approvedBy: clean(batch?.approvedBy),
+    approvedAt: clean(batch?.approvedAt),
+    exportedBy: clean(batch?.exportedBy),
+    lastExportedAt: clean(batch?.lastExportedAt),
+    cancelledBy: clean(batch?.cancelledBy),
+    cancelledAt: clean(batch?.cancelledAt),
+    cancellationReason: clean(batch?.cancellationReason),
+    requireSecondApproval: Boolean(batch?.requireSecondApproval),
+    exportCount: Number.isFinite(Number(batch?.exportCount)) ? Math.max(0, Math.floor(Number(batch.exportCount))) : 0,
+    totals: batch?.totals && typeof batch.totals === 'object'
+      ? {
+          totalKg: money(batch.totals.totalKg),
+          grossAmount: money(batch.totals.grossAmount),
+          bonusAmount: money(batch.totals.bonusAmount),
+          deductionAmount: money(batch.totals.deductionAmount),
+          netAmount: money(batch.totals.netAmount),
+          lineCount: Number.isFinite(Number(batch.totals.lineCount)) ? Math.floor(Number(batch.totals.lineCount)) : 0
+        }
+      : {
+          totalKg: 0,
+          grossAmount: 0,
+          bonusAmount: 0,
+          deductionAmount: 0,
+          netAmount: 0,
+          lineCount: 0
+        },
+    filters: batch?.filters && typeof batch.filters === 'object' ? batch.filters : {},
+    warnings: Array.isArray(batch?.warnings) ? batch.warnings : [],
+    blockingIssues: Array.isArray(batch?.blockingIssues) ? batch.blockingIssues : [],
+    lines: Array.isArray(batch?.lines) ? batch.lines : [],
+    exportHistory: Array.isArray(batch?.exportHistory) ? batch.exportHistory : []
+  }));
+
+  store.farmerPhoneChangeRequests = store.farmerPhoneChangeRequests.map((request) => ({
+    id: clean(request?.id) || id('FPCR'),
+    farmerId: clean(request?.farmerId),
+    farmerName: clean(request?.farmerName),
+    oldPhone: normalizePhone(request?.oldPhone) || clean(request?.oldPhone),
+    newPhone: normalizePhone(request?.newPhone) || clean(request?.newPhone),
+    reason: clean(request?.reason),
+    requestedBy: clean(request?.requestedBy) || 'system',
+    requestedAt: clean(request?.requestedAt) || nowIso(),
+    status: ['approved', 'rejected'].includes(clean(request?.status).toLowerCase())
+      ? clean(request?.status).toLowerCase()
+      : 'pending',
+    reviewedBy: clean(request?.reviewedBy),
+    reviewedAt: clean(request?.reviewedAt),
+    reviewNote: clean(request?.reviewNote)
+  }));
 
   reconcileProducePurchases(store);
 
@@ -3358,6 +3513,638 @@ function buildOwedRows(store, options = {}) {
   };
 }
 
+const LIPA_PAYOUT_REQUIRED_PROFILE_SOURCES = [
+  'beneficiary_name',
+  'beneficiary_phone',
+  'net_amount',
+  'reference',
+  'narration'
+];
+
+function normalizeLipaPricingMode(value) {
+  const lower = clean(value).toLowerCase();
+  if (['kg_only', 'delivered_kg', 'weight', 'by_kg'].includes(lower)) return 'kg_only';
+  if (['grade', 'by_grade'].includes(lower)) return 'grade';
+  if (['contract', 'contract_grade', 'contract_price_per_grade'].includes(lower)) return 'contract_grade';
+  if (['mixed', 'mixed_rules'].includes(lower)) return 'mixed';
+  return 'contract_grade';
+}
+
+function normalizeLipaBatchStatus(value) {
+  const lower = clean(value).toLowerCase();
+  if (lower === 'reviewed') return 'Reviewed';
+  if (lower === 'approved') return 'Approved';
+  if (lower === 'exported') return 'Exported';
+  if (lower === 'cancelled') return 'Cancelled';
+  return 'Draft';
+}
+
+function normalizePayoutGradeCode(value) {
+  const upper = clean(value).toUpperCase();
+  if (!upper) return '';
+  if (['A', 'GRADE A', 'PASS'].includes(upper)) return 'A';
+  if (['B', 'GRADE B', 'BORDERLINE'].includes(upper)) return 'B';
+  if (['REJECT', 'REJECTED', 'GRADE C', 'C'].includes(upper)) return 'REJECT';
+  return upper.replace(/\s+/g, '_');
+}
+
+function payoutGradeLabel(code) {
+  const normalized = normalizePayoutGradeCode(code);
+  if (normalized === 'A') return 'Grade A';
+  if (normalized === 'B') return 'Grade B';
+  if (normalized === 'REJECT') return 'Reject';
+  return clean(code) || '-';
+}
+
+function normalizeLipaProfileSource(value) {
+  const lower = clean(value).toLowerCase();
+  const allowed = new Set([
+    'beneficiary_name',
+    'beneficiary_phone',
+    'net_amount',
+    'gross_amount',
+    'deduction_amount',
+    'bonus_amount',
+    'reference',
+    'narration',
+    'national_id',
+    'farmer_id',
+    'currency'
+  ]);
+  return allowed.has(lower) ? lower : '';
+}
+
+function validateIsoDateRange(startRaw, endRaw) {
+  const start = parseDateBound(startRaw, false);
+  const end = parseDateBound(endRaw, true);
+  if (start === null || end === null) {
+    return { ok: false, error: 'periodStart and periodEnd are required and must be valid dates.' };
+  }
+  if (start > end) {
+    return { ok: false, error: 'periodStart cannot be later than periodEnd.' };
+  }
+  return {
+    ok: true,
+    start,
+    end,
+    periodStart: dateShort(new Date(start).toISOString()),
+    periodEnd: dateShort(new Date(end).toISOString())
+  };
+}
+
+function payoutIssue(severity, code, message, extra = {}) {
+  return {
+    severity: clean(severity) || 'warning',
+    code: clean(code) || 'issue',
+    message: clean(message) || 'Issue detected.',
+    ...extra
+  };
+}
+
+function deliveryDateValue(record) {
+  return parseDateBound(record?.deliveryDate || record?.createdAt, false);
+}
+
+function resolveDeliveryCrop(record) {
+  return clean(record?.crop) || clean(record?.variety) || 'Avocado';
+}
+
+function resolveDeliveryGradeCode(record) {
+  return normalizePayoutGradeCode(record?.grade || record?.visualGrade || record?.quality);
+}
+
+function resolveDeliveryKg(record) {
+  const kg = parseNumber(record?.deliveredKg ?? record?.lotWeightKgs ?? record?.kgs);
+  return kg > 0 ? money(kg) : 0;
+}
+
+function deliveryLockedByOtherBatch(record, batchId = '') {
+  const lockedBatchId = clean(record?.payoutBatchId);
+  if (!lockedBatchId) return false;
+  if (batchId && lockedBatchId === batchId) return false;
+  return true;
+}
+
+function payoutRuleMatches(rule, delivery, filters = {}) {
+  if (!rule || rule.status !== 'active') return false;
+  const deliveryCrop = clean(resolveDeliveryCrop(delivery)).toLowerCase();
+  const targetCrop = clean(filters.crop || deliveryCrop).toLowerCase();
+  const ruleCrop = clean(rule.crop).toLowerCase();
+  if (ruleCrop && ruleCrop !== 'any' && ruleCrop !== targetCrop && ruleCrop !== deliveryCrop) return false;
+
+  const deliverySite = clean(filters.receivingSite || delivery?.receivingSite).toLowerCase();
+  const ruleLocation = clean(rule.location).toLowerCase();
+  if (ruleLocation && deliverySite && ruleLocation !== deliverySite) return false;
+
+  const deliveryMs = deliveryDateValue(delivery);
+  if (rule.effectiveFrom) {
+    const ruleStart = parseDateBound(rule.effectiveFrom, false);
+    if (ruleStart !== null && deliveryMs !== null && deliveryMs < ruleStart) return false;
+  }
+  if (rule.effectiveTo) {
+    const ruleEnd = parseDateBound(rule.effectiveTo, true);
+    if (ruleEnd !== null && deliveryMs !== null && deliveryMs > ruleEnd) return false;
+  }
+
+  return true;
+}
+
+function rankPayoutRule(rule, gradeCode, receivingSite = '') {
+  let score = 0;
+  if (normalizePayoutGradeCode(rule.grade) === gradeCode) score += 5;
+  if (clean(rule.grade).toUpperCase() === 'ANY') score += 1;
+  if (clean(rule.location) && clean(rule.location).toLowerCase() === clean(receivingSite).toLowerCase()) score += 2;
+  if (clean(rule.effectiveFrom)) score += 1;
+  return score;
+}
+
+function manualGradeRateMap(payload = {}) {
+  const gradeRates = payload?.gradeRates && typeof payload.gradeRates === 'object' ? payload.gradeRates : {};
+  const map = {
+    A: Number.isFinite(Number(gradeRates.A)) ? Number(gradeRates.A) : Number(payload.rateA),
+    B: Number.isFinite(Number(gradeRates.B)) ? Number(gradeRates.B) : Number(payload.rateB),
+    REJECT: Number.isFinite(Number(gradeRates.REJECT)) ? Number(gradeRates.REJECT) : Number(payload.rateReject),
+    ANY: Number.isFinite(Number(gradeRates.ANY)) ? Number(gradeRates.ANY) : Number(payload.defaultRatePerKg)
+  };
+  return Object.fromEntries(
+    Object.entries(map).map(([key, value]) => [key, Number.isFinite(value) ? money(value) : null])
+  );
+}
+
+function selectLipaPricingForDelivery(store, delivery, payload = {}) {
+  const gradeCode = resolveDeliveryGradeCode(delivery);
+  const mode = normalizeLipaPricingMode(payload.pricingMode);
+  const manualRates = manualGradeRateMap(payload);
+  const selectedRuleIds = Array.isArray(payload.pricingRuleIds)
+    ? new Set(payload.pricingRuleIds.map((row) => clean(row)).filter(Boolean))
+    : null;
+  const candidates = (store.payoutPricingRules || [])
+    .filter((rule) => payoutRuleMatches(rule, delivery, payload))
+    .filter((rule) => !selectedRuleIds || selectedRuleIds.has(rule.id))
+    .sort((left, right) => {
+      const leftRank = rankPayoutRule(left, gradeCode, payload.receivingSite || delivery.receivingSite);
+      const rightRank = rankPayoutRule(right, gradeCode, payload.receivingSite || delivery.receivingSite);
+      if (rightRank !== leftRank) return rightRank - leftRank;
+      return dateMs(right.updatedAt) - dateMs(left.updatedAt);
+    });
+
+  const ruleForGrade = candidates.find((rule) => normalizePayoutGradeCode(rule.grade) === gradeCode);
+  const ruleAny = candidates.find((rule) => clean(rule.grade).toUpperCase() === 'ANY');
+  const manualRate = manualRates[gradeCode] ?? null;
+  const fallbackManualRate = manualRates.ANY ?? null;
+
+  let source = 'missing';
+  let rule = null;
+  let rate = null;
+
+  if (mode === 'kg_only') {
+    if (Number.isFinite(manualRate) && manualRate >= 0) {
+      rate = manualRate;
+      source = 'manual-default';
+    } else if (Number.isFinite(fallbackManualRate) && fallbackManualRate >= 0) {
+      rate = fallbackManualRate;
+      source = 'manual-default';
+    } else if (ruleAny) {
+      rate = money(ruleAny.pricePerKg);
+      rule = ruleAny;
+      source = 'pricing-rule';
+    }
+  } else if (mode === 'grade') {
+    if (Number.isFinite(manualRate) && manualRate >= 0) {
+      rate = manualRate;
+      source = 'manual-grade';
+    } else if (Number.isFinite(fallbackManualRate) && fallbackManualRate >= 0) {
+      rate = fallbackManualRate;
+      source = 'manual-default';
+    } else if (ruleForGrade || ruleAny) {
+      rule = ruleForGrade || ruleAny;
+      rate = money(rule.pricePerKg);
+      source = 'pricing-rule';
+    }
+  } else if (mode === 'contract_grade') {
+    if (ruleForGrade || ruleAny) {
+      rule = ruleForGrade || ruleAny;
+      rate = money(rule.pricePerKg);
+      source = 'pricing-rule';
+    }
+  } else if (ruleForGrade || ruleAny) {
+    rule = ruleForGrade || ruleAny;
+    rate = money(rule.pricePerKg);
+    source = 'pricing-rule';
+  } else if (Number.isFinite(manualRate) && manualRate >= 0) {
+    rate = manualRate;
+    source = 'manual-grade';
+  } else if (Number.isFinite(fallbackManualRate) && fallbackManualRate >= 0) {
+    rate = fallbackManualRate;
+    source = 'manual-default';
+  }
+
+  return {
+    found: Number.isFinite(rate),
+    source,
+    rule,
+    ratePerKg: Number.isFinite(rate) ? money(rate) : 0,
+    bonusPerKg: rule ? money(rule.bonusPerKg) : 0,
+    bonusFixed: rule ? money(rule.bonusFixed) : 0,
+    deductionPerKg: rule ? money(rule.deductionPerKg) : 0,
+    deductionFixed: rule ? money(rule.deductionFixed) : 0,
+    currency: clean(rule?.currency) || clean(payload.currency) || 'KES'
+  };
+}
+
+function buildLipaLineReference(batchId, farmerId, sequence) {
+  const batchChunk = clean(batchId).replace(/[^A-Za-z0-9]/g, '').slice(-8) || 'BATCH';
+  const farmerChunk = clean(farmerId).replace(/[^A-Za-z0-9]/g, '').slice(-8) || 'FARMER';
+  return `${batchChunk}${farmerChunk}${String(sequence).padStart(3, '0')}`.slice(0, 30);
+}
+
+function buildLipaBatchPreview(store, payload = {}, options = {}) {
+  const dateRange = validateIsoDateRange(payload.periodStart, payload.periodEnd);
+  if (!dateRange.ok) {
+    return {
+      ok: false,
+      error: dateRange.error
+    };
+  }
+
+  const targetCrop = clean(payload.crop);
+  const targetSite = clean(payload.receivingSite);
+  const batchId = clean(options.batchId);
+  const defaultNarration = clean(payload.defaultNarration) ||
+    `Lipa Mkulima ${dateRange.periodStart} to ${dateRange.periodEnd}`;
+
+  const farmersById = new Map((store.farmers || []).map((row) => [row.id, row]));
+  const grouped = new Map();
+  let skippedLockedCount = 0;
+
+  for (const delivery of store.produce || []) {
+    if (!delivery || typeof delivery !== 'object') continue;
+    if (clean(delivery.deliveryStatus).toLowerCase() === 'reversed') continue;
+    if (deliveryLockedByOtherBatch(delivery, batchId)) {
+      skippedLockedCount += 1;
+      continue;
+    }
+
+    const deliveryMs = deliveryDateValue(delivery);
+    if (deliveryMs === null || deliveryMs < dateRange.start || deliveryMs > dateRange.end) continue;
+
+    const deliveryCrop = resolveDeliveryCrop(delivery);
+    if (targetCrop && clean(deliveryCrop).toLowerCase() !== targetCrop.toLowerCase()) continue;
+    if (targetSite && clean(delivery.receivingSite).toLowerCase() !== targetSite.toLowerCase()) continue;
+
+    const farmer = farmersById.get(clean(delivery.farmerId));
+    if (!farmer) continue;
+
+    const kg = resolveDeliveryKg(delivery);
+    const pricing = selectLipaPricingForDelivery(store, delivery, payload);
+    const grossAmount = pricing.found ? money(kg * pricing.ratePerKg) : 0;
+    const bonusAmount = pricing.found ? money(kg * pricing.bonusPerKg + pricing.bonusFixed) : 0;
+    const deductionAmount = pricing.found ? money(kg * pricing.deductionPerKg + pricing.deductionFixed) : 0;
+    const netAmount = money(grossAmount + bonusAmount - deductionAmount);
+    const gradeCode = resolveDeliveryGradeCode(delivery) || 'UNSPECIFIED';
+    const lineKey = farmer.id;
+
+    if (!grouped.has(lineKey)) {
+      grouped.set(lineKey, {
+        farmerId: farmer.id,
+        farmerName: clean(farmer.name),
+        phone: clean(farmer.phone),
+        nationalId: clean(farmer.nationalId),
+        farmerStatus: clean(farmer.status) || 'active',
+        verifiedPayee: Boolean(farmer.verifiedPayee),
+        verificationDate: clean(farmer.verificationDate),
+        currency: pricing.currency || 'KES',
+        totalKg: 0,
+        grossAmount: 0,
+        bonusAmount: 0,
+        deductionAmount: 0,
+        netAmount: 0,
+        deliveryIds: [],
+        gradeBreakdown: [],
+        issues: [],
+        narration: defaultNarration
+      });
+    }
+
+    const line = grouped.get(lineKey);
+    line.totalKg = money(line.totalKg + kg);
+    line.grossAmount = money(line.grossAmount + grossAmount);
+    line.bonusAmount = money(line.bonusAmount + bonusAmount);
+    line.deductionAmount = money(line.deductionAmount + deductionAmount);
+    line.netAmount = money(line.netAmount + netAmount);
+    line.deliveryIds.push(delivery.id);
+
+    const bucketKey = `${gradeCode}:${pricing.ratePerKg}:${pricing.bonusPerKg}:${pricing.deductionPerKg}`;
+    let breakdown = line.gradeBreakdown.find((row) => row.key === bucketKey);
+    if (!breakdown) {
+      breakdown = {
+        key: bucketKey,
+        gradeCode,
+        gradeLabel: payoutGradeLabel(gradeCode),
+        ratePerKg: pricing.ratePerKg,
+        totalKg: 0,
+        grossAmount: 0,
+        bonusAmount: 0,
+        deductionAmount: 0,
+        netAmount: 0,
+        currency: pricing.currency || 'KES',
+        pricingSource: pricing.source,
+        pricingRuleId: clean(pricing.rule?.id),
+        deliveryIds: []
+      };
+      line.gradeBreakdown.push(breakdown);
+    }
+
+    breakdown.totalKg = money(breakdown.totalKg + kg);
+    breakdown.grossAmount = money(breakdown.grossAmount + grossAmount);
+    breakdown.bonusAmount = money(breakdown.bonusAmount + bonusAmount);
+    breakdown.deductionAmount = money(breakdown.deductionAmount + deductionAmount);
+    breakdown.netAmount = money(breakdown.netAmount + netAmount);
+    breakdown.deliveryIds.push(delivery.id);
+
+    if (!(kg > 0)) {
+      line.issues.push(payoutIssue('error', 'zero_kg', `Delivery ${delivery.id} has zero kilograms.`));
+    }
+    if (!pricing.found) {
+      line.issues.push(
+        payoutIssue(
+          'error',
+          'missing_pricing',
+          `No pricing rule or manual rate matched delivery ${delivery.id} (${payoutGradeLabel(gradeCode)}).`
+        )
+      );
+    }
+  }
+
+  const lines = Array.from(grouped.values())
+    .sort((left, right) => clean(left.farmerName).localeCompare(clean(right.farmerName)))
+    .map((line, index) => {
+      if (!line.phone) {
+        line.issues.push(payoutIssue('error', 'missing_phone', 'Farmer phone number is missing.'));
+      } else if (!isValidKenyaPhone(line.phone)) {
+        line.issues.push(payoutIssue('error', 'invalid_phone', 'Farmer phone number is not in 2547XXXXXXXX format.'));
+      }
+      if (line.farmerStatus !== 'active') {
+        line.issues.push(payoutIssue('warning', 'inactive_farmer', 'Farmer status is inactive.'));
+      }
+      if (!line.verifiedPayee) {
+        line.issues.push(payoutIssue('warning', 'unverified_payee', 'Payee is not verified for export.'));
+      }
+      if (line.netAmount < 0) {
+        line.issues.push(payoutIssue('error', 'negative_net', 'Net amount is negative.'));
+      }
+      if (!(line.totalKg > 0)) {
+        line.issues.push(payoutIssue('error', 'zero_total_kg', 'Farmer total kilograms is zero.'));
+      }
+      line.reference = buildLipaLineReference(batchId || 'PREVIEW', line.farmerId, index + 1);
+      line.gradeBreakdown = line.gradeBreakdown.map((row) => ({
+        gradeCode: row.gradeCode,
+        gradeLabel: row.gradeLabel,
+        totalKg: row.totalKg,
+        ratePerKg: row.ratePerKg,
+        grossAmount: row.grossAmount,
+        bonusAmount: row.bonusAmount,
+        deductionAmount: row.deductionAmount,
+        netAmount: row.netAmount,
+        currency: row.currency,
+        pricingSource: row.pricingSource,
+        pricingRuleId: row.pricingRuleId,
+        deliveryIds: row.deliveryIds
+      }));
+      return line;
+    });
+
+  const totals = lines.reduce(
+    (acc, line) => ({
+      totalKg: money(acc.totalKg + line.totalKg),
+      grossAmount: money(acc.grossAmount + line.grossAmount),
+      bonusAmount: money(acc.bonusAmount + line.bonusAmount),
+      deductionAmount: money(acc.deductionAmount + line.deductionAmount),
+      netAmount: money(acc.netAmount + line.netAmount),
+      lineCount: acc.lineCount + 1
+    }),
+    { totalKg: 0, grossAmount: 0, bonusAmount: 0, deductionAmount: 0, netAmount: 0, lineCount: 0 }
+  );
+
+  const warnings = [];
+  if (skippedLockedCount > 0) {
+    warnings.push(`Skipped ${skippedLockedCount} delivery record(s) already locked to another payout batch.`);
+  }
+  if (!lines.length) {
+    warnings.push('No eligible delivery records matched the selected period and filters.');
+  }
+
+  const blockingIssues = lines.flatMap((line) =>
+    (line.issues || []).filter((issue) => issue.severity === 'error').map((issue) => ({
+      farmerId: line.farmerId,
+      farmerName: line.farmerName,
+      ...issue
+    }))
+  );
+
+  return {
+    ok: true,
+    filters: {
+      periodStart: dateRange.periodStart,
+      periodEnd: dateRange.periodEnd,
+      crop: targetCrop,
+      receivingSite: targetSite,
+      pricingMode: normalizeLipaPricingMode(payload.pricingMode)
+    },
+    defaultNarration,
+    lines,
+    totals,
+    warnings,
+    blockingIssues
+  };
+}
+
+function nextFamilyVersion(list, familyId) {
+  return (
+    list
+      .filter((row) => clean(row.familyId) === familyId)
+      .reduce((max, row) => Math.max(max, Number(row.version) || 0), 0) + 1
+  );
+}
+
+function validateLipaPricingRulePayload(payload = {}) {
+  if (!clean(payload.name)) return 'name is required';
+  if (!clean(payload.crop)) return 'crop is required';
+  if (!(parseNumber(payload.pricePerKg) >= 0)) return 'pricePerKg must be 0 or greater';
+  return '';
+}
+
+function validateLipaBankProfilePayload(payload = {}) {
+  if (!clean(payload.name)) return 'name is required';
+  if (!clean(payload.bankName)) return 'bankName is required';
+  const columns = Array.isArray(payload.columns) ? payload.columns : [];
+  if (!columns.length) return 'columns array is required';
+
+  const seenHeaders = new Set();
+  const seenSources = new Set();
+  for (const column of columns) {
+    const header = clean(column?.header);
+    const source = normalizeLipaProfileSource(column?.source);
+    const constant = clean(column?.constant);
+    if (!header) return 'Each bank profile column must include a header';
+    if (seenHeaders.has(header.toLowerCase())) return `Duplicate bank profile column header: ${header}`;
+    seenHeaders.add(header.toLowerCase());
+    if (!source && !constant) return `Column "${header}" must define a source or constant`;
+    if (source) seenSources.add(source);
+  }
+
+  for (const field of LIPA_PAYOUT_REQUIRED_PROFILE_SOURCES) {
+    if (!seenSources.has(field)) {
+      return `Bank profile must map the ${field} field`;
+    }
+  }
+
+  return '';
+}
+
+function findPayoutBatch(store, batchId) {
+  return findById(store.payoutBatches || [], batchId);
+}
+
+function lockBatchDeliveries(store, batch, actor) {
+  for (const delivery of store.produce || []) {
+    if (!batch.lines.some((line) => (line.deliveryIds || []).includes(delivery.id))) continue;
+    delivery.payoutBatchId = batch.id;
+    delivery.payoutLockedAt = nowIso();
+  }
+  addActivity(store, {
+    actor,
+    role: 'admin',
+    action: 'payout.batch.lock',
+    entity: 'payoutBatch',
+    entityId: batch.id,
+    details: `Locked delivery inputs for payout batch ${batch.id}`
+  });
+}
+
+function releaseBatchDeliveries(store, batch, actor) {
+  for (const delivery of store.produce || []) {
+    if (clean(delivery.payoutBatchId) !== batch.id) continue;
+    delivery.payoutBatchId = '';
+    delivery.payoutLockedAt = '';
+  }
+  addActivity(store, {
+    actor,
+    role: 'admin',
+    action: 'payout.batch.unlock',
+    entity: 'payoutBatch',
+    entityId: batch.id,
+    details: `Released delivery locks for payout batch ${batch.id}`
+  });
+}
+
+function csvCellForDelimiter(value, delimiter = ',') {
+  const raw = value == null ? '' : String(value);
+  const escapedDelimiter = delimiter === '\t' ? '\t' : delimiter;
+  const needsQuote = raw.includes('"') || raw.includes('\n') || raw.includes('\r') || raw.includes(escapedDelimiter);
+  if (!needsQuote) return raw;
+  return `"${raw.replace(/"/g, '""')}"`;
+}
+
+function toDelimitedCsv(rows, headers, delimiter = ',') {
+  const head = headers.map((header) => csvCellForDelimiter(header, delimiter)).join(delimiter);
+  const body = rows
+    .map((row) => headers.map((header) => csvCellForDelimiter(row?.[header], delimiter)).join(delimiter))
+    .join('\n');
+  return `${head}\n${body}`;
+}
+
+function payoutExportSourceValue(source, line, batch) {
+  switch (normalizeLipaProfileSource(source)) {
+    case 'beneficiary_name':
+      return clean(line.farmerName);
+    case 'beneficiary_phone':
+      return clean(line.phone);
+    case 'net_amount':
+      return money(line.netAmount).toFixed(2);
+    case 'gross_amount':
+      return money(line.grossAmount).toFixed(2);
+    case 'deduction_amount':
+      return money(line.deductionAmount).toFixed(2);
+    case 'bonus_amount':
+      return money(line.bonusAmount).toFixed(2);
+    case 'reference':
+      return clean(line.reference);
+    case 'narration':
+      return clean(line.narration || batch.defaultNarration);
+    case 'national_id':
+      return clean(line.nationalId);
+    case 'farmer_id':
+      return clean(line.farmerId);
+    case 'currency':
+      return clean(line.currency || batch.currency || 'KES');
+    default:
+      return '';
+  }
+}
+
+function buildLipaExportFile(store, batch, profile, payload = {}) {
+  const allowUnverifiedOverride = isTruthy(payload.allowUnverifiedOverride);
+  const overrideReason = clean(payload.overrideReason);
+  const blocking = [];
+
+  const lines = (batch.lines || []).map((line) => ({
+    ...line,
+    narration: clean(line.narration) || clean(batch.defaultNarration)
+  }));
+
+  for (const line of lines) {
+    if (!(money(line.netAmount) > 0)) {
+      blocking.push(payoutIssue('error', 'invalid_net_amount', `Net amount for ${line.farmerName} must be greater than 0.`));
+    }
+    if (!line.phone || !isValidKenyaPhone(line.phone)) {
+      blocking.push(payoutIssue('error', 'invalid_phone', `Phone number for ${line.farmerName} is invalid.`));
+    }
+    if (!line.verifiedPayee && !(allowUnverifiedOverride && overrideReason)) {
+      blocking.push(
+        payoutIssue('error', 'unverified_payee', `Payee for ${line.farmerName} is unverified. Add an override reason to export anyway.`)
+      );
+    }
+    if ((line.issues || []).some((issue) => issue.severity === 'error')) {
+      blocking.push(
+        payoutIssue('error', 'line_has_errors', `Batch line for ${line.farmerName} still contains blocking calculation issues.`)
+      );
+    }
+  }
+
+  if (blocking.length) {
+    return {
+      ok: false,
+      error: 'Export is blocked until payout line issues are resolved.',
+      blocking
+    };
+  }
+
+  const headers = profile.columns.map((column) => column.header);
+  const rows = lines.map((line) => {
+    const row = {};
+    for (const column of profile.columns) {
+      row[column.header] = clean(column.constant) || payoutExportSourceValue(column.source, line, batch);
+    }
+    return row;
+  });
+
+  const csvText = toDelimitedCsv(rows, headers, profile.delimiter);
+  const buffer = profile.encoding === 'latin1' ? Buffer.from(csvText, 'latin1') : Buffer.from(csvText, 'utf8');
+  const fileHash = crypto.createHash('sha256').update(buffer).digest('hex');
+
+  return {
+    ok: true,
+    rows,
+    headers,
+    csvText,
+    buffer,
+    fileHash,
+    alreadyExported: Number(batch.exportCount || 0) > 0,
+    overrideReason
+  };
+}
+
 function toCsv(rows, headers) {
   const head = headers.map((h) => h.label).join(',');
   const body = rows.map((row) => headers.map((h) => csvCell(row[h.key])).join(',')).join('\n');
@@ -6215,6 +7002,13 @@ const server = http.createServer(async (req, res) => {
         farmerName: farmer.name,
         kgs: lotWeightKgs,
         lotWeightKgs,
+        deliveredKg: lotWeightKgs,
+        deliveryDate: clean(payload.deliveryDate) || nowIso(),
+        receivingSite: clean(payload.receivingSite),
+        crop: clean(payload.crop) || normalizeAvocadoVariety(payload.variety) || 'Avocado',
+        deliveryStatus: 'approved',
+        payoutBatchId: '',
+        payoutLockedAt: '',
         variety,
         sampleSize,
         visualGrade,
@@ -6265,6 +7059,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     const [removed] = store.produce.splice(index, 1);
+    if (clean(removed?.payoutBatchId)) {
+      store.produce.splice(index, 0, removed);
+      json(res, 409, { error: 'This delivery is locked to a payout batch and cannot be deleted.' });
+      return;
+    }
     addActivity(store, {
       actor: auth.session.username,
       role: auth.session.role,
@@ -7013,6 +7812,822 @@ const server = http.createServer(async (req, res) => {
       });
       await writeStore(store);
       json(res, 200, { data: payment });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/pricing-rules' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...(store.payoutPricingRules || [])];
+    const status = clean(reqUrl.searchParams.get('status')).toLowerCase();
+    const q = clean(reqUrl.searchParams.get('q')).toLowerCase();
+
+    if (status) {
+      rows = rows.filter((row) => clean(row.status).toLowerCase() === status);
+    }
+    if (q) {
+      rows = rows.filter((row) =>
+        [row.name, row.crop, row.grade, row.location, row.buyer].some((value) =>
+          clean(value).toLowerCase().includes(q)
+        )
+      );
+    }
+
+    rows.sort((left, right) => dateMs(right.updatedAt) - dateMs(left.updatedAt));
+    json(res, 200, { data: rows.slice(0, safeQueryInt(reqUrl.searchParams, 'limit', 200, 1000)) });
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/pricing-rules' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const invalid = validateLipaPricingRulePayload(payload);
+      if (invalid) {
+        json(res, 422, { error: invalid });
+        return;
+      }
+
+      const baseRule = clean(payload.baseRuleId) ? findById(store.payoutPricingRules, clean(payload.baseRuleId)) : null;
+      const familyId = baseRule ? clean(baseRule.familyId) : id('PCF');
+      const record = {
+        id: id('PCR'),
+        familyId,
+        version: nextFamilyVersion(store.payoutPricingRules, familyId),
+        name: clean(payload.name),
+        status: clean(payload.status).toLowerCase() === 'retired' ? 'retired' : 'active',
+        crop: clean(payload.crop),
+        grade: normalizePayoutGradeCode(payload.grade) || 'ANY',
+        pricePerKg: money(payload.pricePerKg),
+        currency: clean(payload.currency) || 'KES',
+        effectiveFrom: clean(payload.effectiveFrom),
+        effectiveTo: clean(payload.effectiveTo),
+        buyer: clean(payload.buyer),
+        location: clean(payload.location),
+        bonusPerKg: money(payload.bonusPerKg),
+        bonusFixed: money(payload.bonusFixed),
+        deductionPerKg: money(payload.deductionPerKg),
+        deductionFixed: money(payload.deductionFixed),
+        notes: clean(payload.notes),
+        createdBy: auth.session.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+
+      store.payoutPricingRules.unshift(record);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.pricing_rule.create',
+        entity: 'payoutPricingRule',
+        entityId: record.id,
+        details: `Created pricing rule ${record.name} v${record.version} (${record.crop}, ${record.grade})`
+      });
+      await writeStore(store);
+      json(res, 201, { data: record });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/bank-profiles' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...(store.payoutBankProfiles || [])];
+    const status = clean(reqUrl.searchParams.get('status')).toLowerCase();
+    const q = clean(reqUrl.searchParams.get('q')).toLowerCase();
+
+    if (status) {
+      rows = rows.filter((row) => clean(row.status).toLowerCase() === status);
+    }
+    if (q) {
+      rows = rows.filter((row) =>
+        [row.name, row.bankName, row.templateFileName].some((value) => clean(value).toLowerCase().includes(q))
+      );
+    }
+
+    rows.sort((left, right) => dateMs(right.updatedAt) - dateMs(left.updatedAt));
+    json(res, 200, { data: rows.slice(0, safeQueryInt(reqUrl.searchParams, 'limit', 200, 1000)) });
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/bank-profiles' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 2_000_000);
+      const invalid = validateLipaBankProfilePayload(payload);
+      if (invalid) {
+        json(res, 422, { error: invalid });
+        return;
+      }
+
+      const baseProfile = clean(payload.baseProfileId) ? findById(store.payoutBankProfiles, clean(payload.baseProfileId)) : null;
+      const familyId = baseProfile ? clean(baseProfile.familyId) : id('BPFAM');
+      const record = {
+        id: id('BPF'),
+        familyId,
+        version: nextFamilyVersion(store.payoutBankProfiles, familyId),
+        name: clean(payload.name),
+        bankName: clean(payload.bankName),
+        status: clean(payload.status).toLowerCase() === 'retired' ? 'retired' : 'active',
+        delimiter: clean(payload.delimiter) === ';' ? ';' : clean(payload.delimiter) === '\t' ? '\t' : ',',
+        encoding: clean(payload.encoding).toLowerCase() === 'latin1' ? 'latin1' : 'utf8',
+        templateFileName: clean(payload.templateFileName),
+        templateHash: clean(payload.templateHash),
+        columns: payload.columns
+          .map((column) => ({
+            header: clean(column?.header),
+            source: normalizeLipaProfileSource(column?.source),
+            constant: clean(column?.constant)
+          }))
+          .filter((column) => column.header && (column.source || column.constant)),
+        createdBy: auth.session.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+
+      store.payoutBankProfiles.unshift(record);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.bank_profile.create',
+        entity: 'payoutBankProfile',
+        entityId: record.id,
+        details: `Created bank profile ${record.bankName} / ${record.name} v${record.version}`
+      });
+      await writeStore(store);
+      json(res, 201, { data: record });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/batches' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...(store.payoutBatches || [])];
+    const status = clean(reqUrl.searchParams.get('status'));
+    if (status) {
+      rows = rows.filter((row) => clean(row.status).toLowerCase() === status.toLowerCase());
+    }
+
+    rows.sort((left, right) => dateMs(right.updatedAt) - dateMs(left.updatedAt));
+    json(res, 200, { data: rows.slice(0, safeQueryInt(reqUrl.searchParams, 'limit', 100, 500)) });
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/calculate' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 2_000_000);
+      const preview = buildLipaBatchPreview(store, payload);
+      if (!preview.ok) {
+        json(res, 422, { error: preview.error });
+        return;
+      }
+
+      json(res, 200, { data: preview });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/batches' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const payload = await readBody(req, 2_000_000);
+      const batchId = id('PB');
+      const preview = buildLipaBatchPreview(store, payload, { batchId });
+      if (!preview.ok) {
+        json(res, 422, { error: preview.error });
+        return;
+      }
+
+      const profile = clean(payload.bankProfileId) ? findById(store.payoutBankProfiles, clean(payload.bankProfileId)) : null;
+      const batch = {
+        id: batchId,
+        status: 'Draft',
+        periodStart: preview.filters.periodStart,
+        periodEnd: preview.filters.periodEnd,
+        crop: preview.filters.crop || 'Avocado',
+        receivingSite: preview.filters.receivingSite,
+        pricingMode: preview.filters.pricingMode,
+        currency: clean(payload.currency) || clean(profile?.currency) || 'KES',
+        defaultNarration: preview.defaultNarration,
+        bankProfileId: clean(profile?.id),
+        bankProfileVersion: Number(profile?.version) || 0,
+        requireSecondApproval: isTruthy(payload.requireSecondApproval),
+        filters: {
+          ...preview.filters,
+          defaultRatePerKg: Number.isFinite(Number(payload.defaultRatePerKg)) ? money(payload.defaultRatePerKg) : null,
+          gradeRates: manualGradeRateMap(payload)
+        },
+        totals: preview.totals,
+        warnings: preview.warnings,
+        blockingIssues: preview.blockingIssues,
+        lines: preview.lines.map((line, index) => ({
+          id: id('PBL'),
+          sequence: index + 1,
+          ...line
+        })),
+        exportHistory: [],
+        exportCount: 0,
+        createdBy: auth.session.username,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+
+      store.payoutBatches.unshift(batch);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.batch.create',
+        entity: 'payoutBatch',
+        entityId: batch.id,
+        details: `Created payout batch ${batch.id} (${batch.lines.length} farmers, KES ${batch.totals.netAmount})`
+      });
+      await writeStore(store);
+      json(res, 201, { data: batch });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutBatchDetailMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)$/);
+  if (payoutBatchDetailMatch && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    const batch = findPayoutBatch(store, payoutBatchDetailMatch[1]);
+    if (!batch) {
+      json(res, 404, { error: 'Payout batch not found' });
+      return;
+    }
+
+    json(res, 200, { data: batch });
+    return;
+  }
+
+  const payoutBatchReviewMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)\/review$/);
+  if (payoutBatchReviewMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const batch = findPayoutBatch(store, payoutBatchReviewMatch[1]);
+      if (!batch) {
+        json(res, 404, { error: 'Payout batch not found' });
+        return;
+      }
+      if (normalizeLipaBatchStatus(batch.status) !== 'Draft') {
+        json(res, 422, { error: 'Only Draft batches can move to Reviewed.' });
+        return;
+      }
+      if (!Array.isArray(batch.lines) || !batch.lines.length) {
+        json(res, 422, { error: 'Batch has no payout lines to review.' });
+        return;
+      }
+
+      batch.status = 'Reviewed';
+      batch.reviewedBy = auth.session.username;
+      batch.reviewedAt = nowIso();
+      batch.updatedAt = nowIso();
+      lockBatchDeliveries(store, batch, auth.session.username);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.batch.review',
+        entity: 'payoutBatch',
+        entityId: batch.id,
+        details: `Reviewed payout batch ${batch.id}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: batch });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutBatchApproveMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)\/approve$/);
+  if (payoutBatchApproveMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const batch = findPayoutBatch(store, payoutBatchApproveMatch[1]);
+      if (!batch) {
+        json(res, 404, { error: 'Payout batch not found' });
+        return;
+      }
+      if (normalizeLipaBatchStatus(batch.status) !== 'Reviewed') {
+        json(res, 422, { error: 'Only Reviewed batches can be approved.' });
+        return;
+      }
+      if (batch.requireSecondApproval && clean(batch.createdBy) === auth.session.username) {
+        json(res, 422, { error: 'Two-person approval is enabled. The batch creator cannot approve this batch.' });
+        return;
+      }
+      if (Array.isArray(batch.blockingIssues) && batch.blockingIssues.length) {
+        json(res, 422, { error: 'Resolve blocking calculation issues before approval.', data: batch.blockingIssues });
+        return;
+      }
+
+      batch.status = 'Approved';
+      batch.approvedBy = auth.session.username;
+      batch.approvedAt = nowIso();
+      batch.updatedAt = nowIso();
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.batch.approve',
+        entity: 'payoutBatch',
+        entityId: batch.id,
+        details: `Approved payout batch ${batch.id}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: batch });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutBatchCancelMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)\/cancel$/);
+  if (payoutBatchCancelMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const batch = findPayoutBatch(store, payoutBatchCancelMatch[1]);
+      if (!batch) {
+        json(res, 404, { error: 'Payout batch not found' });
+        return;
+      }
+      if (['Exported', 'Cancelled'].includes(normalizeLipaBatchStatus(batch.status))) {
+        json(res, 422, { error: 'Exported or cancelled batches cannot be cancelled again.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      batch.status = 'Cancelled';
+      batch.cancelledBy = auth.session.username;
+      batch.cancelledAt = nowIso();
+      batch.cancellationReason = clean(payload.reason);
+      batch.updatedAt = nowIso();
+      releaseBatchDeliveries(store, batch, auth.session.username);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.batch.cancel',
+        entity: 'payoutBatch',
+        entityId: batch.id,
+        details: `Cancelled payout batch ${batch.id}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: batch });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutExportPreviewMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)\/export-preview$/);
+  if (payoutExportPreviewMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+      const batch = findPayoutBatch(store, payoutExportPreviewMatch[1]);
+      if (!batch) {
+        json(res, 404, { error: 'Payout batch not found' });
+        return;
+      }
+      if (normalizeLipaBatchStatus(batch.status) !== 'Approved' && normalizeLipaBatchStatus(batch.status) !== 'Exported') {
+        json(res, 422, { error: 'Only Approved batches can be exported.' });
+        return;
+      }
+      const payload = await readBody(req);
+      const profileId = clean(payload.bankProfileId) || clean(batch.bankProfileId);
+      const profile = findById(store.payoutBankProfiles, profileId);
+      if (!profile) {
+        json(res, 404, { error: 'Bank profile not found' });
+        return;
+      }
+
+      const exportPreview = buildLipaExportFile(store, batch, profile, payload);
+      if (!exportPreview.ok) {
+        json(res, 422, { error: exportPreview.error, data: exportPreview.blocking });
+        return;
+      }
+
+      json(res, 200, {
+        data: {
+          profile,
+          rows: exportPreview.rows,
+          headers: exportPreview.headers,
+          recordCount: exportPreview.rows.length,
+          totalAmount: batch.totals.netAmount,
+          alreadyExported: exportPreview.alreadyExported,
+          warning: exportPreview.alreadyExported
+            ? 'This batch was already exported before. References will remain unchanged.'
+            : ''
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutExportMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/batches\/([^/]+)\/export$/);
+  if (payoutExportMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+      const batch = findPayoutBatch(store, payoutExportMatch[1]);
+      if (!batch) {
+        json(res, 404, { error: 'Payout batch not found' });
+        return;
+      }
+      if (normalizeLipaBatchStatus(batch.status) !== 'Approved' && normalizeLipaBatchStatus(batch.status) !== 'Exported') {
+        json(res, 422, { error: 'Only Approved batches can be exported.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const profileId = clean(payload.bankProfileId) || clean(batch.bankProfileId);
+      const profile = findById(store.payoutBankProfiles, profileId);
+      if (!profile) {
+        json(res, 404, { error: 'Bank profile not found' });
+        return;
+      }
+
+      const exportFile = buildLipaExportFile(store, batch, profile, payload);
+      if (!exportFile.ok) {
+        json(res, 422, { error: exportFile.error, data: exportFile.blocking });
+        return;
+      }
+
+      const exportRecord = {
+        id: id('PEX'),
+        profileId: profile.id,
+        profileName: profile.name,
+        profileVersion: profile.version,
+        exportedBy: auth.session.username,
+        exportedAt: nowIso(),
+        recordCount: exportFile.rows.length,
+        totalAmount: batch.totals.netAmount,
+        fileHash: exportFile.fileHash,
+        overrideReason: exportFile.overrideReason,
+        alreadyExported: exportFile.alreadyExported
+      };
+
+      batch.status = 'Exported';
+      batch.bankProfileId = profile.id;
+      batch.bankProfileVersion = profile.version;
+      batch.exportCount = Number(batch.exportCount || 0) + 1;
+      batch.exportedBy = auth.session.username;
+      batch.lastExportedAt = exportRecord.exportedAt;
+      batch.updatedAt = exportRecord.exportedAt;
+      batch.exportHistory.unshift(exportRecord);
+
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'payout.batch.export',
+        entity: 'payoutBatch',
+        entityId: batch.id,
+        details: `Exported payout batch ${batch.id} via ${profile.bankName} v${profile.version} (${exportRecord.recordCount} rows)`
+      });
+      await writeStore(store);
+
+      json(res, 200, {
+        data: {
+          filename: `lipa-mkulima-${batch.id}-${profile.bankName.replace(/\s+/g, '-').toLowerCase()}.csv`,
+          csvText: exportFile.csvText,
+          encoding: profile.encoding,
+          delimiter: profile.delimiter,
+          fileHash: exportFile.fileHash,
+          recordCount: exportRecord.recordCount,
+          totalAmount: exportRecord.totalAmount,
+          alreadyExported: exportFile.alreadyExported,
+          warning: exportFile.alreadyExported
+            ? 'This batch was exported previously. The regenerated file uses the same farmer references.'
+            : '',
+          exportRecord
+        }
+      });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutVerifyPayeeMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/farmers\/([^/]+)\/verify-payee$/);
+  if (payoutVerifyPayeeMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const farmer = findById(store.farmers, payoutVerifyPayeeMatch[1]);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      const verified = payload.verified !== undefined ? Boolean(payload.verified) : true;
+      farmer.verifiedPayee = verified;
+      farmer.verificationDate = verified ? nowIso() : '';
+      farmer.updatedAt = nowIso();
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: verified ? 'farmer.payee.verify' : 'farmer.payee.unverify',
+        entity: 'farmer',
+        entityId: farmer.id,
+        details: `${verified ? 'Verified' : 'Removed verification for'} payee ${farmer.name}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: farmer });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/phone-change-requests' && req.method === 'GET') {
+    const store = await readStore();
+    const auth = requireSession(req, store, ['admin']);
+    if (!auth.ok) {
+      json(res, auth.status, { error: auth.error });
+      return;
+    }
+
+    let rows = [...(store.farmerPhoneChangeRequests || [])];
+    const status = clean(reqUrl.searchParams.get('status')).toLowerCase();
+    if (status) {
+      rows = rows.filter((row) => clean(row.status).toLowerCase() === status);
+    }
+    rows.sort((left, right) => dateMs(right.requestedAt) - dateMs(left.requestedAt));
+    json(res, 200, { data: rows.slice(0, safeQueryInt(reqUrl.searchParams, 'limit', 200, 1000)) });
+    return;
+  }
+
+  if (pathname === '/api/payments/lipa-mkulima/phone-change-requests' && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+      const payload = await readBody(req);
+      const farmer = findById(store.farmers, clean(payload.farmerId));
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found' });
+        return;
+      }
+      const newPhone = normalizePhone(payload.newPhone) || clean(payload.newPhone);
+      if (!newPhone || !isValidKenyaPhone(newPhone)) {
+        json(res, 422, { error: 'newPhone must be a valid Kenyan mobile number in 2547XXXXXXXX format.' });
+        return;
+      }
+      if (!clean(payload.reason)) {
+        json(res, 422, { error: 'reason is required for phone changes.' });
+        return;
+      }
+      if (findFarmerByPhone(store.farmers, newPhone, farmer.id)) {
+        json(res, 409, { error: 'Another farmer already uses this phone number.' });
+        return;
+      }
+
+      const request = {
+        id: id('FPCR'),
+        farmerId: farmer.id,
+        farmerName: farmer.name,
+        oldPhone: farmer.phone,
+        newPhone,
+        reason: clean(payload.reason),
+        requestedBy: auth.session.username,
+        requestedAt: nowIso(),
+        status: 'pending',
+        reviewedBy: '',
+        reviewedAt: '',
+        reviewNote: ''
+      };
+
+      store.farmerPhoneChangeRequests.unshift(request);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'farmer.phone_change.request',
+        entity: 'farmerPhoneChange',
+        entityId: request.id,
+        details: `Requested phone change for ${farmer.name} from ${farmer.phone} to ${newPhone}`
+      });
+      await writeStore(store);
+      json(res, 201, { data: request });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutPhoneApproveMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/phone-change-requests\/([^/]+)\/approve$/);
+  if (payoutPhoneApproveMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const request = findById(store.farmerPhoneChangeRequests, payoutPhoneApproveMatch[1]);
+      if (!request) {
+        json(res, 404, { error: 'Phone change request not found' });
+        return;
+      }
+      if (clean(request.status).toLowerCase() !== 'pending') {
+        json(res, 422, { error: 'Only pending phone change requests can be approved.' });
+        return;
+      }
+
+      const farmer = findById(store.farmers, request.farmerId);
+      if (!farmer) {
+        json(res, 404, { error: 'Farmer not found' });
+        return;
+      }
+
+      if (findFarmerByPhone(store.farmers, request.newPhone, farmer.id)) {
+        json(res, 409, { error: 'Another farmer already uses this phone number.' });
+        return;
+      }
+
+      const linkedUser = resolveFarmerPortalUser(store, farmer);
+      if (linkedUser) {
+        const conflictingUser = findUserByPhone(store, request.newPhone);
+        if (conflictingUser && conflictingUser.id !== linkedUser.id) {
+          json(res, 409, { error: 'This phone number is already linked to another user account.' });
+          return;
+        }
+      }
+
+      const oldPhone = farmer.phone;
+      farmer.phone = request.newPhone;
+      farmer.verifiedPayee = false;
+      farmer.verificationDate = '';
+      farmer.updatedAt = nowIso();
+      farmer.phoneHistory = Array.isArray(farmer.phoneHistory) ? farmer.phoneHistory : [];
+      farmer.phoneHistory.unshift({
+        id: id('FPH'),
+        oldPhone,
+        newPhone: request.newPhone,
+        reason: request.reason,
+        requestedBy: request.requestedBy,
+        requestedAt: request.requestedAt,
+        approvedBy: auth.session.username,
+        approvedAt: nowIso(),
+        status: 'approved'
+      });
+
+      if (linkedUser) {
+        const syncResult = syncFarmerPortalUserIdentity(store, farmer, request.newPhone, farmer.name);
+        if (!syncResult.ok) {
+          json(res, 409, { error: syncResult.error });
+          return;
+        }
+      }
+
+      request.status = 'approved';
+      request.reviewedBy = auth.session.username;
+      request.reviewedAt = nowIso();
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'farmer.phone_change.approve',
+        entity: 'farmer',
+        entityId: farmer.id,
+        details: `Approved phone change for ${farmer.name} from ${oldPhone} to ${request.newPhone}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: { farmer, request } });
+    } catch (error) {
+      json(res, 400, { error: error.message });
+    }
+    return;
+  }
+
+  const payoutPhoneRejectMatch = pathname.match(/^\/api\/payments\/lipa-mkulima\/phone-change-requests\/([^/]+)\/reject$/);
+  if (payoutPhoneRejectMatch && req.method === 'POST') {
+    try {
+      const store = await readStore();
+      const auth = requireSession(req, store, ['admin']);
+      if (!auth.ok) {
+        json(res, auth.status, { error: auth.error });
+        return;
+      }
+
+      const request = findById(store.farmerPhoneChangeRequests, payoutPhoneRejectMatch[1]);
+      if (!request) {
+        json(res, 404, { error: 'Phone change request not found' });
+        return;
+      }
+      if (clean(request.status).toLowerCase() !== 'pending') {
+        json(res, 422, { error: 'Only pending phone change requests can be rejected.' });
+        return;
+      }
+
+      const payload = await readBody(req);
+      request.status = 'rejected';
+      request.reviewedBy = auth.session.username;
+      request.reviewedAt = nowIso();
+      request.reviewNote = clean(payload.reason);
+      addActivity(store, {
+        actor: auth.session.username,
+        role: auth.session.role,
+        action: 'farmer.phone_change.reject',
+        entity: 'farmerPhoneChange',
+        entityId: request.id,
+        details: `Rejected phone change request ${request.id} for ${request.farmerName}`
+      });
+      await writeStore(store);
+      json(res, 200, { data: request });
     } catch (error) {
       json(res, 400, { error: error.message });
     }

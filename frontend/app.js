@@ -78,6 +78,16 @@ const paymentRecommendationPicker = {
     }
   }
 };
+const lipaState = {
+  pricingRules: [],
+  bankProfiles: [],
+  batches: [],
+  preview: null,
+  phoneChangeRequests: [],
+  templateColumns: [],
+  templateFileName: '',
+  selectedBatchId: ''
+};
 let activePaneId = 'overview';
 
 const elements = {
@@ -274,6 +284,54 @@ const elements = {
   paymentLogCard: document.getElementById('paymentLogCard'),
   paymentMsg: document.getElementById('paymentMsg'),
   paymentTableWrap: document.getElementById('paymentTableWrap'),
+  lipaMkulimaCard: document.getElementById('lipaMkulimaCard'),
+  lipaPayeeFarmer: document.getElementById('lipaPayeeFarmer'),
+  lipaVerifyPayeeBtn: document.getElementById('lipaVerifyPayeeBtn'),
+  lipaUnverifyPayeeBtn: document.getElementById('lipaUnverifyPayeeBtn'),
+  lipaPhoneChangeFarmer: document.getElementById('lipaPhoneChangeFarmer'),
+  lipaPhoneChangePhone: document.getElementById('lipaPhoneChangePhone'),
+  lipaPhoneChangeReason: document.getElementById('lipaPhoneChangeReason'),
+  lipaPhoneChangeBtn: document.getElementById('lipaPhoneChangeBtn'),
+  lipaPayeeMsg: document.getElementById('lipaPayeeMsg'),
+  lipaPhoneChangeWrap: document.getElementById('lipaPhoneChangeWrap'),
+  lipaPricingRuleForm: document.getElementById('lipaPricingRuleForm'),
+  lipaRuleName: document.getElementById('lipaRuleName'),
+  lipaRuleCrop: document.getElementById('lipaRuleCrop'),
+  lipaRuleGrade: document.getElementById('lipaRuleGrade'),
+  lipaRulePricePerKg: document.getElementById('lipaRulePricePerKg'),
+  lipaRuleLocation: document.getElementById('lipaRuleLocation'),
+  lipaRuleBuyer: document.getElementById('lipaRuleBuyer'),
+  lipaRuleEffectiveFrom: document.getElementById('lipaRuleEffectiveFrom'),
+  lipaRuleEffectiveTo: document.getElementById('lipaRuleEffectiveTo'),
+  lipaRuleSaveBtn: document.getElementById('lipaRuleSaveBtn'),
+  lipaRuleMsg: document.getElementById('lipaRuleMsg'),
+  lipaRuleWrap: document.getElementById('lipaRuleWrap'),
+  lipaBankProfileForm: document.getElementById('lipaBankProfileForm'),
+  lipaBankProfileName: document.getElementById('lipaBankProfileName'),
+  lipaBankName: document.getElementById('lipaBankName'),
+  lipaBankDelimiter: document.getElementById('lipaBankDelimiter'),
+  lipaBankEncoding: document.getElementById('lipaBankEncoding'),
+  lipaBankTemplateFile: document.getElementById('lipaBankTemplateFile'),
+  lipaBankTemplateBtn: document.getElementById('lipaBankTemplateBtn'),
+  lipaBankProfileSaveBtn: document.getElementById('lipaBankProfileSaveBtn'),
+  lipaBankProfileMsg: document.getElementById('lipaBankProfileMsg'),
+  lipaBankColumnsWrap: document.getElementById('lipaBankColumnsWrap'),
+  lipaBankProfileWrap: document.getElementById('lipaBankProfileWrap'),
+  lipaBatchForm: document.getElementById('lipaBatchForm'),
+  lipaBatchStart: document.getElementById('lipaBatchStart'),
+  lipaBatchEnd: document.getElementById('lipaBatchEnd'),
+  lipaBatchCrop: document.getElementById('lipaBatchCrop'),
+  lipaBatchSite: document.getElementById('lipaBatchSite'),
+  lipaBatchPricingMode: document.getElementById('lipaBatchPricingMode'),
+  lipaBatchBankProfile: document.getElementById('lipaBatchBankProfile'),
+  lipaBatchNarration: document.getElementById('lipaBatchNarration'),
+  lipaBatchSecondApproval: document.getElementById('lipaBatchSecondApproval'),
+  lipaBatchPreviewBtn: document.getElementById('lipaBatchPreviewBtn'),
+  lipaBatchCreateBtn: document.getElementById('lipaBatchCreateBtn'),
+  lipaBatchSummary: document.getElementById('lipaBatchSummary'),
+  lipaBatchMsg: document.getElementById('lipaBatchMsg'),
+  lipaBatchPreviewWrap: document.getElementById('lipaBatchPreviewWrap'),
+  lipaBatchWrap: document.getElementById('lipaBatchWrap'),
 
   smsForm: document.getElementById('smsForm'),
   smsTargetMode: document.getElementById('smsTargetMode'),
@@ -406,6 +464,10 @@ async function init() {
   bindExports();
   bindAiTools();
   bindMsaidizi();
+
+  const today = formatDateInputValue(new Date());
+  if (elements.lipaBatchStart && !elements.lipaBatchStart.value) elements.lipaBatchStart.value = today;
+  if (elements.lipaBatchEnd && !elements.lipaBatchEnd.value) elements.lipaBatchEnd.value = today;
 
   hydrateFarmerSelectors();
   syncCurrentUserPhotoFromState();
@@ -2139,6 +2201,335 @@ function bindProducePurchases() {
   });
 }
 
+function lipaBatchFormPayload() {
+  return {
+    periodStart: String(elements.lipaBatchStart?.value || '').trim(),
+    periodEnd: String(elements.lipaBatchEnd?.value || '').trim(),
+    crop: String(elements.lipaBatchCrop?.value || '').trim(),
+    receivingSite: String(elements.lipaBatchSite?.value || '').trim(),
+    pricingMode: String(elements.lipaBatchPricingMode?.value || 'contract_grade').trim(),
+    bankProfileId: String(elements.lipaBatchBankProfile?.value || '').trim(),
+    defaultNarration: String(elements.lipaBatchNarration?.value || '').trim(),
+    requireSecondApproval: Boolean(elements.lipaBatchSecondApproval?.checked)
+  };
+}
+
+async function saveLipaPricingRule() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaRuleMsg.textContent = 'Sign in as admin to manage pricing rules.';
+    return;
+  }
+
+  const payload = {
+    name: String(elements.lipaRuleName?.value || '').trim(),
+    crop: String(elements.lipaRuleCrop?.value || '').trim(),
+    grade: String(elements.lipaRuleGrade?.value || 'A').trim(),
+    pricePerKg: Number(elements.lipaRulePricePerKg?.value || 0),
+    location: String(elements.lipaRuleLocation?.value || '').trim(),
+    buyer: String(elements.lipaRuleBuyer?.value || '').trim(),
+    effectiveFrom: String(elements.lipaRuleEffectiveFrom?.value || '').trim(),
+    effectiveTo: String(elements.lipaRuleEffectiveTo?.value || '').trim(),
+    currency: 'KES'
+  };
+
+  try {
+    await apiRequest('/api/payments/lipa-mkulima/pricing-rules', {
+      method: 'POST',
+      body: payload
+    });
+    elements.lipaPricingRuleForm?.reset();
+    if (elements.lipaRuleCrop) elements.lipaRuleCrop.value = 'Hass';
+    elements.lipaRuleMsg.textContent = 'Pricing rule saved.';
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaRuleMsg.textContent = error.message;
+  }
+}
+
+async function loadLipaTemplateHeaders() {
+  const file = elements.lipaBankTemplateFile?.files?.[0];
+  if (!file) {
+    elements.lipaBankProfileMsg.textContent = 'Choose a bank template CSV or XLSX file first.';
+    return;
+  }
+
+  try {
+    const headers = await extractTemplateHeadersFromFile(file);
+    lipaState.templateFileName = file.name;
+    lipaState.templateColumns = headers.map((header) => ({
+      header,
+      source: guessLipaColumnSource(header),
+      constant: ''
+    }));
+    renderLipaBankColumnMappings();
+    elements.lipaBankProfileMsg.textContent = `Loaded ${headers.length} template column(s).`;
+  } catch (error) {
+    elements.lipaBankProfileMsg.textContent = error.message;
+  }
+}
+
+async function saveLipaBankProfile() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaBankProfileMsg.textContent = 'Sign in as admin to manage bank profiles.';
+    return;
+  }
+  if (!lipaState.templateColumns.length) {
+    elements.lipaBankProfileMsg.textContent = 'Load template columns first.';
+    return;
+  }
+
+  const file = elements.lipaBankTemplateFile?.files?.[0];
+  try {
+    await apiRequest('/api/payments/lipa-mkulima/bank-profiles', {
+      method: 'POST',
+      body: {
+        name: String(elements.lipaBankProfileName?.value || '').trim(),
+        bankName: String(elements.lipaBankName?.value || '').trim(),
+        delimiter: String(elements.lipaBankDelimiter?.value || ','),
+        encoding: String(elements.lipaBankEncoding?.value || 'utf8'),
+        templateFileName: file?.name || lipaState.templateFileName,
+        columns: lipaState.templateColumns
+      }
+    });
+    elements.lipaBankProfileForm?.reset();
+    lipaState.templateColumns = [];
+    lipaState.templateFileName = '';
+    elements.lipaBankProfileMsg.textContent = 'Bank profile saved.';
+    renderLipaBankColumnMappings();
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaBankProfileMsg.textContent = error.message;
+  }
+}
+
+async function setLipaPayeeVerification(verified) {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaPayeeMsg.textContent = 'Sign in as admin to manage payee verification.';
+    return;
+  }
+  const farmerId = String(elements.lipaPayeeFarmer?.value || '').trim();
+  if (!farmerId) {
+    elements.lipaPayeeMsg.textContent = 'Choose a farmer first.';
+    return;
+  }
+  try {
+    await apiRequest(`/api/payments/lipa-mkulima/farmers/${encodeURIComponent(farmerId)}/verify-payee`, {
+      method: 'POST',
+      body: { verified }
+    });
+    elements.lipaPayeeMsg.textContent = verified ? 'Payee verified.' : 'Payee verification cleared.';
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaPayeeMsg.textContent = error.message;
+  }
+}
+
+async function requestLipaPhoneChange() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaPayeeMsg.textContent = 'Sign in as admin to manage phone changes.';
+    return;
+  }
+  const farmerId = String(elements.lipaPhoneChangeFarmer?.value || '').trim();
+  const newPhone = cleanPhone(elements.lipaPhoneChangePhone?.value || '');
+  const reason = String(elements.lipaPhoneChangeReason?.value || '').trim();
+  if (!farmerId || !newPhone || !reason) {
+    elements.lipaPayeeMsg.textContent = 'Farmer, new phone, and reason are required.';
+    return;
+  }
+  try {
+    await apiRequest('/api/payments/lipa-mkulima/phone-change-requests', {
+      method: 'POST',
+      body: {
+        farmerId,
+        newPhone,
+        reason
+      }
+    });
+    elements.lipaPhoneChangePhone.value = '';
+    elements.lipaPhoneChangeReason.value = '';
+    elements.lipaPayeeMsg.textContent = 'Phone change request recorded. Approve it from the queue if needed.';
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaPayeeMsg.textContent = error.message;
+  }
+}
+
+async function handleLipaPhoneChangeQueueAction(action, requestId) {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaPayeeMsg.textContent = 'Sign in as admin to manage phone changes.';
+    return;
+  }
+  try {
+    if (action === 'approve') {
+      await apiRequest(
+        `/api/payments/lipa-mkulima/phone-change-requests/${encodeURIComponent(requestId)}/approve`,
+        {
+          method: 'POST',
+          body: {}
+        }
+      );
+      elements.lipaPayeeMsg.textContent = 'Phone change approved.';
+    } else {
+      const reason = prompt('Optional rejection reason:', '') || '';
+      await apiRequest(
+        `/api/payments/lipa-mkulima/phone-change-requests/${encodeURIComponent(requestId)}/reject`,
+        {
+          method: 'POST',
+          body: { reason }
+        }
+      );
+      elements.lipaPayeeMsg.textContent = 'Phone change request rejected.';
+    }
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaPayeeMsg.textContent = error.message;
+  }
+}
+
+async function runLipaPreview() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaBatchMsg.textContent = 'Sign in as admin to calculate payout previews.';
+    return;
+  }
+  try {
+    const response = await apiRequest('/api/payments/lipa-mkulima/calculate', {
+      method: 'POST',
+      body: lipaBatchFormPayload()
+    });
+    lipaState.preview = response.data || null;
+    renderLipaPreview();
+    elements.lipaBatchMsg.textContent = 'Payout preview calculated.';
+  } catch (error) {
+    elements.lipaBatchMsg.textContent = error.message;
+  }
+}
+
+async function createLipaBatch() {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaBatchMsg.textContent = 'Sign in as admin to create payout batches.';
+    return;
+  }
+  try {
+    const response = await apiRequest('/api/payments/lipa-mkulima/batches', {
+      method: 'POST',
+      body: lipaBatchFormPayload()
+    });
+    lipaState.selectedBatchId = response.data?.id || '';
+    lipaState.preview = response.data ? { lines: response.data.lines, totals: response.data.totals } : null;
+    elements.lipaBatchMsg.textContent = `Draft batch ${response.data?.id || ''} created.`;
+    await fetchAllData();
+  } catch (error) {
+    elements.lipaBatchMsg.textContent = error.message;
+  }
+}
+
+function encodeLipaExportBlob(text, encoding = 'utf8') {
+  if (String(encoding).toLowerCase() === 'latin1') {
+    const bytes = Uint8Array.from(Array.from(String(text || ''), (char) => char.charCodeAt(0) & 0xff));
+    return new Blob([bytes], { type: 'text/csv;charset=iso-8859-1' });
+  }
+  return new Blob([String(text || '')], { type: 'text/csv;charset=utf-8' });
+}
+
+async function handleLipaBatchAction(action, batchId) {
+  if (!API.enabled || !isAuthenticated() || currentRole() !== 'admin') {
+    elements.lipaBatchMsg.textContent = 'Sign in as admin to manage payout batches.';
+    return;
+  }
+
+  const bankProfileId = String(elements.lipaBatchBankProfile?.value || '').trim();
+
+  try {
+    if (action === 'view') {
+      const response = await apiRequest(`/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}`);
+      lipaState.preview = {
+        lines: response.data?.lines || [],
+        totals: response.data?.totals || null
+      };
+      renderLipaPreview();
+      elements.lipaBatchMsg.textContent = `Loaded batch ${batchId}.`;
+      return;
+    }
+
+    if (action === 'review') {
+      await apiRequest(`/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}/review`, {
+        method: 'POST',
+        body: {}
+      });
+      elements.lipaBatchMsg.textContent = `Batch ${batchId} reviewed.`;
+      await fetchAllData();
+      return;
+    }
+
+    if (action === 'approve') {
+      await apiRequest(`/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}/approve`, {
+        method: 'POST',
+        body: {}
+      });
+      elements.lipaBatchMsg.textContent = `Batch ${batchId} approved.`;
+      await fetchAllData();
+      return;
+    }
+
+    if (action === 'cancel') {
+      const reason = prompt('Optional cancellation reason:', '') || '';
+      await apiRequest(`/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}/cancel`, {
+        method: 'POST',
+        body: { reason }
+      });
+      elements.lipaBatchMsg.textContent = `Batch ${batchId} cancelled.`;
+      await fetchAllData();
+      return;
+    }
+
+    if (action === 'export-preview') {
+      const useOverride = confirm('Allow export override for unverified payees if needed?');
+      const overrideReason = useOverride ? prompt('Override reason (required if overriding):', '') || '' : '';
+      const response = await apiRequest(
+        `/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}/export-preview`,
+        {
+          method: 'POST',
+          body: {
+            bankProfileId,
+            allowUnverifiedOverride: useOverride,
+            overrideReason
+          }
+        }
+      );
+      lipaState.preview = {
+        rows: response.data?.rows || [],
+        headers: response.data?.headers || [],
+        totalAmount: response.data?.totalAmount || 0,
+        warning: response.data?.warning || ''
+      };
+      renderLipaPreview();
+      elements.lipaBatchMsg.textContent = `Export preview ready for batch ${batchId}.`;
+      return;
+    }
+
+    if (action === 'export') {
+      const useOverride = confirm('Allow export override for unverified payees if needed?');
+      const overrideReason = useOverride ? prompt('Override reason (required if overriding):', '') || '' : '';
+      const response = await apiRequest(`/api/payments/lipa-mkulima/batches/${encodeURIComponent(batchId)}/export`, {
+        method: 'POST',
+        body: {
+          bankProfileId,
+          allowUnverifiedOverride: useOverride,
+          overrideReason
+        }
+      });
+      const blob = encodeLipaExportBlob(response.data?.csvText || '', response.data?.encoding || 'utf8');
+      downloadBlob(blob, response.data?.filename || `lipa-mkulima-${batchId}.csv`);
+      elements.lipaBatchMsg.textContent = response.data?.warning
+        ? `CSV downloaded. ${response.data.warning}`
+        : 'CSV downloaded.';
+      await fetchAllData();
+    }
+  } catch (error) {
+    elements.lipaBatchMsg.textContent = error.message;
+  }
+}
+
 function bindPayments() {
   elements.paymentFarmer.addEventListener('change', () => {
     const owed = owedPicker.rows.find((row) => row.farmerId === elements.paymentFarmer.value);
@@ -2146,6 +2537,115 @@ function bindPayments() {
       elements.amount.value = String(owed.balanceKes);
     }
   });
+
+  if (elements.lipaVerifyPayeeBtn) {
+    elements.lipaVerifyPayeeBtn.addEventListener('click', async () => {
+      clearMessages();
+      await setLipaPayeeVerification(true);
+    });
+  }
+
+  if (elements.lipaUnverifyPayeeBtn) {
+    elements.lipaUnverifyPayeeBtn.addEventListener('click', async () => {
+      clearMessages();
+      await setLipaPayeeVerification(false);
+    });
+  }
+
+  if (elements.lipaPhoneChangeBtn) {
+    elements.lipaPhoneChangeBtn.addEventListener('click', async () => {
+      clearMessages();
+      await requestLipaPhoneChange();
+    });
+  }
+
+  if (elements.lipaPricingRuleForm) {
+    elements.lipaPricingRuleForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      await saveLipaPricingRule();
+    });
+  }
+
+  if (elements.lipaBankTemplateBtn) {
+    elements.lipaBankTemplateBtn.addEventListener('click', async () => {
+      clearMessages();
+      await loadLipaTemplateHeaders();
+    });
+  }
+
+  if (elements.lipaBankProfileForm) {
+    elements.lipaBankProfileForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      await saveLipaBankProfile();
+    });
+  }
+
+  if (elements.lipaBankColumnsWrap) {
+    elements.lipaBankColumnsWrap.addEventListener('change', (event) => {
+      const sourceSelect = event.target.closest('select[data-action="lipa-template-source"]');
+      if (!sourceSelect) return;
+      const index = Number(sourceSelect.dataset.index || -1);
+      if (!Number.isFinite(index) || !lipaState.templateColumns[index]) return;
+      lipaState.templateColumns[index].source = String(sourceSelect.value || '').trim();
+      renderLipaBankColumnMappings();
+    });
+    elements.lipaBankColumnsWrap.addEventListener('input', (event) => {
+      const constantInput = event.target.closest('input[data-action="lipa-template-constant"]');
+      if (!constantInput) return;
+      const index = Number(constantInput.dataset.index || -1);
+      if (!Number.isFinite(index) || !lipaState.templateColumns[index]) return;
+      lipaState.templateColumns[index].constant = String(constantInput.value || '');
+    });
+  }
+
+  if (elements.lipaBatchPreviewBtn) {
+    elements.lipaBatchPreviewBtn.addEventListener('click', async () => {
+      clearMessages();
+      await runLipaPreview();
+    });
+  }
+
+  if (elements.lipaBatchForm) {
+    elements.lipaBatchForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      clearMessages();
+      await createLipaBatch();
+    });
+  }
+
+  if (elements.lipaBatchWrap) {
+    elements.lipaBatchWrap.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const batchId = String(button.dataset.id || '').trim();
+      const action = String(button.dataset.action || '').trim();
+      if (!batchId) return;
+      if (action === 'lipa-view-batch') await handleLipaBatchAction('view', batchId);
+      if (action === 'lipa-review-batch') await handleLipaBatchAction('review', batchId);
+      if (action === 'lipa-approve-batch') await handleLipaBatchAction('approve', batchId);
+      if (action === 'lipa-cancel-batch') await handleLipaBatchAction('cancel', batchId);
+      if (action === 'lipa-export-preview') await handleLipaBatchAction('export-preview', batchId);
+      if (action === 'lipa-export-batch') await handleLipaBatchAction('export', batchId);
+    });
+  }
+
+  if (elements.lipaPhoneChangeWrap) {
+    elements.lipaPhoneChangeWrap.addEventListener('click', async (event) => {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const requestId = String(button.dataset.id || '').trim();
+      const action = String(button.dataset.action || '').trim();
+      if (!requestId) return;
+      if (action === 'lipa-approve-phone-change') {
+        await handleLipaPhoneChangeQueueAction('approve', requestId);
+      }
+      if (action === 'lipa-reject-phone-change') {
+        await handleLipaPhoneChangeQueueAction('reject', requestId);
+      }
+    });
+  }
 
   if (elements.paymentRecommendationStatusFilter) {
     elements.paymentRecommendationStatusFilter.addEventListener('change', async () => {
@@ -5692,6 +6192,11 @@ async function fetchPhase2bSnapshots(role) {
 
 async function fetchAllData() {
   if (!API.enabled || !isAuthenticated()) {
+    lipaState.pricingRules = [];
+    lipaState.bankProfiles = [];
+    lipaState.batches = [];
+    lipaState.phoneChangeRequests = [];
+    lipaState.preview = null;
     renderAll();
     updatePermissionUi();
     await loadPaymentRecommendations();
@@ -5720,6 +6225,27 @@ async function fetchAllData() {
       managedAgents = Array.isArray(agentAccounts.data) ? agentAccounts.data : [];
     }
 
+    let lipaSnapshots = {
+      pricingRules: [],
+      bankProfiles: [],
+      batches: [],
+      phoneChangeRequests: []
+    };
+    if (currentRole() === 'admin') {
+      const [pricingRules, bankProfiles, batches, phoneChangeRequests] = await Promise.all([
+        apiRequest('/api/payments/lipa-mkulima/pricing-rules?limit=500'),
+        apiRequest('/api/payments/lipa-mkulima/bank-profiles?limit=500'),
+        apiRequest('/api/payments/lipa-mkulima/batches?limit=200'),
+        apiRequest('/api/payments/lipa-mkulima/phone-change-requests?limit=200')
+      ]);
+      lipaSnapshots = {
+        pricingRules: Array.isArray(pricingRules.data) ? pricingRules.data : [],
+        bankProfiles: Array.isArray(bankProfiles.data) ? bankProfiles.data : [],
+        batches: Array.isArray(batches.data) ? batches.data : [],
+        phoneChangeRequests: Array.isArray(phoneChangeRequests.data) ? phoneChangeRequests.data : []
+      };
+    }
+
     const phase2b = await fetchPhase2bSnapshots(currentRole());
 
     state.farmers = farmers.data || [];
@@ -5732,6 +6258,10 @@ async function fetchAllData() {
     state.agentStats = agentStats.data || [];
     state.agents = managedAgents;
     paymentRecommendationPicker.meta = paymentRecommendations.meta || paymentRecommendationPicker.meta;
+    lipaState.pricingRules = lipaSnapshots.pricingRules;
+    lipaState.bankProfiles = lipaSnapshots.bankProfiles;
+    lipaState.batches = lipaSnapshots.batches;
+    lipaState.phoneChangeRequests = lipaSnapshots.phoneChangeRequests;
 
     aiState.proposals = phase2b.proposals || [];
     aiState.proposalsMeta = phase2b.proposalsMeta || null;
@@ -5932,6 +6462,7 @@ function updatePermissionUi() {
   const paymentRecommendationCreateAllowed = backendAuthReady && role === 'agent';
   const paymentRecommendationDecisionAllowed = backendAuthReady && role === 'admin';
   const paymentAllowed = backendAuthReady && role === 'admin';
+  const lipaAllowed = API.enabled && isAuthenticated() && role === 'admin';
   const smsAllowed = backendAuthReady && ['admin', 'agent'].includes(role);
   const aiSmsAllowed = API.enabled && isAuthenticated() && ['admin', 'agent'].includes(role);
   const copilotAllowed = API.enabled && isAuthenticated() && role === 'admin';
@@ -6078,6 +6609,42 @@ function updatePermissionUi() {
   if (elements.paymentLogCard) {
     elements.paymentLogCard.hidden = !paymentAllowed;
   }
+  if (elements.lipaMkulimaCard) {
+    elements.lipaMkulimaCard.hidden = !lipaAllowed;
+  }
+  if (elements.lipaPayeeFarmer) elements.lipaPayeeFarmer.disabled = !lipaAllowed;
+  if (elements.lipaVerifyPayeeBtn) elements.lipaVerifyPayeeBtn.disabled = !lipaAllowed;
+  if (elements.lipaUnverifyPayeeBtn) elements.lipaUnverifyPayeeBtn.disabled = !lipaAllowed;
+  if (elements.lipaPhoneChangeFarmer) elements.lipaPhoneChangeFarmer.disabled = !lipaAllowed;
+  if (elements.lipaPhoneChangePhone) elements.lipaPhoneChangePhone.disabled = !lipaAllowed;
+  if (elements.lipaPhoneChangeReason) elements.lipaPhoneChangeReason.disabled = !lipaAllowed;
+  if (elements.lipaPhoneChangeBtn) elements.lipaPhoneChangeBtn.disabled = !lipaAllowed;
+  if (elements.lipaRuleName) elements.lipaRuleName.disabled = !lipaAllowed;
+  if (elements.lipaRuleCrop) elements.lipaRuleCrop.disabled = !lipaAllowed;
+  if (elements.lipaRuleGrade) elements.lipaRuleGrade.disabled = !lipaAllowed;
+  if (elements.lipaRulePricePerKg) elements.lipaRulePricePerKg.disabled = !lipaAllowed;
+  if (elements.lipaRuleLocation) elements.lipaRuleLocation.disabled = !lipaAllowed;
+  if (elements.lipaRuleBuyer) elements.lipaRuleBuyer.disabled = !lipaAllowed;
+  if (elements.lipaRuleEffectiveFrom) elements.lipaRuleEffectiveFrom.disabled = !lipaAllowed;
+  if (elements.lipaRuleEffectiveTo) elements.lipaRuleEffectiveTo.disabled = !lipaAllowed;
+  if (elements.lipaRuleSaveBtn) elements.lipaRuleSaveBtn.disabled = !lipaAllowed;
+  if (elements.lipaBankProfileName) elements.lipaBankProfileName.disabled = !lipaAllowed;
+  if (elements.lipaBankName) elements.lipaBankName.disabled = !lipaAllowed;
+  if (elements.lipaBankDelimiter) elements.lipaBankDelimiter.disabled = !lipaAllowed;
+  if (elements.lipaBankEncoding) elements.lipaBankEncoding.disabled = !lipaAllowed;
+  if (elements.lipaBankTemplateFile) elements.lipaBankTemplateFile.disabled = !lipaAllowed;
+  if (elements.lipaBankTemplateBtn) elements.lipaBankTemplateBtn.disabled = !lipaAllowed;
+  if (elements.lipaBankProfileSaveBtn) elements.lipaBankProfileSaveBtn.disabled = !lipaAllowed;
+  if (elements.lipaBatchStart) elements.lipaBatchStart.disabled = !lipaAllowed;
+  if (elements.lipaBatchEnd) elements.lipaBatchEnd.disabled = !lipaAllowed;
+  if (elements.lipaBatchCrop) elements.lipaBatchCrop.disabled = !lipaAllowed;
+  if (elements.lipaBatchSite) elements.lipaBatchSite.disabled = !lipaAllowed;
+  if (elements.lipaBatchPricingMode) elements.lipaBatchPricingMode.disabled = !lipaAllowed;
+  if (elements.lipaBatchBankProfile) elements.lipaBatchBankProfile.disabled = !lipaAllowed;
+  if (elements.lipaBatchNarration) elements.lipaBatchNarration.disabled = !lipaAllowed;
+  if (elements.lipaBatchSecondApproval) elements.lipaBatchSecondApproval.disabled = !lipaAllowed;
+  if (elements.lipaBatchPreviewBtn) elements.lipaBatchPreviewBtn.disabled = !lipaAllowed;
+  if (elements.lipaBatchCreateBtn) elements.lipaBatchCreateBtn.disabled = !lipaAllowed;
 
   elements.smsForm.querySelector('button[type="submit"]').disabled = !smsAllowed;
   if (elements.smsDraftPurpose) elements.smsDraftPurpose.disabled = !aiSmsAllowed;
@@ -6471,7 +7038,424 @@ function renderProducePurchases() {
   `;
 }
 
+function lipaMappingSourceOptions(selected = '') {
+  const sources = [
+    ['beneficiary_name', 'Beneficiary Name'],
+    ['beneficiary_phone', 'Beneficiary Phone'],
+    ['net_amount', 'Net Amount'],
+    ['gross_amount', 'Gross Amount'],
+    ['deduction_amount', 'Deduction Amount'],
+    ['bonus_amount', 'Bonus Amount'],
+    ['reference', 'Reference'],
+    ['narration', 'Narration'],
+    ['national_id', 'National ID'],
+    ['farmer_id', 'Farmer ID'],
+    ['currency', 'Currency']
+  ];
+  const opts = ['<option value="">Use constant</option>']
+    .concat(
+      sources.map(
+        ([value, label]) =>
+          `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(label)}</option>`
+      )
+    )
+    .join('');
+  return opts;
+}
+
+function guessLipaColumnSource(header) {
+  const lower = String(header || '').trim().toLowerCase();
+  if (!lower) return '';
+  if (lower.includes('name')) return 'beneficiary_name';
+  if (lower.includes('phone') || lower.includes('mobile') || lower.includes('msisdn')) return 'beneficiary_phone';
+  if (lower.includes('amount') || lower.includes('net')) return 'net_amount';
+  if (lower.includes('reference') || lower.includes('ref')) return 'reference';
+  if (lower.includes('narration') || lower.includes('remark') || lower.includes('description')) return 'narration';
+  if (lower.includes('national') || lower.includes('id')) return 'national_id';
+  if (lower.includes('currency')) return 'currency';
+  return '';
+}
+
+async function extractTemplateHeadersFromFile(file) {
+  const ext = String(file?.name || '')
+    .split('.')
+    .pop()
+    .toLowerCase();
+  const type = String(file?.type || '').toLowerCase();
+  const isCsv = ext === 'csv' || type.includes('csv') || type === 'text/plain';
+  const isExcel =
+    ext === 'xlsx' ||
+    ext === 'xls' ||
+    type.includes('spreadsheetml') ||
+    type.includes('ms-excel') ||
+    type.includes('excel');
+
+  if (isCsv) {
+    const content = await readFileAsText(file);
+    const rows = parseCsvRows(String(content || ''));
+    const first = rows.find((row) => row.some((cell) => String(cell ?? '').trim()));
+    return Array.isArray(first) ? first.map((cell) => String(cell ?? '').trim()).filter(Boolean) : [];
+  }
+
+  if (isExcel) {
+    if (!window.XLSX || typeof window.XLSX.read !== 'function') {
+      throw new Error('Excel support is still loading. Wait a moment and try again.');
+    }
+    const buffer = await readFileAsArrayBuffer(file);
+    const workbook = window.XLSX.read(buffer, { type: 'array' });
+    const firstSheetName = workbook.SheetNames?.[0];
+    if (!firstSheetName) return [];
+    const sheet = workbook.Sheets[firstSheetName];
+    const headerRows = window.XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const header = Array.isArray(headerRows[0]) ? headerRows[0] : [];
+    return header.map((cell) => String(cell ?? '').trim()).filter(Boolean);
+  }
+
+  throw new Error('Unsupported file type. Use .csv, .xlsx, or .xls.');
+}
+
+function renderLipaBankColumnMappings() {
+  if (!elements.lipaBankColumnsWrap) return;
+  if (!lipaState.templateColumns.length) {
+    elements.lipaBankColumnsWrap.classList.add('empty');
+    elements.lipaBankColumnsWrap.textContent = 'Upload a template file to map output columns.';
+    return;
+  }
+
+  elements.lipaBankColumnsWrap.classList.remove('empty');
+  const rows = lipaState.templateColumns
+    .map(
+      (column, index) => `
+        <div class="mapping-grid">
+          <div class="row">
+            <input value="${escapeHtml(column.header)}" disabled>
+            <select data-action="lipa-template-source" data-index="${index}">
+              ${lipaMappingSourceOptions(column.source)}
+            </select>
+            <input data-action="lipa-template-constant" data-index="${index}" value="${escapeHtml(column.constant || '')}" placeholder="Constant value (optional)">
+          </div>
+        </div>
+      `
+    )
+    .join('');
+
+  elements.lipaBankColumnsWrap.innerHTML = `
+    <div class="section-head">
+      <h3>Column Mapping</h3>
+      <p class="meta compact">${escapeHtml(lipaState.templateFileName || 'Template file')} loaded with ${lipaState.templateColumns.length} column(s).</p>
+    </div>
+    ${rows}
+  `;
+}
+
+function renderLipaPricingRules() {
+  if (!elements.lipaRuleWrap) return;
+  if (currentRole() !== 'admin') {
+    elements.lipaRuleWrap.classList.add('empty');
+    elements.lipaRuleWrap.textContent = 'Sign in as admin to manage payout pricing rules.';
+    return;
+  }
+  if (!lipaState.pricingRules.length) {
+    elements.lipaRuleWrap.classList.add('empty');
+    elements.lipaRuleWrap.textContent = 'No payout pricing rules loaded yet.';
+    return;
+  }
+
+  elements.lipaRuleWrap.classList.remove('empty');
+  const rows = lipaState.pricingRules
+    .slice(0, 40)
+    .map(
+      (rule) => `
+        <tr>
+          <td>${escapeHtml(rule.name || '-')}</td>
+          <td>${escapeHtml(rule.crop || '-')}</td>
+          <td>${escapeHtml(rule.grade || '-')}</td>
+          <td>${escapeHtml(formatKesWithCents(rule.pricePerKg || 0))}</td>
+          <td>${escapeHtml(rule.location || '-')}</td>
+          <td>${escapeHtml(rule.effectiveFrom || '-')}</td>
+          <td>${escapeHtml(rule.effectiveTo || '-')}</td>
+          <td>${escapeHtml(rule.status || '-')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  elements.lipaRuleWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Crop</th>
+          <th>Grade</th>
+          <th>Price/Kg</th>
+          <th>Site</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderLipaBankProfiles() {
+  if (!elements.lipaBankProfileWrap) return;
+  renderLipaBankColumnMappings();
+
+  if (currentRole() !== 'admin') {
+    elements.lipaBankProfileWrap.classList.add('empty');
+    elements.lipaBankProfileWrap.textContent = 'Sign in as admin to manage bank export profiles.';
+    return;
+  }
+  if (!lipaState.bankProfiles.length) {
+    elements.lipaBankProfileWrap.classList.add('empty');
+    elements.lipaBankProfileWrap.textContent = 'No bank profiles loaded yet.';
+    return;
+  }
+
+  elements.lipaBankProfileWrap.classList.remove('empty');
+  const rows = lipaState.bankProfiles
+    .slice(0, 20)
+    .map(
+      (profile) => `
+        <tr>
+          <td>${escapeHtml(profile.bankName || '-')}</td>
+          <td>${escapeHtml(profile.name || '-')}</td>
+          <td>${escapeHtml(String(profile.version || '-'))}</td>
+          <td>${escapeHtml(profile.delimiter === ';' ? 'Semicolon' : profile.delimiter === '\t' ? 'Tab' : 'Comma')}</td>
+          <td>${escapeHtml((profile.encoding || 'utf8').toUpperCase())}</td>
+          <td>${escapeHtml(profile.status || '-')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  elements.lipaBankProfileWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Bank</th>
+          <th>Profile</th>
+          <th>Version</th>
+          <th>Delimiter</th>
+          <th>Encoding</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderLipaPhoneChanges() {
+  if (!elements.lipaPhoneChangeWrap) return;
+  if (currentRole() !== 'admin') {
+    elements.lipaPhoneChangeWrap.classList.add('empty');
+    elements.lipaPhoneChangeWrap.textContent = 'Sign in as admin to view phone change approvals.';
+    return;
+  }
+  if (!lipaState.phoneChangeRequests.length) {
+    elements.lipaPhoneChangeWrap.classList.add('empty');
+    elements.lipaPhoneChangeWrap.textContent = 'No phone change requests loaded yet.';
+    return;
+  }
+
+  elements.lipaPhoneChangeWrap.classList.remove('empty');
+  const rows = lipaState.phoneChangeRequests
+    .slice(0, 12)
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.farmerName || '-')}</td>
+          <td>${escapeHtml(row.oldPhone || '-')}</td>
+          <td>${escapeHtml(row.newPhone || '-')}</td>
+          <td>${escapeHtml(row.reason || '-')}</td>
+          <td>${escapeHtml(row.status || '-')}</td>
+          <td>${escapeHtml(dateShort(row.reviewedAt || row.requestedAt))}</td>
+          <td class="actions">
+            ${String(row.status || '').toLowerCase() === 'pending'
+              ? `
+                <button class="table-btn" data-action="lipa-approve-phone-change" data-id="${escapeHtml(row.id)}">Approve</button>
+                <button class="table-btn danger" data-action="lipa-reject-phone-change" data-id="${escapeHtml(row.id)}">Reject</button>
+              `
+              : '-'}
+          </td>
+        </tr>
+      `
+    )
+    .join('');
+
+  elements.lipaPhoneChangeWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Farmer</th>
+          <th>Old Phone</th>
+          <th>New Phone</th>
+          <th>Reason</th>
+          <th>Status</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderLipaPreview() {
+  if (!elements.lipaBatchPreviewWrap || !elements.lipaBatchSummary) return;
+  const preview = lipaState.preview;
+  if (!preview) {
+    elements.lipaBatchPreviewWrap.classList.add('empty');
+    elements.lipaBatchPreviewWrap.textContent = 'Run a preview to inspect farmer payout lines and anomalies.';
+    elements.lipaBatchSummary.textContent = 'No payout preview loaded yet.';
+    return;
+  }
+
+  if (Array.isArray(preview.lines)) {
+    elements.lipaBatchSummary.textContent =
+      `${preview.lines.length} farmer line(s), ${formatKesWithCents(preview.totals?.netAmount || 0)} KES net, ${formatKesWithCents(preview.totals?.totalKg || 0)} kg total.`;
+    const rows = preview.lines
+      .slice(0, 80)
+      .map((line) => {
+        const issues = Array.isArray(line.issues) && line.issues.length
+          ? line.issues.map((issue) => `${issue.severity}: ${issue.message}`).join(' | ')
+          : 'Ready';
+        return `
+          <tr>
+            <td>${escapeHtml(line.farmerName || '-')}</td>
+            <td>${escapeHtml(line.phone || '-')}</td>
+            <td>${escapeHtml(String(line.verifiedPayee ? 'Verified' : 'Needs Verification'))}</td>
+            <td>${escapeHtml(formatKesWithCents(line.totalKg || 0))}</td>
+            <td>${escapeHtml(formatKesWithCents(line.netAmount || 0))}</td>
+            <td>${escapeHtml(issues)}</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    elements.lipaBatchPreviewWrap.classList.remove('empty');
+    elements.lipaBatchPreviewWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Farmer</th>
+            <th>Phone</th>
+            <th>Payee</th>
+            <th>Total Kg</th>
+            <th>Net Amount</th>
+            <th>Issues</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    return;
+  }
+
+  if (Array.isArray(preview.rows)) {
+    elements.lipaBatchSummary.textContent =
+      `${preview.rows.length} export row(s), ${formatKesWithCents(preview.totalAmount || 0)} KES total${preview.warning ? `, ${preview.warning}` : ''}.`;
+    const headers = Array.isArray(preview.headers) ? preview.headers : Object.keys(preview.rows[0] || {});
+    const head = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('');
+    const body = preview.rows
+      .slice(0, 40)
+      .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row?.[header] ?? '')}</td>`).join('')}</tr>`)
+      .join('');
+    elements.lipaBatchPreviewWrap.classList.remove('empty');
+    elements.lipaBatchPreviewWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>${head}</tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    `;
+    return;
+  }
+}
+
+function renderLipaBatches() {
+  if (!elements.lipaBatchWrap) return;
+  if (currentRole() !== 'admin') {
+    elements.lipaBatchWrap.classList.add('empty');
+    elements.lipaBatchWrap.textContent = 'Sign in as admin to manage Lipa Mkulima batches.';
+    return;
+  }
+  if (!lipaState.batches.length) {
+    elements.lipaBatchWrap.classList.add('empty');
+    elements.lipaBatchWrap.textContent = 'No Lipa Mkulima batches loaded yet.';
+    return;
+  }
+
+  elements.lipaBatchWrap.classList.remove('empty');
+  const rows = lipaState.batches
+    .slice(0, 30)
+    .map((batch) => {
+      const actionButtons = [];
+      actionButtons.push(`<button class="table-btn" data-action="lipa-view-batch" data-id="${escapeHtml(batch.id)}">View</button>`);
+      if (batch.status === 'Draft') {
+        actionButtons.push(`<button class="table-btn" data-action="lipa-review-batch" data-id="${escapeHtml(batch.id)}">Review</button>`);
+      }
+      if (batch.status === 'Reviewed') {
+        actionButtons.push(`<button class="table-btn" data-action="lipa-approve-batch" data-id="${escapeHtml(batch.id)}">Approve</button>`);
+      }
+      if (batch.status === 'Approved' || batch.status === 'Exported') {
+        actionButtons.push(`<button class="table-btn" data-action="lipa-export-preview" data-id="${escapeHtml(batch.id)}">Preview Export</button>`);
+        actionButtons.push(`<button class="table-btn" data-action="lipa-export-batch" data-id="${escapeHtml(batch.id)}">Download CSV</button>`);
+      }
+      if (batch.status !== 'Cancelled' && batch.status !== 'Exported') {
+        actionButtons.push(`<button class="table-btn danger" data-action="lipa-cancel-batch" data-id="${escapeHtml(batch.id)}">Cancel</button>`);
+      }
+
+      return `
+        <tr>
+          <td>${escapeHtml(batch.id)}</td>
+          <td>${escapeHtml(batch.status || '-')}</td>
+          <td>${escapeHtml(batch.crop || '-')}</td>
+          <td>${escapeHtml(batch.receivingSite || '-')}</td>
+          <td>${escapeHtml(String(batch.totals?.lineCount || 0))}</td>
+          <td>${escapeHtml(formatKesWithCents(batch.totals?.netAmount || 0))}</td>
+          <td>${escapeHtml(String(batch.exportCount || 0))}</td>
+          <td>${escapeHtml(dateShort(batch.updatedAt || batch.createdAt))}</td>
+          <td class="actions">${actionButtons.join(' ')}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  elements.lipaBatchWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Batch ID</th>
+          <th>Status</th>
+          <th>Crop</th>
+          <th>Site</th>
+          <th>Lines</th>
+          <th>Net Amount</th>
+          <th>Exports</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function renderLipaMkulima() {
+  renderLipaPricingRules();
+  renderLipaBankProfiles();
+  renderLipaPhoneChanges();
+  renderLipaPreview();
+  renderLipaBatches();
+}
+
 function renderPayments() {
+  renderLipaMkulima();
   if (!state.payments.length) {
     elements.paymentTableWrap.innerHTML = '<div class="empty">No payments yet.</div>';
     return;
@@ -7777,6 +8761,9 @@ function hydrateFarmerPinOptions(rows = state.farmers, preferredId = '') {
 
 function hydrateFarmerSelectors() {
   const selectedPinFarmerId = elements.farmerPinFarmer?.value || '';
+  const selectedPayeeFarmerId = elements.lipaPayeeFarmer?.value || '';
+  const selectedPhoneChangeFarmerId = elements.lipaPhoneChangeFarmer?.value || '';
+  const selectedBankProfileId = elements.lipaBatchBankProfile?.value || '';
   const options = state.farmers
     .map((farmer) => `<option value="${escapeHtml(farmer.id)}">${escapeHtml(farmer.name)} (${escapeHtml(farmer.location)})</option>`)
     .join('');
@@ -7787,6 +8774,31 @@ function hydrateFarmerSelectors() {
   elements.paymentFarmer.innerHTML = options || fallback;
   if (elements.paymentRecommendationFarmer) {
     elements.paymentRecommendationFarmer.innerHTML = options || fallback;
+  }
+  if (elements.lipaPayeeFarmer) {
+    elements.lipaPayeeFarmer.innerHTML = options || fallback;
+    if (selectedPayeeFarmerId && state.farmers.some((row) => row.id === selectedPayeeFarmerId)) {
+      elements.lipaPayeeFarmer.value = selectedPayeeFarmerId;
+    }
+  }
+  if (elements.lipaPhoneChangeFarmer) {
+    elements.lipaPhoneChangeFarmer.innerHTML = options || fallback;
+    if (selectedPhoneChangeFarmerId && state.farmers.some((row) => row.id === selectedPhoneChangeFarmerId)) {
+      elements.lipaPhoneChangeFarmer.value = selectedPhoneChangeFarmerId;
+    }
+  }
+  if (elements.lipaBatchBankProfile) {
+    const profileOptions = lipaState.bankProfiles
+      .filter((profile) => (profile.status || '').toLowerCase() === 'active')
+      .map(
+        (profile) =>
+          `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.bankName)} - ${escapeHtml(profile.name)} (v${escapeHtml(String(profile.version || 1))})</option>`
+      )
+      .join('');
+    elements.lipaBatchBankProfile.innerHTML = profileOptions || '<option value="">No active bank profiles</option>';
+    if (selectedBankProfileId && lipaState.bankProfiles.some((row) => row.id === selectedBankProfileId)) {
+      elements.lipaBatchBankProfile.value = selectedBankProfileId;
+    }
   }
   hydrateFarmerPinOptions(state.farmers, selectedPinFarmerId);
   hydratePurchaseQcOptions();
@@ -8137,6 +9149,10 @@ function clearMessages() {
   elements.owedMsg.textContent = '';
   if (elements.paymentRecommendationMsg) elements.paymentRecommendationMsg.textContent = '';
   elements.paymentMsg.textContent = '';
+  if (elements.lipaPayeeMsg) elements.lipaPayeeMsg.textContent = '';
+  if (elements.lipaRuleMsg) elements.lipaRuleMsg.textContent = '';
+  if (elements.lipaBankProfileMsg) elements.lipaBankProfileMsg.textContent = '';
+  if (elements.lipaBatchMsg) elements.lipaBatchMsg.textContent = '';
   elements.smsMsg.textContent = '';
   if (elements.smsDraftMsg) elements.smsDraftMsg.textContent = '';
   if (elements.smsDraftWrap) {
