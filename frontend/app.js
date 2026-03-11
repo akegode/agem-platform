@@ -696,6 +696,13 @@ function renderMsaidiziAnswer(answer = {}) {
   renderMsaidiziList(elements.msaidiziWaitFor, answer.waitFor || []);
 }
 
+function formatMsaidiziDate(value) {
+  if (!value) return 'not synced yet';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
 async function refreshMsaidiziStatus() {
   if (!API.enabled || !elements.msaidiziSource) {
     if (elements.msaidiziSource) elements.msaidiziSource.textContent = 'Msaidizi requires backend API connectivity.';
@@ -709,10 +716,11 @@ async function refreshMsaidiziStatus() {
       sourceSignature: data.sourceSignature || '',
       moduleCount: Number(data.moduleCount) || 0
     };
-    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    const syncLabel = formatMsaidiziDate(data.lastSyncAt);
     elements.msaidiziSource.textContent = `Modules: ${msaidiziState.status.moduleCount} | Last sync: ${syncLabel}`;
   } catch (error) {
-    elements.msaidiziSource.textContent = error.message;
+    console.error("Msaidizi status load failed:", error);
+    elements.msaidiziSource.textContent = "Msaidizi status is temporarily unavailable.";
   }
 }
 
@@ -731,19 +739,22 @@ async function refreshMsaidiziContext() {
     const params = new URLSearchParams({
       pane: msaidiziState.pane,
       role: msaidiziState.role,
-      limit: '4'
+      limit: '1'
     });
     const response = await apiRequest(`/api/ai/msaidizi/context?${params.toString()}`, { auth: false });
     const data = response.data || {};
     msaidiziState.contextModules = Array.isArray(data.modules) ? data.modules : [];
     renderMsaidiziContext(msaidiziState.contextModules);
-    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
+    const syncLabel = formatMsaidiziDate(data.lastSyncAt);
     if (elements.msaidiziSource) {
-      elements.msaidiziSource.textContent = `Context: ${msaidiziState.pane} | Last sync: ${syncLabel}`;
+    elements.msaidiziSource.textContent = `Context: ${msaidiziState.pane} | Last sync: ${syncLabel}`;
     }
   } catch (error) {
     renderMsaidiziContext([]);
-    if (elements.msaidiziSource) elements.msaidiziSource.textContent = error.message;
+    console.error("Msaidizi context load failed:", error);
+    if (elements.msaidiziSource) {
+      elements.msaidiziSource.textContent = "Msaidizi context is temporarily unavailable.";
+    }
   }
 }
 
@@ -768,24 +779,21 @@ async function askMsaidizi() {
         role: msaidiziRole()
       }
     });
-    const data = response.data || {};
-    const answerModules = Array.isArray(data.modules) ? data.modules : [];
-    const contextModules = Array.isArray(data.contextModules) ? data.contextModules : msaidiziState.contextModules;
-    renderMsaidiziAnswer(data.answer || {});
-    renderMsaidiziContext(contextModules || []);
-    const sourceLabel = data.source === 'openai' ? `OpenAI (${data.model || 'model'})` : 'Local rules';
-    const syncLabel = data.lastSyncAt ? formatDate(data.lastSyncAt) : 'not synced yet';
-    const moduleLabel = answerModules.length
-      ? ` | Answer modules: ${answerModules.map((module) => module.title).slice(0, 2).join(', ')}`
-      : '';
-    if (elements.msaidiziSource) {
-      elements.msaidiziSource.textContent = `${sourceLabel} | Context page: ${pane} | Last sync: ${syncLabel}${moduleLabel}`;
-    }
+  const data = response.data || {};
+  const contextModules = Array.isArray(data.contextModules) ? data.contextModules : msaidiziState.contextModules;
+  renderMsaidiziAnswer(data.answer || {});
+  renderMsaidiziContext(contextModules || []);
+  const sourceLabel = data.source === 'openai' ? `OpenAI (${data.model || 'model'})` : 'Local rules';
+  const syncLabel = formatMsaidiziDate(data.lastSyncAt);
+  if (elements.msaidiziSource) {
+    elements.msaidiziSource.textContent = `${sourceLabel} | Context: ${pane} | Last sync: ${syncLabel}`;
+  }
     if (elements.msaidiziMsg) {
       elements.msaidiziMsg.textContent = data.warning || "Msaidizi's answer is ready.";
     }
   } catch (error) {
-    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = error.message;
+    console.error("Msaidizi answer failed:", error);
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = "Msaidizi could not answer right now. Please try again.";
   }
 }
 
@@ -795,7 +803,7 @@ async function syncMsaidiziDocs(force = true) {
     return;
   }
   if (!isAuthenticated() || currentRole() !== 'admin') {
-    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Only admin can sync documentation modules.';
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Only administrators can sync documentation modules.';
     return;
   }
   if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = 'Syncing documentation...';
@@ -816,7 +824,8 @@ async function syncMsaidiziDocs(force = true) {
     await refreshMsaidiziStatus();
     await refreshMsaidiziContext();
   } catch (error) {
-    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = error.message;
+    console.error("Msaidizi sync failed:", error);
+    if (elements.msaidiziMsg) elements.msaidiziMsg.textContent = "Msaidizi could not sync documentation right now. Please try again.";
   }
 }
 
@@ -1654,7 +1663,7 @@ function bindFarmers() {
 
   const runFarmerPinSearch = async () => {
     if (currentRole() !== 'admin') {
-      elements.farmerPinMsg.textContent = 'Only admin can set or reset farmer PIN.';
+      elements.farmerPinMsg.textContent = 'Only administrators can set or reset farmer PIN.';
       return;
     }
 
@@ -1689,7 +1698,7 @@ function bindFarmers() {
   const submitFarmerPinReset = async (generate = false) => {
     clearMessages();
     if (currentRole() !== 'admin') {
-      elements.farmerPinMsg.textContent = 'Only admin can set or reset farmer PIN.';
+      elements.farmerPinMsg.textContent = 'Only administrators can set or reset farmer PIN.';
       return;
     }
     if (!API.enabled) {
@@ -1826,7 +1835,7 @@ function bindFarmers() {
 
     if (button.dataset.action === 'set-pin-farmer') {
       if (currentRole() !== 'admin') {
-        elements.farmerMsg.textContent = 'Only admin can set/reset farmer PIN.';
+        elements.farmerMsg.textContent = 'Only administrators can set or reset farmer PIN.';
         return;
       }
 
@@ -2815,7 +2824,7 @@ function bindPayments() {
     clearMessages();
 
     if (currentRole() !== 'admin') {
-      elements.paymentMsg.textContent = 'Only admin can log payments.';
+      elements.paymentMsg.textContent = 'Only administrators can log payments.';
       return;
     }
 
@@ -2880,7 +2889,7 @@ function bindPayments() {
     clearMessages();
 
     if (currentRole() !== 'admin') {
-      elements.paymentMsg.textContent = 'Only admin can simulate disbursements.';
+      elements.paymentMsg.textContent = 'Only administrators can simulate disbursements.';
       return;
     }
 
@@ -2922,7 +2931,7 @@ function bindPayments() {
     if (button.dataset.action !== 'set-payment-status' || !paymentId || !nextStatus) return;
 
     if (currentRole() !== 'admin') {
-      elements.paymentMsg.textContent = 'Only admin can change payment status.';
+      elements.paymentMsg.textContent = 'Only administrators can change payment status.';
       return;
     }
 
@@ -2963,7 +2972,7 @@ function bindPayments() {
 
       if (!['approve-payment-recommendation', 'reject-payment-recommendation'].includes(action)) return;
       if (currentRole() !== 'admin') {
-        elements.paymentRecommendationMsg.textContent = 'Only admin can approve or reject recommendations.';
+        elements.paymentRecommendationMsg.textContent = 'Only administrators can approve or reject recommendations.';
         return;
       }
 
@@ -3802,7 +3811,7 @@ async function refreshOwedRows(resetSelection = false) {
 
 async function settleSelectedOwed(status) {
   if (currentRole() !== 'admin') {
-    elements.owedMsg.textContent = 'Only admin can run owed settlements.';
+    elements.owedMsg.textContent = 'Only administrators can run owed settlements.';
     return;
   }
 
@@ -3879,7 +3888,7 @@ function rowsToCsv(rows, headers) {
 
 async function exportOwedCsv() {
   if (currentRole() !== 'admin') {
-    elements.owedMsg.textContent = 'Only admin can export owed balances.';
+    elements.owedMsg.textContent = 'Only administrators can export owed balances.';
     return;
   }
 
@@ -4438,7 +4447,7 @@ function bindAiTools() {
         return;
       }
       if (currentRole() !== 'admin') {
-        elements.proposalMsg.textContent = 'Only admin can create proposals.';
+        elements.proposalMsg.textContent = 'Only administrators can create proposals.';
         return;
       }
 
@@ -4729,7 +4738,7 @@ function bindAiTools() {
         return;
       }
       if (currentRole() !== 'admin') {
-        elements.knowledgeMsg.textContent = 'Only admin can add knowledge documents.';
+        elements.knowledgeMsg.textContent = 'Only administrators can add knowledge documents.';
         return;
       }
 
@@ -6570,8 +6579,19 @@ function updatePermissionUi() {
   elements.owedPrepareBtn.disabled = !owedAllowed;
   elements.owedPaySelectedBtn.disabled = !owedAllowed;
   elements.owedExportBtn.disabled = !owedAllowed;
+  elements.owedExportBtn.hidden = !owedAllowed;
   elements.owedPrepareBtn.hidden = !owedAllowed;
   elements.owedPaySelectedBtn.hidden = !owedAllowed;
+  if (elements.owedExportFormat) {
+    elements.owedExportFormat.disabled = !owedAllowed;
+    elements.owedExportFormat.hidden = !owedAllowed;
+  }
+  if (elements.owedPeriod?.closest) {
+    const owedCard = elements.owedPeriod.closest('details');
+    if (owedCard) {
+      owedCard.hidden = !owedAllowed;
+    }
+  }
 
   if (elements.paymentRecommendationCard) {
     elements.paymentRecommendationCard.hidden = !paymentRecommendationViewAllowed;

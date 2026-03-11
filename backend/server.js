@@ -1128,7 +1128,7 @@ function msaidiziModuleDefinitions(store) {
     {
       id: 'account-setup',
       title: 'Account Setup & Sign In',
-      panes: ['auth', 'overview'],
+      panes: ['auth'],
       roles: ['guest', 'farmer', 'agent', 'admin'],
       keywords: ['sign in', 'login', 'username', 'pin', 'register', 'password', 'account settings'],
       short:
@@ -1147,6 +1147,29 @@ function msaidiziModuleDefinitions(store) {
       doNow: ['Keep phone numbers and National ID accurate before first login.'],
       avoid: ['Do not share passwords, PINs, or recovery codes over unsecured channels.'],
       waitFor: ['If backend is offline, sign-in and password updates will not complete until API reconnects.']
+    },
+    {
+      id: 'overview-dashboard',
+      title: 'Overview Dashboard',
+      panes: ['overview'],
+      roles: ['guest', 'farmer', 'agent', 'admin'],
+      keywords: ['overview', 'dashboard', 'summary', 'home', 'cards', 'kpi'],
+      short:
+        'Use the Overview page to read live summary cards, jump to sections, and open the detailed modules where work is done.',
+      steps: [
+        'Read the summary cards to see the latest totals for farmers, QC, purchases, payments, SMS, and readiness.',
+        'Use Jump To Section to move directly to Farmers, Produce, Payments, SMS, Reports, Exports, or Agents if your role allows it.',
+        'Open the relevant working module before editing records, approving actions, or exporting data.',
+        'Return to Overview when you need a quick operational snapshot.'
+      ],
+      troubleshooting: [
+        'If a card total looks wrong, open the detailed module and refresh the records before acting on it.',
+        'If a section is missing, your role may not have permission to view that module.',
+        'If totals look stale after a change, refresh the page or wait for backend sync to complete.'
+      ],
+      doNow: ['Use Overview to orient yourself, then switch to the exact module where the task is performed.'],
+      avoid: ['Do not use summary cards as the final source of truth for approvals, edits, or exports.'],
+      waitFor: ['Wait for sync to finish before relying on newly updated dashboard totals.']
     },
     {
       id: 'farmer-management',
@@ -1318,7 +1341,7 @@ function msaidiziModuleDefinitions(store) {
     {
       id: 'ussd-integration',
       title: 'USSD & Farmer Phone Access',
-      panes: ['overview', 'sms', 'reports'],
+      panes: ['sms', 'reports'],
       roles: ['admin', 'agent', 'farmer'],
       keywords: ['ussd', '384', '483', 'registration via phone', 'kiswahili', 'english'],
       short:
@@ -1341,7 +1364,7 @@ function msaidiziModuleDefinitions(store) {
     {
       id: 'security-governance',
       title: 'Security, Compliance, and Access Control',
-      panes: ['overview', 'reports', 'exports'],
+      panes: ['reports', 'exports'],
       roles: ['admin', 'agent'],
       keywords: ['security', 'audit', 'roles', 'compliance', 'backup', 'approval'],
       short:
@@ -1496,15 +1519,7 @@ function findMsaidiziContextModules(store, pane, role, limit = 4) {
       : false
   );
 
-  if (paneMatches.length) return paneMatches.slice(0, cap);
-
-  const globalMatches = modules.filter((module) =>
-    Array.isArray(module?.panes)
-      ? module.panes.map((row) => clean(row).toLowerCase()).includes('all')
-      : false
-  );
-
-  return globalMatches.slice(0, cap);
+  return paneMatches.slice(0, cap);
 }
 
 function buildMsaidiziLocalAnswer(modules, mode = 'normal') {
@@ -8920,7 +8935,7 @@ const server = http.createServer(async (req, res) => {
     const session = currentSession(req, store);
     const role = clean(session?.role).toLowerCase() || clean(reqUrl.searchParams.get('role')).toLowerCase() || 'guest';
     const pane = clean(reqUrl.searchParams.get('pane')).toLowerCase() || 'auth';
-    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 4, 10);
+    const limit = safeQueryInt(reqUrl.searchParams, 'limit', 1, 10);
 
     const syncResult = syncMsaidiziInStore(store, {
       reason: 'context',
@@ -8976,9 +8991,17 @@ const server = http.createServer(async (req, res) => {
         force: false
       });
 
-      const contextModules = findMsaidiziContextModules(store, pane, role, 4);
-      const questionModules = findMsaidiziModules(store, question, '', role, 4);
-      const answerModules = questionModules.length ? questionModules : contextModules;
+  const contextModules = findMsaidiziContextModules(store, pane, role, 1);
+  const scopedQuestionModules = question
+    ? findMsaidiziModules(store, question, pane, role, 4)
+    : [];
+  const globalQuestionModules =
+    question && !scopedQuestionModules.length
+      ? findMsaidiziModules(store, question, '', role, 4)
+      : [];
+  const answerModules = scopedQuestionModules.length
+    ? scopedQuestionModules
+    : (globalQuestionModules.length ? globalQuestionModules : contextModules);
       let local = buildMsaidiziLocalAnswer(answerModules, mode);
       let source = 'local-rules';
       let model = 'local-rules';
